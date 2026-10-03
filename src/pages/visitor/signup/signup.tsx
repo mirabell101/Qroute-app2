@@ -11,7 +11,7 @@ function SignUp() {
   return (
     <main className="min-h-screen bg-white flex items-center justify-center px-4 py-4">
       {/* SIGN UP CARD */}
-      <div className="w-full max-w-[580px] min-h-[695px] border border-[#333] rounded-[8px] px-[75px] py-[45px]">
+      <div className="w-full max-w-[26.25px] min-h-[43.75px] border border-[#333] rounded-[8px] px-[18.75px] py-[11.25px]">
 
         {/* HEADER */}
         <div className="text-center">
@@ -25,13 +25,13 @@ function SignUp() {
         </div>
 
         {/* EMAIL */}
-        <div className="mt-[84px]">
+        <div className="mt-[6.25px]">
           <div className="relative">
             <Input
               type="email"
               placeholder="Enter your Email"
               className="
-                h-[47px]
+                h-[11.75px]
                 rounded-full
                 border-[#999]
                 px-4
@@ -55,13 +55,13 @@ function SignUp() {
         </div>
 
         {/* PASSWORD */}
-        <div className="mt-[36px]">
+        <div className="mt-[2.25px]">
           <div className="relative">
             <Input
               type={showPassword ? "text" : "password"}
-              placeholder="Enter your Password"
+              placeholder="      Enter your Password"
               className="
-                h-[47px]
+                h-[11.75px]
                 rounded-full
                 border-[#999]
                 px-4
@@ -102,10 +102,10 @@ function SignUp() {
         </div>
 
         {/* REMEMBER ME */}
-        <div className="mt-[27px] flex items-center gap-3">
+        <div className="mt-[6.75px] flex items-center gap-3">
           <Checkbox
             id="remember"
-            className="h-[18px] w-[18px] rounded-[4px]"
+            className="h-[4.25px] w-[4.5px] rounded-lg-[4px]"
           />
 
           <label
@@ -120,8 +120,8 @@ function SignUp() {
         <Button
           type="button"
           className="
-            mt-[25px]
-            h-[47px]
+            mt-[6.25px]
+            h-[11.75px]
             w-full
             rounded-full
             bg-[#6255F5]
@@ -136,10 +136,10 @@ function SignUp() {
         </Button>
 
         {/* TERMS AND CONDITIONS */}
-        <div className="mt-[23px] flex items-center gap-3">
+        <div className="mt-[5.75px] flex items-center gap-3">
           <Checkbox
             id="terms"
-            className="h-[18px] w-[18px] rounded-[4px]"
+            className="h-[4.5px] w-[4.5px] rounded-lg-[4px]"
           />
 
           <label
@@ -151,7 +151,7 @@ function SignUp() {
         </div>
 
         {/* SIGN IN */}
-        <div className="mt-[54px] text-center text-[16px]">
+        <div className="mt-[13.5px] text-center text-[16px]">
           <span className="text-black">
             Already have an Account?{" "}
           </span>

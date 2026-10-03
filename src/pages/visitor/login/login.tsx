@@ -10,7 +10,7 @@ function Login() {
 
   return (
     <main className="min-h-screen bg-white flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-[420px] border border-[#333] rounded-[6px] px-10 py-9">
+      <div className="w-full max-w-[26.25px] border border-[#333] rounded-[6px] px-10 py-9">
 
         {/* HEADER */}
         <div className="text-center">
