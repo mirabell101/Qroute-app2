@@ -64,14 +64,23 @@ const navItems = [
 // LANDING
 // ==================================================
 
-export default function Landing() {
+interface LandingProps {
+  currentUserId: string | null;
+}
+
+export default function Landing({
+  currentUserId,
+}: LandingProps) {
   const refreshPage = () => {
     window.location.reload();
   };
 
+
   const handleClick = (name: string) => {
-    console.log(`${name} clicked`);
-  };
+  console.log(`${name} clicked`, {
+    currentUserId,
+  });
+};
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-white">
@@ -109,21 +118,22 @@ export default function Landing() {
           ================================================== */}
 
       <aside
-        className="
-          absolute
-          left-0
-          top-0
-          z-[2000]
-          flex
-          h-screen
-          flex-col
-          bg-[#12395A]
-          text-white
-        "
-        style={{
-          width: "250px",
-        }}
-      >
+  className="
+    absolute
+    left-0
+    top-0
+    z-[2000]
+    flex
+    h-screen
+    w-[220px]
+    flex-col
+    bg-[#12395A]
+    text-white
+    sm:w-[230px]
+    md:w-[240px]
+    lg:w-[250px]
+  "
+>
 
         {/* ==================================================
             LOGO
@@ -150,18 +160,20 @@ export default function Landing() {
           }}
         >
           <span
-            className="
-              font-bold
-              tracking-[-2px]
-              text-white
-            "
-            style={{
-              fontSize: "44px",
-              lineHeight: "1",
-            }}
-          >
-            Qroute
-          </span>
+  className="
+    font-bold
+    tracking-[-2px]
+    text-white
+    text-[36px]
+    sm:text-[40px]
+    lg:text-[44px]
+  "
+  style={{
+    lineHeight: "1",
+  }}
+>
+  Qroute
+</span>
         </button>
 
         {/* ==================================================
@@ -169,14 +181,18 @@ export default function Landing() {
             ================================================== */}
 
         <nav
-          className="absolute flex flex-col"
-          style={{
-            left: "32px",
-            top: "145px",
-            width: "235px",
-            gap: "10px",
-          }}
-        >
+  className="
+    absolute
+    left-1/2
+    top-[145px]
+    flex
+    w-[calc(100%-32px)]
+    -translate-x-1/2
+    flex-col
+    gap-[10px]
+    px-0
+  "
+>
           {navItems.map((item) => {
             const Icon = item.icon;
 
@@ -186,19 +202,19 @@ export default function Landing() {
                 type="button"
                 onClick={() => handleClick(item.label)}
                 className="
-                  group
-                  flex
-                  h-[46px]
-                  w-[215px]
-                  items-center
-                  rounded-lg
-                  px-3
-                  text-left
-                  transition-all
-                  duration-200
-                  hover:bg-[#1b4b6f]
-                  hover:translate-x-1
-                "
+  group
+  flex
+  h-[46px]
+  w-full
+  items-center
+  rounded-lg
+  px-3
+  text-left
+  transition-all
+  duration-200
+  hover:bg-[#1b4b6f]
+  hover:translate-x-1
+"
               >
                 <span
                   className="
@@ -244,30 +260,37 @@ export default function Landing() {
           ================================================== */}
 
       <header
-        className="
-          absolute
-          z-[3000]
-          flex
-          items-center
-        "
-        style={{
-          left: "300px",
-          top: "45px",
-          height: "45px",
-        }}
-      >
+  className="
+    absolute
+    left-[270px]
+    top-[45px]
+    z-[3000]
+    flex
+    items-center
+    sm:left-[280px]
+    md:left-[290px]
+    lg:left-[300px]
+  "
+  style={{
+    height: "45px",
+  }}
+>
 
         {/* ==================================================
             SEARCH
             ================================================== */}
 
         <div
-          className="relative shrink-0"
-          style={{
-            width: "400px",
-            height: "50px",
-          }}
-        >
+  className="
+    relative
+    h-[50px]
+    w-[260px]
+    shrink-0
+    sm:w-[320px]
+    md:w-[360px]
+    lg:w-[400px]
+  "
+>
           <MapPin
             size={19}
             strokeWidth={2}
@@ -311,12 +334,17 @@ export default function Landing() {
 
         <div
   className="
-    ml-[35px]
-    flex
-    h-[52px]
-    items-center
-    gap-[10px]
-  "
+  ml-[8px]
+  flex
+  h-[52px]
+  flex-nowrap
+  items-center
+  gap-[5px]
+  sm:ml-[12px]
+  sm:gap-[7px]
+  lg:ml-[35px]
+  lg:gap-[10px]
+"
 >
 
           {/* JEEP */}
@@ -328,7 +356,10 @@ export default function Landing() {
               group
               flex
               h-[52px]
-              w-[105px]
+w-[52px]
+sm:w-[70px]
+md:w-[90px]
+lg:w-[105px]
               items-center
               justify-center
               gap-[6px]
@@ -370,7 +401,10 @@ export default function Landing() {
               group
               flex
               h-[52px]
-              w-[105px]
+w-[52px]
+sm:w-[70px]
+md:w-[90px]
+lg:w-[105px]
               items-center
               justify-center
               gap-[6px]
@@ -411,8 +445,11 @@ export default function Landing() {
             className="
               group
               flex
-              h-[52px]
-              w-[105px]
+             h-[52px]
+w-[52px]
+sm:w-[70px]
+md:w-[90px]
+lg:w-[105px]
               items-center
               justify-center
               gap-[6px]
