@@ -160,13 +160,19 @@ function SignUp() {
     const updatedAccounts = [...accounts, newAccount];
 
     try {
-      localStorage.setItem(
-        ACCOUNTS_KEY,
-        JSON.stringify(updatedAccounts)
-      );
+  localStorage.setItem(
+    ACCOUNTS_KEY,
+    JSON.stringify(updatedAccounts)
+  );
 
-      navigate("/login");
-    } catch {
+  navigate("/otp", {
+    state: {
+      userId: newAccount.id,
+      email: newAccount.email,
+      mode: "signup",
+    },
+  });
+} catch {
       setEmailError(
         "Unable to save your account. Please try again."
       );
@@ -430,22 +436,22 @@ function SignUp() {
   htmlFor="terms"
   className="cursor-pointer text-[10px] leading-tight text-gray-700"
 >
-  I agree to the{" "}
-  <a
-    href="#"
-    onClick={(e) => e.preventDefault()}
+  I agree to{" "}
+  <button
+    type="button"
+    onClick={() => navigate("/terms-and-condition")}
     className="font-medium text-[#6C3FF5] hover:underline"
   >
     Terms and Conditions
-  </a>{" "}
+  </button>{" "}
   and acknowledge the{" "}
-  <a
-    href="#"
-    onClick={(e) => e.preventDefault()}
+  <button
+    type="button"
+    onClick={() => navigate("/privacy-policy")}
     className="font-medium text-[#6C3FF5] hover:underline"
   >
     Privacy Policy
-  </a>
+  </button>
   .
 </label>
           </div>

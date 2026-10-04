@@ -4,6 +4,11 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Landing from "./pages/visitor/Landing/Landing";
 import Login from "./pages/visitor/Login/Login";
 import SignUp from "./pages/visitor/SignUp/SignUp";
+import OTP from "./pages/visitor/OTP/OTP";
+import Forgotpassword from "./pages/visitor/Forgotpassword/Forgotpassword";
+import Resetpassword from "./pages/visitor/Resetpassword/Resetpassword";
+import TermsAndConditions from "./pages/visitor/Legal/TermsAndCondition";
+import PrivacyPolicy from "./pages/visitor/Legal/PrivacyPolicy";
 
 const CURRENT_USER_KEY = "qroute_current_user";
 
@@ -48,6 +53,11 @@ const handleLogout = () => {
 />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<SignUp />} />
+        <Route path="/otp" element={<OTP />} />
+        <Route path="/forgot-password" element={<Forgotpassword />} />
+        <Route path="/reset-password" element={<Resetpassword />} />
+        <Route path="/terms-and-condition" element={<TermsAndConditions />} />
+        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
       </Routes>
     </BrowserRouter>
   );

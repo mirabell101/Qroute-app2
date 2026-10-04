@@ -237,11 +237,12 @@ function Login() {
           </div>
 
           <button
-            type="button"
-            className="text-[10px] font-medium text-[#6C3FF5] hover:underline"
-          >
-            Forgot Password
-          </button>
+  type="button"
+  onClick={() => navigate("/forgot-password")}
+  className="text-[10px] font-medium text-[#6C3FF5] hover:underline"
+>
+  Forgot Password
+</button>
         </div>
 
         {/* SIGN IN */}
