@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Bell,
   Bus,
@@ -66,17 +67,32 @@ const navItems = [
 
 interface LandingProps {
   currentUserId: string | null;
+  onLogout: () => void;
 }
 
 export default function Landing({
   currentUserId,
+  onLogout,
 }: LandingProps) {
+  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+
   const refreshPage = () => {
     window.location.reload();
   };
 
 
   const handleClick = (name: string) => {
+  if (
+    !currentUserId &&
+    (name === "Saved" ||
+      name === "Your Contribution" ||
+      name === "Notifications")
+  ) {
+    setShowLoginPrompt(true);
+    return;
+  }
+
   console.log(`${name} clicked`, {
     currentUserId,
   });
@@ -490,6 +506,7 @@ lg:w-[105px]
 
         <div
           className="
+          relative
             ml-[300px]
             flex
             h-[55px]
@@ -536,7 +553,9 @@ lg:w-[105px]
 
           <button
             type="button"
-            onClick={() => handleClick("Profile")}
+            onClick={() => {
+  setShowProfileMenu((previous) => !previous);
+}}
             title="Profile"
             className="
               group
@@ -564,11 +583,73 @@ lg:w-[105px]
                 group-hover:scale-105
               "
             />
-          </button>
+                    </button>
 
+          {showProfileMenu && (
+  <div className="absolute right-0 top-[58px] z-[4000] w-[150px] rounded-xl bg-white p-2 shadow-[0_4px_15px_rgba(0,0,0,0.18)]">
+    {!currentUserId ? (
+      <button
+        type="button"
+        onClick={() => {
+          setShowProfileMenu(false);
+          window.location.href = "/login";
+        }}
+        className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+      >
+        Sign In
+      </button>
+    ) : (
+      <button
+        type="button"
+        onClick={() => {
+          setShowProfileMenu(false);
+          onLogout();
+        }}
+        className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+      >
+        Log Out
+      </button>
+    )}
+  </div>
+)}
         </div>
-
       </header>
+
+      {showLoginPrompt && (
+        <div className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/30">
+          <div className="w-[320px] rounded-xl bg-white p-6 text-center shadow-[0_4px_20px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[18px] font-semibold text-gray-900">
+              Sign in to access this
+            </h2>
+
+            <p className="mt-2 text-[12px] leading-relaxed text-gray-600">
+              Please log in or sign in to your QRoute account to access this
+              feature.
+            </p>
+
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowLoginPrompt(false)}
+                className="h-9 flex-1 rounded-[6px] border border-gray-300 bg-white text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLoginPrompt(false);
+                  window.location.href = "/login";
+                }}
+                className="h-9 flex-1 rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white hover:bg-[#5547E8]"
+              >
+                Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </main>
   );
