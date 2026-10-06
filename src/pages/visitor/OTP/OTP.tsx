@@ -195,7 +195,7 @@ useEffect(() => {
 
     setTimeout(() => {
       if (otpData.mode === "signup") {
-        navigate("/", { replace: true });
+        window.location.href = "/home";
       } else {
   navigate("/reset-password", {
     replace: true,

@@ -14,6 +14,7 @@ interface Account {
   username: string;
   email: string;
   password: string;
+  profilePicture: string | null;
 }
 
 const ACCOUNTS_KEY = "qroute_accounts";
@@ -155,6 +156,7 @@ function SignUp() {
       username: normalizedUsername,
       email: normalizedEmail,
       password,
+      profilePicture: null,
     };
 
     const updatedAccounts = [...accounts, newAccount];

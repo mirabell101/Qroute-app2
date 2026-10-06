@@ -96,7 +96,7 @@ function Login() {
       localStorage.removeItem(CURRENT_USER_KEY);
     }
 
-    navigate("/");
+    window.location.href = "/home";
   };
 
   return (
