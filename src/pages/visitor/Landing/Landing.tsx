@@ -199,14 +199,12 @@ export default function Landing({
         <nav
   className="
     absolute
-    left-1/2
+    left-0
     top-[145px]
     flex
-    w-[calc(100%-32px)]
-    -translate-x-1/2
+    w-full
     flex-col
-    gap-[10px]
-    px-0
+    gap-0
   "
 >
           {navItems.map((item) => {
@@ -223,13 +221,12 @@ export default function Landing({
   h-[46px]
   w-full
   items-center
-  rounded-lg
-  px-3
+  px-6
   text-left
-  transition-all
+  transition-colors
   duration-200
-  hover:bg-[#1b4b6f]
-  hover:translate-x-1
+  hover:bg-[#d9dee3]
+  hover:text-[#12395A]
 "
               >
                 <span
@@ -268,6 +265,36 @@ export default function Landing({
             );
           })}
         </nav>
+
+        {!currentUserId && (
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = "/login";
+            }}
+            className="
+              absolute
+              bottom-[30px]
+              left-1/2
+              flex
+              h-[40px]
+              w-[160px]
+              -translate-x-1/2
+              items-center
+              justify-center
+              rounded-lg
+              bg-white
+              text-[#12395A]
+              font-semibold
+              transition-all
+              duration-200
+              hover:-translate-y-0.5
+              hover:bg-gray-100
+            "
+          >
+            Sign In
+          </button>
+        )}
 
       </aside>
 

@@ -161,14 +161,12 @@ export default function Contributions({
         <nav
           className="
             absolute
-            left-1/2
+            left-0
             top-[145px]
             flex
-            w-[calc(100%-32px)]
-            -translate-x-1/2
+            w-full
             flex-col
-            gap-[10px]
-            px-0
+            gap-0
           "
         >
           {navItems.map((item) => {
@@ -186,16 +184,14 @@ export default function Contributions({
                   h-[46px]
                   w-full
                   items-center
-                  rounded-lg
-                  px-3
+                  px-6
                   text-left
-                  transition-all
+                  transition-colors
                   duration-200
-                  hover:translate-x-1
                   ${
                     isActive
                       ? "bg-[#1b4b6f]"
-                      : "hover:bg-[#1b4b6f]"
+                      : "hover:bg-[#d9dee3] hover:text-[#12395A]"
                   }
                 `}
               >
@@ -242,19 +238,19 @@ export default function Contributions({
           ================================================== */}
       <header
         className="
-  absolute
-  left-[270px]
-  right-[55px]
-  top-[45px]
-  z-[3000]
-  flex
-  h-[55px]
-  items-start
-  justify-between
-  sm:left-[280px]
-  md:left-[290px]
-  lg:left-[300px]
-"
+          absolute
+          left-[270px]
+          right-[55px]
+          top-[45px]
+          z-[3000]
+          flex
+          h-[55px]
+          items-start
+          justify-between
+          sm:left-[280px]
+          md:left-[290px]
+          lg:left-[300px]
+        "
       >
         {/* TITLE + SUBTITLE */}
         <div className="flex flex-col justify-center">
@@ -545,7 +541,6 @@ export default function Contributions({
                   Add a post to share your route contribution with the
                   community.
                 </p>
-
               </div>
             ) : (
               <div className="flex flex-col gap-3">

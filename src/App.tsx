@@ -12,6 +12,7 @@ import TermsAndConditions from "./pages/visitor/Legal/TermsAndCondition";
 import PrivacyPolicy from "./pages/visitor/Legal/PrivacyPolicy";
 import Profile from "./pages/registered-user/Profile/Profile";
 import Contributions from "./pages/registered-user/Contribution/Contribution";
+import AdminBase from "./pages/admin/Base/Base";
 
 const CURRENT_USER_KEY = "qroute_current_user";
 
@@ -104,6 +105,7 @@ const handleLogout = () => {
         <Route path="/reset-password" element={<Resetpassword />} />
         <Route path="/terms-and-condition" element={<TermsAndConditions />} />
         <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+        <Route path="/admin" element={<AdminBase />} />
       </Routes>
     </BrowserRouter>
   );

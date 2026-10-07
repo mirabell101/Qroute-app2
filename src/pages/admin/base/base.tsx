@@ -1,11 +1,11 @@
-import { useState } from "react";
 import {
   Bell,
   Bus,
   Car,
-  Home as HomeIcon,
+  Home,
   MapPin,
   MessageSquare,
+  Settings,
   TrainFront,
   UserCircle,
 } from "lucide-react";
@@ -20,6 +20,10 @@ import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
 import { Input } from "@/components/ui/input";
 
+// ==================================================
+// LEAFLET MARKER FIX
+// ==================================================
+
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 
 L.Icon.Default.mergeOptions({
@@ -28,12 +32,20 @@ L.Icon.Default.mergeOptions({
   shadowUrl: markerShadow,
 });
 
+// ==================================================
+// MAP
+// ==================================================
+
 const defaultPosition: [number, number] = [14.7167, 121.05];
+
+// ==================================================
+// NAVIGATION
+// ==================================================
 
 const navItems = [
   {
     label: "Recents",
-    icon: HomeIcon,
+    icon: Home,
   },
   {
     label: "Saved",
@@ -49,52 +61,25 @@ const navItems = [
   },
 ];
 
-interface HomeProps {
-  currentUserId: string | null;
-  onLogout: () => void;
-}
+// ==================================================
+// ADMIN LANDING
+// ==================================================
 
-interface Account {
-  id: string;
-  username: string;
-  email: string;
-  password: string;
-  profilePicture?: string | null;
-}
-
-const ACCOUNTS_KEY = "qroute_accounts";
-
-function getStoredAccounts(): Account[] {
-  try {
-    const stored = localStorage.getItem(ACCOUNTS_KEY);
-    return stored ? (JSON.parse(stored) as Account[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-export default function Home({ currentUserId, onLogout }: HomeProps) {
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
-
-  const accounts = getStoredAccounts();
-
-  const currentAccount = accounts.find(
-    (account) => account.id === currentUserId
-  );
-
-  const handleNavigation = (name: string) => {
-    console.log(`${name} clicked`, {
-      currentUserId,
-    });
+export default function Base() {
+  const handleClick = (name: string) => {
+    console.log(`${name} clicked`);
   };
 
-  const handleGoHome = () => {
-    window.location.href = "/home";
+  const refreshPage = () => {
+    window.location.reload();
   };
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-white">
-      {/* MAP */}
+      {/* ==================================================
+          MAP
+          ================================================== */}
+
       <section className="absolute inset-0 z-0 h-full w-full">
         <MapContainer
           center={defaultPosition}
@@ -117,7 +102,10 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
         </MapContainer>
       </section>
 
-      {/* SIDEBAR */}
+      {/* ==================================================
+          SIDEBAR
+          ================================================== */}
+
       <aside
         className="
           absolute
@@ -135,11 +123,14 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
           lg:w-[250px]
         "
       >
-        {/* LOGO / HOME */}
+        {/* ==================================================
+            LOGO
+            ================================================== */}
+
         <button
           type="button"
-          onClick={handleGoHome}
-          title="Home"
+          onClick={refreshPage}
+          title="Refresh"
           className="
             absolute
             flex
@@ -173,7 +164,10 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
           </span>
         </button>
 
-        {/* NAVIGATION */}
+        {/* ==================================================
+            NAVIGATION
+            ================================================== */}
+
         <nav
           className="
             absolute
@@ -192,14 +186,7 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
               <button
                 key={item.label}
                 type="button"
-                onClick={() => {
-  if (item.label === "Your Contribution") {
-    window.location.href = "/contribution";
-    return;
-  }
-
-  handleNavigation(item.label);
-}}
+                onClick={() => handleClick(item.label)}
                 className="
                   group
                   flex
@@ -250,9 +237,56 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
             );
           })}
         </nav>
+
+        {/* ==================================================
+            MANAGE SITE
+            ================================================== */}
+
+        <button
+          type="button"
+          onClick={() => handleClick("Manage Site")}
+          className="
+            group
+            absolute
+            bottom-[30px]
+            left-1/2
+            flex
+            h-[40px]
+            w-[160px]
+            -translate-x-1/2
+            items-center
+            justify-center
+            gap-2
+            rounded-lg
+            bg-white
+            text-[#12395A]
+            font-semibold
+            transition-all
+            duration-200
+            hover:-translate-y-0.5
+            hover:bg-gray-100
+          "
+        >
+          <Settings
+            size={16}
+            strokeWidth={2}
+            className="
+              transition-transform
+              duration-200
+              group-hover:rotate-45
+            "
+          />
+
+          <span className="text-[13px]">
+            Manage Site
+          </span>
+        </button>
       </aside>
 
-      {/* HEADER */}
+      {/* ==================================================
+          HEADER
+          ================================================== */}
+
       <header
         className="
           absolute
@@ -269,7 +303,10 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
           height: "45px",
         }}
       >
-        {/* SEARCH */}
+        {/* ==================================================
+            SEARCH
+            ================================================== */}
+
         <div
           className="
             relative
@@ -318,7 +355,10 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
           />
         </div>
 
-        {/* VEHICLE FILTERS */}
+        {/* ==================================================
+            VEHICLE FILTERS
+            ================================================== */}
+
         <div
           className="
             ml-[8px]
@@ -334,9 +374,10 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
           "
         >
           {/* JEEP */}
+
           <button
             type="button"
-            onClick={() => handleNavigation("Jeep")}
+            onClick={() => handleClick("Jeep")}
             className="
               group
               flex
@@ -367,15 +408,21 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
             <Car
               size={18}
               strokeWidth={2}
-              className="transition-transform duration-200 group-hover:scale-110"
+              className="
+                transition-transform
+                duration-200
+                group-hover:scale-110
+              "
             />
+
             <span>jeep</span>
           </button>
 
           {/* BUS */}
+
           <button
             type="button"
-            onClick={() => handleNavigation("Bus")}
+            onClick={() => handleClick("Bus")}
             className="
               group
               flex
@@ -406,15 +453,21 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
             <Bus
               size={18}
               strokeWidth={2}
-              className="transition-transform duration-200 group-hover:scale-110"
+              className="
+                transition-transform
+                duration-200
+                group-hover:scale-110
+              "
             />
+
             <span>bus</span>
           </button>
 
           {/* TRAIN */}
+
           <button
             type="button"
-            onClick={() => handleNavigation("Train")}
+            onClick={() => handleClick("Train")}
             className="
               group
               flex
@@ -445,13 +498,21 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
             <TrainFront
               size={18}
               strokeWidth={2}
-              className="transition-transform duration-200 group-hover:scale-110"
+              className="
+                transition-transform
+                duration-200
+                group-hover:scale-110
+              "
             />
+
             <span>train</span>
           </button>
         </div>
 
-        {/* NOTIFICATION + PROFILE */}
+        {/* ==================================================
+            NOTIFICATION + PROFILE
+            ================================================== */}
+
         <div
           className="
             relative
@@ -463,9 +524,10 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
           "
         >
           {/* NOTIFICATION */}
+
           <button
             type="button"
-            onClick={() => handleNavigation("Notifications")}
+            onClick={() => handleClick("Notifications")}
             title="Notifications"
             className="
               group
@@ -487,16 +549,19 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
             <Bell
               size={20}
               strokeWidth={2}
-              className="transition-transform duration-200 group-hover:rotate-6"
+              className="
+                transition-transform
+                duration-200
+                group-hover:rotate-6
+              "
             />
           </button>
 
           {/* PROFILE */}
+
           <button
             type="button"
-            onClick={() => {
-              setShowProfileMenu((previous) => !previous);
-            }}
+            onClick={() => handleClick("Profile")}
             title="Profile"
             className="
               group
@@ -515,48 +580,16 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
               hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]
             "
           >
-            {currentAccount?.profilePicture ? (
-  <img
-    src={currentAccount.profilePicture}
-    alt="Profile"
-    className="h-full w-full rounded-full object-cover"
-  />
-) : (
-  <UserCircle
-    size={21}
-    strokeWidth={2}
-    className="transition-transform duration-200 group-hover:scale-105"
-  />
-)}
+            <UserCircle
+              size={21}
+              strokeWidth={2}
+              className="
+                transition-transform
+                duration-200
+                group-hover:scale-105
+              "
+            />
           </button>
-
-          {/* PROFILE DROPDOWN */}
-{showProfileMenu && (
-  <div className="absolute right-0 top-[58px] z-[4000] w-[150px] rounded-xl bg-white p-2 shadow-[0_4px_15px_rgba(0,0,0,0.18)]">
-    <button
-      type="button"
-      onClick={() => {
-        setShowProfileMenu(false);
-        window.location.href = "/profile";
-      }}
-      className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-    >
-      Account
-    </button>
-
-    <button
-      type="button"
-      onClick={() => {
-  setShowProfileMenu(false);
-  onLogout();
-  window.location.href = "/";
-}}
-      className="mt-1 w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-    >
-      Log Out
-    </button>
-  </div>
-)}
         </div>
       </header>
     </main>
