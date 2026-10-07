@@ -3,7 +3,7 @@ import {
   Bell,
   Bus,
   Car,
-  Home,
+  Home as HomeIcon,
   MapPin,
   MessageSquare,
   TrainFront,
@@ -20,10 +20,6 @@ import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
 import { Input } from "@/components/ui/input";
 
-// ==================================================
-// LEAFLET MARKER FIX
-// ==================================================
-
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 
 L.Icon.Default.mergeOptions({
@@ -32,20 +28,12 @@ L.Icon.Default.mergeOptions({
   shadowUrl: markerShadow,
 });
 
-// ==================================================
-// MAP
-// ==================================================
-
 const defaultPosition: [number, number] = [14.7167, 121.05];
-
-// ==================================================
-// NAVIGATION
-// ==================================================
 
 const navItems = [
   {
     label: "Recents",
-    icon: Home,
+    icon: HomeIcon,
   },
   {
     label: "Saved",
@@ -61,52 +49,53 @@ const navItems = [
   },
 ];
 
-// ==================================================
-// LANDING
-// ==================================================
-
-interface LandingProps {
+interface HomeProps {
   currentUserId: string | null;
   onLogout: () => void;
 }
 
-export default function Landing({
-  currentUserId,
-  onLogout,
-}: LandingProps) {
-  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+interface Account {
+  id: string;
+  username: string;
+  email: string;
+  password: string;
+  profilePicture?: string | null;
+}
+
+const ACCOUNTS_KEY = "qroute_accounts";
+
+function getStoredAccounts(): Account[] {
+  try {
+    const stored = localStorage.getItem(ACCOUNTS_KEY);
+    return stored ? (JSON.parse(stored) as Account[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export default function Home({ currentUserId, onLogout }: HomeProps) {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
-  const refreshPage = () => {
-    window.location.reload();
+  const accounts = getStoredAccounts();
+
+  const currentAccount = accounts.find(
+    (account) => account.id === currentUserId
+  );
+
+  const handleNavigation = (name: string) => {
+    console.log(`${name} clicked`, {
+      currentUserId,
+    });
   };
 
-
-  const handleClick = (name: string) => {
-  if (
-    !currentUserId &&
-    (name === "Saved" ||
-      name === "Your Contribution" ||
-      name === "Notifications")
-  ) {
-    setShowLoginPrompt(true);
-    return;
-  }
-
-  console.log(`${name} clicked`, {
-    currentUserId,
-  });
-};
+  const handleGoHome = () => {
+    window.location.href = "/home";
+  };
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-white">
-
-      {/* ==================================================
-          MAP
-          ================================================== */}
-
+      {/* MAP */}
       <section className="absolute inset-0 z-0 h-full w-full">
-
         <MapContainer
           center={defaultPosition}
           zoom={14}
@@ -126,39 +115,31 @@ export default function Landing({
 
           <Marker position={defaultPosition} />
         </MapContainer>
-
       </section>
 
-      {/* ==================================================
-          SIDEBAR
-          ================================================== */}
-
+      {/* SIDEBAR */}
       <aside
-  className="
-    absolute
-    left-0
-    top-0
-    z-[2000]
-    flex
-    h-screen
-    w-[220px]
-    flex-col
-    bg-[#12395A]
-    text-white
-    sm:w-[230px]
-    md:w-[240px]
-    lg:w-[250px]
-  "
->
-
-        {/* ==================================================
-            LOGO
-            ================================================== */}
-
+        className="
+          absolute
+          left-0
+          top-0
+          z-[2000]
+          flex
+          h-screen
+          w-[220px]
+          flex-col
+          bg-[#12395A]
+          text-white
+          sm:w-[230px]
+          md:w-[240px]
+          lg:w-[250px]
+        "
+      >
+        {/* LOGO / HOME */}
         <button
           type="button"
-          onClick={refreshPage}
-          title="Refresh"
+          onClick={handleGoHome}
+          title="Home"
           className="
             absolute
             flex
@@ -176,39 +157,36 @@ export default function Landing({
           }}
         >
           <span
-  className="
-    font-bold
-    tracking-[-2px]
-    text-white
-    text-[36px]
-    sm:text-[40px]
-    lg:text-[44px]
-  "
-  style={{
-    lineHeight: "1",
-  }}
->
-  Qroute
-</span>
+            className="
+              font-bold
+              tracking-[-2px]
+              text-white
+              text-[36px]
+              sm:text-[40px]
+              lg:text-[44px]
+            "
+            style={{
+              lineHeight: "1",
+            }}
+          >
+            Qroute
+          </span>
         </button>
 
-        {/* ==================================================
-            NAVIGATION
-            ================================================== */}
-
+        {/* NAVIGATION */}
         <nav
-  className="
-    absolute
-    left-1/2
-    top-[145px]
-    flex
-    w-[calc(100%-32px)]
-    -translate-x-1/2
-    flex-col
-    gap-[10px]
-    px-0
-  "
->
+          className="
+            absolute
+            left-1/2
+            top-[145px]
+            flex
+            w-[calc(100%-32px)]
+            -translate-x-1/2
+            flex-col
+            gap-[10px]
+            px-0
+          "
+        >
           {navItems.map((item) => {
             const Icon = item.icon;
 
@@ -216,21 +194,28 @@ export default function Landing({
               <button
                 key={item.label}
                 type="button"
-                onClick={() => handleClick(item.label)}
+                onClick={() => {
+  if (item.label === "Your Contribution") {
+    window.location.href = "/contribution";
+    return;
+  }
+
+  handleNavigation(item.label);
+}}
                 className="
-  group
-  flex
-  h-[46px]
-  w-full
-  items-center
-  rounded-lg
-  px-3
-  text-left
-  transition-all
-  duration-200
-  hover:bg-[#1b4b6f]
-  hover:translate-x-1
-"
+                  group
+                  flex
+                  h-[46px]
+                  w-full
+                  items-center
+                  rounded-lg
+                  px-3
+                  text-left
+                  transition-all
+                  duration-200
+                  hover:bg-[#1b4b6f]
+                  hover:translate-x-1
+                "
               >
                 <span
                   className="
@@ -268,45 +253,37 @@ export default function Landing({
             );
           })}
         </nav>
-
       </aside>
 
-      {/* ==================================================
-          HEADER
-          ================================================== */}
-
+      {/* HEADER */}
       <header
-  className="
-    absolute
-    left-[270px]
-    top-[45px]
-    z-[3000]
-    flex
-    items-center
-    sm:left-[280px]
-    md:left-[290px]
-    lg:left-[300px]
-  "
-  style={{
-    height: "45px",
-  }}
->
-
-        {/* ==================================================
-            SEARCH
-            ================================================== */}
-
+        className="
+          absolute
+          left-[270px]
+          top-[45px]
+          z-[3000]
+          flex
+          items-center
+          sm:left-[280px]
+          md:left-[290px]
+          lg:left-[300px]
+        "
+        style={{
+          height: "45px",
+        }}
+      >
+        {/* SEARCH */}
         <div
-  className="
-    relative
-    h-[50px]
-    w-[260px]
-    shrink-0
-    sm:w-[320px]
-    md:w-[360px]
-    lg:w-[400px]
-  "
->
+          className="
+            relative
+            h-[50px]
+            w-[260px]
+            shrink-0
+            sm:w-[320px]
+            md:w-[360px]
+            lg:w-[400px]
+          "
+        >
           <MapPin
             size={19}
             strokeWidth={2}
@@ -344,38 +321,30 @@ export default function Landing({
           />
         </div>
 
-        {/* ==================================================
-            VEHICLE FILTERS
-            ================================================== */}
-
+        {/* VEHICLE FILTERS */}
         <div
-  className="
-  ml-[8px]
-  flex
-  h-[52px]
-  flex-nowrap
-  items-center
-  gap-[5px]
-  sm:ml-[12px]
-  sm:gap-[7px]
-  lg:ml-[35px]
-  lg:gap-[10px]
-"
->
-
+          className="
+            ml-[8px]
+            flex
+            h-[52px]
+            flex-nowrap
+            items-center
+            gap-[5px]
+            sm:ml-[12px]
+            sm:gap-[7px]
+            lg:ml-[35px]
+            lg:gap-[10px]
+          "
+        >
           {/* JEEP */}
-
           <button
             type="button"
-            onClick={() => handleClick("Jeep")}
+            onClick={() => handleNavigation("Jeep")}
             className="
               group
               flex
               h-[52px]
-w-[52px]
-sm:w-[70px]
-md:w-[90px]
-lg:w-[105px]
+              w-[52px]
               items-center
               justify-center
               gap-[6px]
@@ -390,6 +359,9 @@ lg:w-[105px]
               hover:-translate-y-0.5
               hover:bg-[#eaf5fb]
               hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]
+              sm:w-[70px]
+              md:w-[90px]
+              lg:w-[105px]
             "
             style={{
               fontSize: "15px",
@@ -398,29 +370,20 @@ lg:w-[105px]
             <Car
               size={18}
               strokeWidth={2}
-              className="
-                transition-transform
-                duration-200
-                group-hover:scale-110
-              "
+              className="transition-transform duration-200 group-hover:scale-110"
             />
-
             <span>jeep</span>
           </button>
 
           {/* BUS */}
-
           <button
             type="button"
-            onClick={() => handleClick("Bus")}
+            onClick={() => handleNavigation("Bus")}
             className="
               group
               flex
               h-[52px]
-w-[52px]
-sm:w-[70px]
-md:w-[90px]
-lg:w-[105px]
+              w-[52px]
               items-center
               justify-center
               gap-[6px]
@@ -435,6 +398,9 @@ lg:w-[105px]
               hover:-translate-y-0.5
               hover:bg-[#eaf5fb]
               hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]
+              sm:w-[70px]
+              md:w-[90px]
+              lg:w-[105px]
             "
             style={{
               fontSize: "15px",
@@ -443,29 +409,20 @@ lg:w-[105px]
             <Bus
               size={18}
               strokeWidth={2}
-              className="
-                transition-transform
-                duration-200
-                group-hover:scale-110
-              "
+              className="transition-transform duration-200 group-hover:scale-110"
             />
-
             <span>bus</span>
           </button>
 
           {/* TRAIN */}
-
           <button
             type="button"
-            onClick={() => handleClick("Train")}
+            onClick={() => handleNavigation("Train")}
             className="
               group
               flex
-             h-[52px]
-w-[52px]
-sm:w-[70px]
-md:w-[90px]
-lg:w-[105px]
+              h-[52px]
+              w-[52px]
               items-center
               justify-center
               gap-[6px]
@@ -480,6 +437,9 @@ lg:w-[105px]
               hover:-translate-y-0.5
               hover:bg-[#eaf5fb]
               hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]
+              sm:w-[70px]
+              md:w-[90px]
+              lg:w-[105px]
             "
             style={{
               fontSize: "15px",
@@ -488,25 +448,16 @@ lg:w-[105px]
             <TrainFront
               size={18}
               strokeWidth={2}
-              className="
-                transition-transform
-                duration-200
-                group-hover:scale-110
-              "
+              className="transition-transform duration-200 group-hover:scale-110"
             />
-
             <span>train</span>
           </button>
-
         </div>
 
-        {/* ==================================================
-            NOTIFICATION + PROFILE
-            ================================================== */}
-
+        {/* NOTIFICATION + PROFILE */}
         <div
           className="
-          relative
+            relative
             ml-[300px]
             flex
             h-[55px]
@@ -514,12 +465,10 @@ lg:w-[105px]
             gap-[20px]
           "
         >
-
           {/* NOTIFICATION */}
-
           <button
             type="button"
-            onClick={() => handleClick("Notifications")}
+            onClick={() => handleNavigation("Notifications")}
             title="Notifications"
             className="
               group
@@ -541,21 +490,16 @@ lg:w-[105px]
             <Bell
               size={20}
               strokeWidth={2}
-              className="
-                transition-transform
-                duration-200
-                group-hover:rotate-6
-              "
+              className="transition-transform duration-200 group-hover:rotate-6"
             />
           </button>
 
           {/* PROFILE */}
-
           <button
             type="button"
             onClick={() => {
-  setShowProfileMenu((previous) => !previous);
-}}
+              setShowProfileMenu((previous) => !previous);
+            }}
             title="Profile"
             className="
               group
@@ -574,83 +518,50 @@ lg:w-[105px]
               hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]
             "
           >
-            <UserCircle
-              size={21}
-              strokeWidth={2}
-              className="
-                transition-transform
-                duration-200
-                group-hover:scale-105
-              "
-            />
-                    </button>
+            {currentAccount?.profilePicture ? (
+  <img
+    src={currentAccount.profilePicture}
+    alt="Profile"
+    className="h-full w-full rounded-full object-cover"
+  />
+) : (
+  <UserCircle
+    size={21}
+    strokeWidth={2}
+    className="transition-transform duration-200 group-hover:scale-105"
+  />
+)}
+          </button>
 
-          {showProfileMenu && (
+          {/* PROFILE DROPDOWN */}
+{showProfileMenu && (
   <div className="absolute right-0 top-[58px] z-[4000] w-[150px] rounded-xl bg-white p-2 shadow-[0_4px_15px_rgba(0,0,0,0.18)]">
-    {!currentUserId ? (
-      <button
-        type="button"
-        onClick={() => {
-          setShowProfileMenu(false);
-          window.location.href = "/login";
-        }}
-        className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-      >
-        Sign In
-      </button>
-    ) : (
-      <button
-        type="button"
-        onClick={() => {
-          setShowProfileMenu(false);
-          onLogout();
-        }}
-        className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-      >
-        Log Out
-      </button>
-    )}
+    <button
+      type="button"
+      onClick={() => {
+        setShowProfileMenu(false);
+        window.location.href = "/profile";
+      }}
+      className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+    >
+      Account
+    </button>
+
+    <button
+      type="button"
+      onClick={() => {
+  setShowProfileMenu(false);
+  onLogout();
+  window.location.href = "/";
+}}
+      className="mt-1 w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+    >
+      Log Out
+    </button>
   </div>
 )}
         </div>
       </header>
-
-      {showLoginPrompt && (
-        <div className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/30">
-          <div className="w-[320px] rounded-xl bg-white p-6 text-center shadow-[0_4px_20px_rgba(0,0,0,0.2)]">
-            <h2 className="text-[18px] font-semibold text-gray-900">
-              Sign in to access this
-            </h2>
-
-            <p className="mt-2 text-[12px] leading-relaxed text-gray-600">
-              Please log in or sign in to your QRoute account to access this
-              feature.
-            </p>
-
-            <div className="mt-5 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setShowLoginPrompt(false)}
-                className="h-9 flex-1 rounded-[6px] border border-gray-300 bg-white text-[11px] font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setShowLoginPrompt(false);
-                  window.location.href = "/login";
-                }}
-                className="h-9 flex-1 rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white hover:bg-[#5547E8]"
-              >
-                Sign In
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
     </main>
   );
 }
