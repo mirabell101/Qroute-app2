@@ -1,18 +1,18 @@
 import { useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
-import Landing from "./pages/visitor/Landing/Landing";
-import Home from "./pages/registered-user/Home/Home";
-import Login from "./pages/visitor/Login/Login";
-import SignUp from "./pages/visitor/SignUp/SignUp";
-import OTP from "./pages/visitor/OTP/OTP";
-import Forgotpassword from "./pages/visitor/Forgotpassword/Forgotpassword";
-import Resetpassword from "./pages/visitor/Resetpassword/Resetpassword";
-import TermsAndConditions from "./pages/visitor/Legal/TermsAndCondition";
-import PrivacyPolicy from "./pages/visitor/Legal/PrivacyPolicy";
-import Profile from "./pages/registered-user/Profile/Profile";
-import Contributions from "./pages/registered-user/Contribution/Contribution";
-import AdminBase from "./pages/admin/Base/Base";
+import Landing from "./pages/visitor/landing/landing";
+import Home from "./pages/registered-user/home/home";
+import Login from "./pages/visitor/login/login";
+import SignUp from "./pages/visitor/signup/signup";
+import OTP from "./pages/visitor/otp/otp";
+import Forgotpassword from "./pages/visitor/forgotpassword/forgotpassword";
+import Resetpassword from "./pages/visitor/resetpassword/resetpassword";
+import TermsAndConditions from "./pages/visitor/legal/termsandcondition";
+import PrivacyPolicy from "./pages/visitor/legal/privacypolicy";
+import Profile from "./pages/registered-user/profile/profile";
+import Contributions from "./pages/registered-user/contribution/contribution";
+import AdminBase from "./pages/admin/base/base";
 
 const CURRENT_USER_KEY = "qroute_current_user";
 
