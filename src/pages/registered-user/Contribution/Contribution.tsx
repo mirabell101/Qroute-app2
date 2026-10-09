@@ -9,6 +9,7 @@ import {
   UserCircle,
   Plus,
 } from "lucide-react";
+import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 
 interface ContributionsProps {
   currentUserId: string;
@@ -140,21 +141,11 @@ export default function Contributions({
             height: "75px",
           }}
         >
-          <span
-            className="
-              font-bold
-              tracking-[-2px]
-              text-white
-              text-[36px]
-              sm:text-[40px]
-              lg:text-[44px]
-            "
-            style={{
-              lineHeight: "1",
-            }}
-          >
-            Qroute
-          </span>
+          <img
+  src={qrouteWhiteLogo}
+  alt="Qroute"
+  className="max-h-full max-w-full object-contain"
+/>
         </button>
 
         {/* NAVIGATION */}

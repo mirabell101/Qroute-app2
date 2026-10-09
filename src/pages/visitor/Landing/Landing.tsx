@@ -13,6 +13,7 @@ import {
 import { MapContainer, Marker, TileLayer } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerIcon from "leaflet/dist/images/marker-icon.png";
@@ -175,21 +176,11 @@ export default function Landing({
             height: "75px",
           }}
         >
-          <span
-  className="
-    font-bold
-    tracking-[-2px]
-    text-white
-    text-[36px]
-    sm:text-[40px]
-    lg:text-[44px]
-  "
-  style={{
-    lineHeight: "1",
-  }}
->
-  Qroute
-</span>
+          <img
+  src={qrouteWhiteLogo}
+  alt="Qroute"
+  className="max-h-full max-w-full object-contain"
+/>
         </button>
 
         {/* ==================================================
