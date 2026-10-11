@@ -1,6 +1,5 @@
 
-import { useState } from "react";
-
+import { useEffect, useRef, useState } from "react";
 import {
   Bell,
   Car,
@@ -9,6 +8,9 @@ import {
   MessageSquare,
   UserCircle,
   Plus,
+  ChevronLeft,
+  ChevronRight,
+  Trash2,
 } from "lucide-react";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 
@@ -25,14 +27,38 @@ interface Account {
   profilePicture?: string | null;
 }
 
-interface Contribution {
+interface DraftPhoto {
+  name: string;
+  dataUrl: string;
+}
+
+interface ContributionDraft {
   id: string;
-  date: string;
+  caption: string;
   terminal: string;
-  status: "Pending" | "Published";
+  origin: string;
+  destination: string;
+  vehicle: string;
+  commuterType: string;
+  fare: string;
+  photos: DraftPhoto[];
+  updatedAt: string;
+}
+
+type PostStatus = "Pending" | "Approved" | "Needs Revision";
+
+interface SubmittedContribution extends ContributionDraft {
+  userId: string;
+  status: PostStatus;
+  submittedAt: string;
+  batchId: string;
+  adminFeedback?: string;
 }
 
 const ACCOUNTS_KEY = "qroute_accounts";
+const SUBMITTED_KEY = "qroute_submitted_contributions";
+const MAX_PHOTOS = 5;
+const MAX_DRAFTS = 5;
 
 const navItems = [
   { label: "Recents", icon: HomeIcon },
@@ -41,13 +67,68 @@ const navItems = [
   { label: "Community", icon: MessageSquare },
 ];
 
-function getStoredAccounts(): Account[] {
+function readLocalStorage<T>(key: string, fallback: T): T {
   try {
-    const stored = localStorage.getItem(ACCOUNTS_KEY);
-    return stored ? (JSON.parse(stored) as Account[]) : [];
+    const value = localStorage.getItem(key);
+    return value ? (JSON.parse(value) as T) : fallback;
   } catch {
-    return [];
+    return fallback;
   }
+}
+
+function getStoredAccounts(): Account[] {
+  return readLocalStorage<Account[]>(ACCOUNTS_KEY, []);
+}
+
+function getDraftStorageKey(userId: string) {
+  return `qroute_contribution_drafts_${userId}`;
+}
+
+function getUserDrafts(userId: string): ContributionDraft[] {
+  return readLocalStorage<ContributionDraft[]>(
+    getDraftStorageKey(userId),
+    [],
+  );
+}
+
+function saveUserDrafts(userId: string, drafts: ContributionDraft[]) {
+  try {
+    localStorage.setItem(getDraftStorageKey(userId), JSON.stringify(drafts));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getAllSubmitted(): SubmittedContribution[] {
+  return readLocalStorage<SubmittedContribution[]>(SUBMITTED_KEY, []);
+}
+
+function saveAllSubmitted(posts: SubmittedContribution[]) {
+  localStorage.setItem(SUBMITTED_KEY, JSON.stringify(posts));
+}
+
+function createEmptyDraft(): ContributionDraft {
+  return {
+    id: crypto.randomUUID(),
+    caption: "",
+    terminal: "",
+    origin: "",
+    destination: "",
+    vehicle: "",
+    commuterType: "",
+    fare: "",
+    photos: [],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function formatDate(date: string) {
+  return new Date(date).toLocaleDateString("en-PH", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 export default function Contributions({
@@ -56,27 +137,78 @@ export default function Contributions({
 }: ContributionsProps) {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showAddPostModal, setShowAddPostModal] = useState(false);
-
-  const [caption, setCaption] = useState("");
-  const [terminal, setTerminal] = useState("");
-  const [pointA, setPointA] = useState("");
-  const [pointB, setPointB] = useState("");
-  const [vehicle, setVehicle] = useState("Bus");
-  const [commuterType, setCommuterType] = useState("");
-  const [fare, setFare] = useState("");
-  const [photoName, setPhotoName] = useState("");
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
-  
-
+  const [showValidation, setShowValidation] = useState(false);
+  const [showDraftNotice, setShowDraftNotice] = useState("");
+  const [drafts, setDrafts] = useState<ContributionDraft[]>([]);
+  const [activeDraftIndex, setActiveDraftIndex] = useState(0);
+  const [contributions, setContributions] = useState<
+    SubmittedContribution[]
+  >([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const [showSubmitConfirmation, setShowSubmitConfirmation] = useState(false);
+  const [showWithdrawConfirmation, setShowWithdrawConfirmation] = useState(false);
+const [pendingWithdrawPostId, setPendingWithdrawPostId] = useState<string | null>(null);
   const accounts = getStoredAccounts();
-
   const currentAccount = accounts.find(
-    (account) => account.id === currentUserId
+    (account) => account.id === currentUserId,
   );
 
-  // Temporary empty contribution list.
-  // This will be connected to the actual posts later.
-  const [contributions] = useState<Contribution[]>([]);
+  const activeDraft = drafts[activeDraftIndex];
+  const [confirmation, setConfirmation] = useState<{
+  type: "delete" | "submit" | "withdraw";
+  message: string;
+  draftIndex?: number;
+  postId?: string;
+} | null>(null);
+
+  useEffect(() => {
+    if (!currentUserId) {
+      setDrafts([]);
+      setContributions([]);
+      setIsLoaded(true);
+      return;
+    }
+
+    const storedDrafts = getUserDrafts(currentUserId);
+    const userPosts = getAllSubmitted().filter(
+      (post) => post.userId === currentUserId,
+    );
+
+    setDrafts(storedDrafts);
+    setContributions(userPosts);
+    setActiveDraftIndex(0);
+    setIsLoaded(true);
+  }, [currentUserId]);
+
+  useEffect(() => {
+    if (!isLoaded || !currentUserId) return;
+
+    const success = saveUserDrafts(currentUserId, drafts);
+
+    if (!success) {
+      setShowDraftNotice(
+        "Hindi ma-save ang drafts. Maaaring puno na ang browser storage. Subukang magbawas ng photos.",
+      );
+    }
+  }, [drafts, currentUserId, isLoaded]);
+
+  const updateActiveDraft = (
+    updates: Partial<ContributionDraft>,
+  ) => {
+    setDrafts((previous) =>
+      previous.map((draft, index) =>
+        index === activeDraftIndex
+          ? {
+              ...draft,
+              ...updates,
+              updatedAt: new Date().toISOString(),
+            }
+          : draft,
+      ),
+    );
+  };
 
   const handleNavigation = (name: string) => {
     if (name === "Recents") {
@@ -84,74 +216,346 @@ export default function Contributions({
       return;
     }
 
-    console.log(`${name} clicked`, { currentUserId });
+    if (name === "Saved") {
+      window.location.href = "/saved";
+      return;
+    }
+
+    if (name === "Community") {
+      window.location.href = "/community";
+      return;
+    }
   };
 
-  const handleSubmitPost = () => {
-    if (!photoName) {
-  alert("Please upload a photo.");
-  return;
-}
-if (!caption.trim()) {
-  alert("Please enter a caption.");
-  return;
-}
-if (!vehicle.trim()) {
-  alert("Please select a type of vehicle.");
-  return;
-}
-if (!commuterType.trim()) {
-  alert("Please select a type of commuter.");
-  return;
-}
-if (!fare.trim() || !/^\d+$/.test(fare)) {
-  alert("Please enter a valid fare using whole numbers only.");
-  return;
-}
-    // UI only for now; connect this to post storage later.
-    console.log("Post form submitted", {
-      currentUserId,
-      caption,
-      terminal,
-      origin: pointA,
-      destination: pointB,
-      vehicle,
-      commuterType,
-      fare,
-      photoName,
+  const openAddPostModal = () => {
+    setShowValidation(false);
+    setShowDraftNotice("");
+
+    if (drafts.length === 0) {
+      setDrafts([createEmptyDraft()]);
+      setActiveDraftIndex(0);
+    } else {
+      setActiveDraftIndex(0);
+    }
+
+    setShowAddPostModal(true);
+  };
+
+  const closeAddPostModal = () => {
+    setShowAddPostModal(false);
+    setShowValidation(false);
+    setShowDraftNotice("");
+  };
+
+  const handleAddAnotherPost = () => {
+    if (drafts.length >= MAX_DRAFTS) {
+      setShowDraftNotice(
+        `Maximum na ang ${MAX_DRAFTS} drafts sa isang batch. Isumite muna ang batch bago gumawa ng panibago.`,
+      );
+      return;
+    }
+
+    if (!activeDraft) return;
+
+    setDrafts((previous) => {
+      const next = [...previous, createEmptyDraft()];
+      setActiveDraftIndex(next.length - 1);
+      return next;
     });
 
-    setShowAddPostModal(false);
+    setShowValidation(false);
+    setShowDraftNotice("");
   };
+
+  const handleDeleteDraft = (indexToDelete: number) => {
+    const draftToDelete = drafts[indexToDelete];
+
+    if (!draftToDelete) return;
+
+    const confirmed = window.confirm(
+      `Delete Draft ${indexToDelete + 1}? This cannot be undone.`,
+    );
+
+    if (!confirmed) return;
+
+    const nextDrafts = drafts.filter(
+      (_, index) => index !== indexToDelete,
+    );
+
+    setDrafts(nextDrafts);
+
+    if (nextDrafts.length === 0) {
+      setActiveDraftIndex(0);
+      setShowValidation(false);
+      return;
+    }
+
+    if (indexToDelete < activeDraftIndex) {
+      setActiveDraftIndex(activeDraftIndex - 1);
+    } else if (indexToDelete === activeDraftIndex) {
+      setActiveDraftIndex(
+        Math.min(indexToDelete, nextDrafts.length - 1),
+      );
+    }
+  };
+
+  const handlePhotoChange = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    if (!activeDraft) return;
+
+    const selectedFiles = Array.from(event.target.files ?? []);
+    const remainingSlots = MAX_PHOTOS - activeDraft.photos.length;
+
+    const imageFiles = selectedFiles.filter(
+      (file) =>
+        file.type === "image/png" ||
+        file.type === "image/jpeg",
+    );
+
+    const filesToAdd = imageFiles.slice(0, remainingSlots);
+
+    const newPhotos: DraftPhoto[] = await Promise.all(
+      filesToAdd.map(
+        (file) =>
+          new Promise<DraftPhoto>((resolve, reject) => {
+            const reader = new FileReader();
+
+            reader.onload = () => {
+              if (typeof reader.result === "string") {
+                resolve({
+                  name: file.name,
+                  dataUrl: reader.result,
+                });
+              } else {
+                reject(new Error("Unable to read image."));
+              }
+            };
+
+            reader.onerror = () =>
+              reject(new Error("Unable to read image."));
+
+            reader.readAsDataURL(file);
+          }),
+      ),
+    ).catch(() => {
+      setShowDraftNotice(
+        "May photo na hindi mabasa. Subukan ulit gamit ang PNG o JPG.",
+      );
+      return [];
+    });
+
+    if (newPhotos.length > 0) {
+      updateActiveDraft({
+        photos: [...activeDraft.photos, ...newPhotos],
+      });
+    }
+
+    if (imageFiles.length > remainingSlots) {
+      setShowDraftNotice(
+        `Hanggang ${MAX_PHOTOS} photos lang bawat post.`,
+      );
+    }
+
+    event.target.value = "";
+  };
+
+  const removePhoto = (photoIndex: number) => {
+    if (!activeDraft) return;
+
+    updateActiveDraft({
+      photos: activeDraft.photos.filter(
+        (_, index) => index !== photoIndex,
+      ),
+    });
+  };
+
+  const isDraftValid = (draft: ContributionDraft) => {
+    const hasRouteDetails = Boolean(
+      draft.terminal.trim() ||
+        draft.origin.trim() ||
+        draft.destination.trim(),
+    );
+
+const isFareValid = /^\d+(\.\d{1,2})?$/.test(
+  draft.fare.trim(),
+);
+
+    return (
+      draft.photos.length > 0 &&
+      Boolean(draft.caption.trim()) &&
+      hasRouteDetails &&
+      Boolean(draft.vehicle.trim()) &&
+      Boolean(draft.commuterType.trim()) &&
+      isFareValid
+    );
+  };
+
+const handleSubmitAll = () => {
+  setShowValidation(true);
+  setShowDraftNotice("");
+
+  if (drafts.length === 0) {
+    setShowDraftNotice("There are no drafts to submit.");
+    return;
+  }
+
+  const invalidIndex = drafts.findIndex((draft) => !isDraftValid(draft));
+
+  if (invalidIndex !== -1) {
+    setActiveDraftIndex(invalidIndex);
+    setShowDraftNotice(
+      `Some fields are missing or invalid in Draft ${invalidIndex + 1}. Please complete all drafts before submitting.`,
+    );
+    return;
+  }
+
+  setShowSubmitConfirmation(true);
+};
+
+const confirmSubmitAll = () => {
+  if (isSubmitting) return;
+
+  setShowSubmitConfirmation(false);
+  setIsSubmitting(true);
+
+  try {
+    const batchId = crypto.randomUUID();
+    const submittedAt = new Date().toISOString();
+
+    const newPosts: SubmittedContribution[] = drafts.map((draft) => ({
+      ...draft,
+      userId: currentUserId,
+      status: "Pending",
+      submittedAt,
+      batchId,
+    }));
+
+    const allPosts = getAllSubmitted();
+    saveAllSubmitted([...allPosts, ...newPosts]);
+
+    setContributions((previous) => [...newPosts, ...previous]);
+    setDrafts([]);
+    setActiveDraftIndex(0);
+    setShowValidation(false);
+    setShowAddPostModal(false);
+    setShowDraftNotice("");
+  } catch {
+    setShowDraftNotice(
+      "Unable to submit your posts. Please try again.",
+    );
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+
+  
+const withdrawPendingPost = (postId: string) => {
+  const allPosts = getAllSubmitted();
+
+  const post = allPosts.find(
+    (item) =>
+      item.id === postId &&
+      item.userId === currentUserId &&
+      item.status === "Pending",
+  );
+
+  if (!post) return;
+
+  const updatedDrafts = getUserDrafts(currentUserId);
+
+  if (updatedDrafts.length >= MAX_DRAFTS) {
+    setShowDraftNotice(
+      "May 5 drafts ka na. Tanggalin muna ang isang draft bago bawiin ang post na ito.",
+    );
+    return;
+  }
+
+  const confirmed = window.confirm(
+    "Bawiin ang pending post para ma-edit at muling isumite?",
+  );
+
+  if (!confirmed) return;
+
+  const editableDraft: ContributionDraft = {
+    id: post.id,
+    caption: post.caption,
+    terminal: post.terminal,
+    origin: post.origin,
+    destination: post.destination,
+    vehicle: post.vehicle,
+    commuterType: post.commuterType,
+    fare: post.fare,
+    photos: post.photos,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const nextDrafts = [...updatedDrafts, editableDraft];
+
+  // Save the draft first so the post is not lost if saving fails.
+  if (!saveUserDrafts(currentUserId, nextDrafts)) {
+    setShowDraftNotice(
+      "Hindi ma-save ang draft. Maaaring puno na ang browser storage. Subukang magbawas ng photos.",
+    );
+    return;
+  }
+
+  try {
+    saveAllSubmitted(
+      allPosts.filter(
+        (item) =>
+          !(item.id === postId && item.userId === currentUserId),
+      ),
+    );
+  } catch {
+    setShowDraftNotice(
+      "Hindi na-update ang submitted posts. Nananatili ang editable draft mo; pakisubukang muli.",
+    );
+    return;
+  }
+
+  setDrafts(nextDrafts);
+  setContributions((previous) =>
+    previous.filter((item) => item.id !== postId),
+  );
+  setActiveDraftIndex(nextDrafts.length - 1);
+  setShowValidation(false);
+  setShowDraftNotice("");
+  setShowAddPostModal(true);
+};
+
+  const routeError =
+    showValidation &&
+    Boolean(activeDraft) &&
+    !activeDraft.terminal.trim() &&
+    !activeDraft.origin.trim() &&
+    !activeDraft.destination.trim();
+
+  
+const fareError =
+  showValidation &&
+  Boolean(activeDraft) &&
+  (!activeDraft.fare.trim() ||
+    !/^\d+(\.\d{1,2})?$/.test(activeDraft.fare.trim()));
+
+  const fieldClass = (hasError: boolean) =>
+    `h-10 w-full rounded-lg border px-3 text-sm outline-none focus:ring-1 ${
+      hasError
+        ? "border-red-500 focus:border-red-500 focus:ring-red-500"
+        : "border-gray-300 focus:border-[#12395A] focus:ring-[#12395A]"
+    }`;
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#f7f7f7]">
-      {/* SIDEBAR */}
-      <aside
-        className="
-          absolute left-0 top-0 z-[2000]
-          flex h-screen w-[220px] flex-col
-          bg-[#12395A] text-white
-          sm:w-[230px] md:w-[240px] lg:w-[250px]
-        "
-      >
-        {/* LOGO / HOME */}
+      <aside className="absolute left-0 top-0 z-[2000] flex h-screen w-[220px] flex-col bg-[#12395A] text-white sm:w-[230px] md:w-[240px] lg:w-[250px]">
         <button
           type="button"
           onClick={() => {
             window.location.href = "/home";
           }}
           title="Home"
-          className="
-            absolute flex items-center justify-center
-            rounded-lg transition-colors duration-200
-            hover:bg-[#1b4b6f]
-          "
-          style={{
-            top: "30px",
-            width: "100%",
-            height: "75px",
-          }}
+          className="absolute flex items-center justify-center rounded-lg transition-colors duration-200 hover:bg-[#1b4b6f]"
+          style={{ top: "30px", width: "100%", height: "75px" }}
         >
           <img
             src={qrouteWhiteLogo}
@@ -160,13 +564,7 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
           />
         </button>
 
-        {/* NAVIGATION */}
-        <nav
-          className="
-            absolute left-0 top-[145px]
-            flex w-full flex-col gap-0
-          "
-        >
+        <nav className="absolute left-0 top-[145px] flex w-full flex-col gap-0">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = item.label === "Your Contribution";
@@ -176,15 +574,11 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
                 key={item.label}
                 type="button"
                 onClick={() => handleNavigation(item.label)}
-                className={`
-                  group flex h-[46px] w-full items-center
-                  px-6 text-left transition-colors duration-200
-                  ${
-                    isActive
-                      ? "bg-[#1b4b6f]"
-                      : "hover:bg-[#d9dee3] hover:text-[#12395A]"
-                  }
-                `}
+                className={`group flex h-[46px] w-full items-center px-6 text-left transition-colors duration-200 ${
+                  isActive
+                    ? "bg-[#1b4b6f]"
+                    : "hover:bg-[#d9dee3] hover:text-[#12395A]"
+                }`}
               >
                 <span className="flex w-[28px] shrink-0 items-center justify-center">
                   <Icon
@@ -193,7 +587,6 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
                     className="transition-transform duration-200 group-hover:scale-110"
                   />
                 </span>
-
                 <span
                   className="ml-2 whitespace-nowrap font-medium"
                   style={{ fontSize: "16px" }}
@@ -206,38 +599,24 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
         </nav>
       </aside>
 
-      {/* HEADER */}
-      <header
-        className="
-          absolute left-[270px] right-[55px] top-[45px] z-[3000]
-          flex h-[55px] items-start justify-between
-          sm:left-[280px] md:left-[290px] lg:left-[300px]
-        "
-      >
+      <header className="absolute left-[40px] right-0 top-0 z-[40] flex min-h-[130px] items-start justify-between bg-[#f7f7f7] px-[30px] pt-[35px] sm:left-[280px] md:left-[290px] lg:left-[300px]">
         <div className="flex flex-col justify-center">
           <h1 className="text-[26px] font-semibold tracking-[-0.4px] text-gray-900">
             Your Contributions
           </h1>
-
           <p className="mt-1 text-[14px] text-gray-500">
             Manage your route contributions and published posts.
           </p>
         </div>
 
-        {/* NOTIFICATION + PROFILE */}
-        <div className="flex h-[55px] -translate-y-[5px] items-center gap-[20px]">
+        <div className="relative flex h-[55px] -translate-y-[5px] items-center gap-[20px]">
           <button
             type="button"
             onClick={() => {
               console.log("Notifications clicked", { currentUserId });
             }}
             title="Notifications"
-            className="
-              group flex h-[45px] w-[45px] items-center justify-center
-              rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)]
-              transition-all duration-200 hover:scale-105 hover:bg-gray-100
-              hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]
-            "
+            className="group flex h-[45px] w-[45px] items-center justify-center rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)] transition-all duration-200 hover:scale-105 hover:bg-gray-100 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]"
           >
             <Bell
               size={20}
@@ -248,16 +627,9 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
 
           <button
             type="button"
-            onClick={() => {
-              setShowProfileMenu((previous) => !previous);
-            }}
+            onClick={() => setShowProfileMenu((previous) => !previous)}
             title="Profile"
-            className="
-              group flex h-[45px] w-[45px] items-center justify-center
-              rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)]
-              transition-all duration-200 hover:scale-105 hover:bg-gray-100
-              hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]
-            "
+            className="group flex h-[45px] w-[45px] items-center justify-center overflow-hidden rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)] transition-all duration-200 hover:scale-105 hover:bg-gray-100 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]"
           >
             {currentAccount?.profilePicture ? (
               <img
@@ -286,7 +658,6 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
               >
                 Account
               </button>
-
               <button
                 type="button"
                 onClick={() => {
@@ -303,122 +674,150 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
         </div>
       </header>
 
-      {/* MAIN CONTENT */}
-      <section
-        className={`
-          absolute inset-0 ml-[220px]
-          ${contributions.length > 0 ? "overflow-y-auto" : "overflow-y-hidden"}
-          sm:ml-[230px] md:ml-[240px] lg:ml-[250px]
-        `}
-      >
-        <div className="mx-auto w-full max-w-[900px] px-8 pb-12 pt-[105px]">
-  {/* TITLE SPACE */}
-  <div className="h-[23px]" />
-          {/* ADD POST BUTTON */}
+      <section className="absolute inset-0 z-0 ml-[220px] overflow-y-auto pt-[10px] sm:ml-[230px] md:ml-[170px] lg:ml-[250px]">
+          <div className="mx-auto w-full max-w-[900px] px-8 pb-12 pt-[105px]">
+            <div className="h-[23px]" />
+
           <button
             type="button"
-            onClick={() => setShowAddPostModal(true)}
-            className="
-              group mt-7 flex w-full items-center gap-4 rounded-xl
-              border border-gray-200 bg-white px-5 py-4 text-left
-              shadow-[0_2px_8px_rgba(0,0,0,0.10)]
-              transition-all duration-200 hover:-translate-y-0.5
-              hover:bg-gray-50 hover:shadow-[0_4px_12px_rgba(0,0,0,0.14)]
-            "
+            onClick={openAddPostModal}
+            className="group mt-7 flex w-full items-center gap-4 rounded-xl border border-gray-200 bg-white px-5 py-4 text-left shadow-[0_2px_8px_rgba(0,0,0,0.10)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-gray-50 hover:shadow-[0_4px_12px_rgba(0,0,0,0.14)]"
           >
-            <div
-              className="
-                flex h-[42px] w-[42px] shrink-0 items-center justify-center
-                rounded-full bg-[#12395A] text-white transition-transform
-                duration-200 group-hover:scale-105
-              "
-            >
+            <div className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full bg-[#12395A] text-white transition-transform duration-200 group-hover:scale-105">
               <Plus size={21} strokeWidth={2.2} />
             </div>
-
             <div>
               <p className="text-[15px] font-semibold text-gray-900">
                 Add Post
               </p>
               <p className="mt-0.5 text-[13px] text-gray-500">
-                Share a route contribution with the community
+                Create up to {MAX_DRAFTS} drafts and submit them for review
               </p>
             </div>
           </button>
 
-          {/* CONTRIBUTIONS */}
-          <div className="mt-6">
+          <div className="mt-6 flex flex-col gap-3">
             {contributions.length === 0 ? (
-              <div
-                className="
-                  flex min-h-[390px] flex-col items-center justify-center
-                  rounded-xl border border-gray-200 bg-white px-6 text-center
-                  shadow-[0_2px_8px_rgba(0,0,0,0.06)]
-                "
-              >
+              <div className="flex min-h-[330px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-6 text-center shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
                 <div className="flex h-[58px] w-[58px] items-center justify-center rounded-full bg-[#f1f3f5]">
-                  <Car size={27} strokeWidth={1.8} className="text-gray-400" />
+                  <Car
+                    size={27}
+                    strokeWidth={1.8}
+                    className="text-gray-400"
+                  />
                 </div>
-
                 <h2 className="mt-5 text-[17px] font-semibold text-gray-800">
                   Nothing to see here yet.
                 </h2>
-
                 <p className="mt-2 max-w-[380px] text-[13px] leading-[1.6] text-gray-500">
-                  Add a post to share your route contribution with the
-                  community.
+                  Your submitted contributions and their review statuses
+                  will appear here.
                 </p>
               </div>
             ) : (
-              <div className="flex flex-col gap-3">
-                {contributions.map((contribution) => (
-                  <div
-                    key={contribution.id}
-                    className="rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-[0_2px_8px_rgba(0,0,0,0.06)]"
-                  >
-                    <div className="grid grid-cols-[1fr_1.5fr_1fr] items-center gap-4">
-                      <div>
-                        <p className="text-[11px] text-gray-400">DATE</p>
-                        <p className="mt-1 text-[13px] font-medium text-gray-800">
-                          {contribution.date}
-                        </p>
-                      </div>
+              
+contributions.map((contribution) => (
+  <article
+    key={contribution.id}
+    className="rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-[0_2px_8px_rgba(0,0,0,0.06)]"
+  >
+    <div className="flex flex-col gap-4 sm:flex-row">
+      {/* Picture preview */}
+      {contribution.photos[0] && (
+        <img
+          src={contribution.photos[0].dataUrl}
+          alt="Contribution preview"
+          className="h-28 w-full rounded-lg object-cover sm:w-36"
+        />
+      )}
 
-                      <div>
-                        <p className="text-[11px] text-gray-400">
-                          TERMINAL / ROUTE
-                        </p>
-                        <p className="mt-1 text-[13px] font-medium text-gray-800">
-                          {contribution.terminal}
-                        </p>
-                      </div>
+      <div className="min-w-0 flex-1">
+        {/* Submission date and status */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-gray-500">
+            Submitted {formatDate(contribution.submittedAt)}
+          </p>
 
-                      <div>
-                        <p className="text-[11px] text-gray-400">STATUS</p>
-                        <p
-                          className={`mt-1 text-[13px] font-semibold ${
-                            contribution.status === "Pending"
-                              ? "text-[#D48A00]"
-                              : "text-green-600"
-                          }`}
-                        >
-                          {contribution.status}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              contribution.status === "Pending"
+                ? "bg-amber-100 text-amber-800"
+                : contribution.status === "Approved"
+                  ? "bg-green-100 text-green-800"
+                  : "bg-red-100 text-red-800"
+            }`}
+          >
+            {contribution.status}
+          </span>
+        </div>
+
+        {/* Route or terminal */}
+        <p className="mt-2 break-words text-sm font-semibold text-gray-900">
+          {contribution.terminal?.trim()
+            ? contribution.terminal
+            : `${contribution.origin || "—"} → ${contribution.destination || "—"}`}
+        </p>
+
+        {/* Full details for Approved posts only */}
+        {contribution.status === "Approved" && (
+          <>
+            <p className="mt-2 break-words text-sm text-gray-700">
+              {contribution.caption}
+            </p>
+
+            <p className="mt-1 text-sm text-gray-600">
+              {contribution.origin || "—"} → {contribution.destination || "—"}
+            </p>
+
+            <p className="mt-1 text-xs text-gray-500">
+              {contribution.vehicle} · {contribution.commuterType} · ₱
+              {contribution.fare}
+            </p>
+          </>
+        )}
+
+        {/* Pending action */}
+        {contribution.status === "Pending" && (
+          <button
+            type="button"
+            onClick={() => withdrawPendingPost(contribution.id)}
+            className="mt-3 rounded-lg border border-[#12395A] px-3 py-1.5 text-xs font-semibold text-[#12395A] transition-colors hover:bg-[#12395A] hover:text-white"
+          >
+            Withdraw to Edit
+          </button>
+        )}
+
+        {/* Needs Revision */}
+        {contribution.status === "Needs Revision" && (
+          <div className="mt-3">
+            {contribution.adminFeedback && (
+              <p className="mb-2 text-sm text-red-700">
+                Admin feedback: {contribution.adminFeedback}
+              </p>
+            )}
+
+            <button
+              type="button"
+              onClick={() => startRevision(contribution)}
+              className="rounded-lg border border-[#12395A] px-3 py-1.5 text-xs font-semibold text-[#12395A] transition-colors hover:bg-[#12395A] hover:text-white"
+            >
+              Edit and Resubmit
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  </article>
+))
             )}
           </div>
         </div>
       </section>
 
-      {/* ADD POST MODAL */}
-      {showAddPostModal && (
+      {showAddPostModal && activeDraft && (
         <div
           className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/45 px-4 py-6"
-          onClick={() => setShowAddPostModal(false)}
+          onClick={closeAddPostModal}
         >
           <section
             role="dialog"
@@ -433,59 +832,92 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
                   id="add-post-title"
                   className="text-xl font-semibold text-gray-900"
                 >
-                  Create a Contribution
+                  Create Contributions
                 </h2>
                 <p className="mt-1 text-sm text-gray-500">
-                  Share useful route details with the QRoute community.
+                  Save up to {MAX_DRAFTS} separate posts for admin review.
                 </p>
               </div>
-
               <button
                 type="button"
                 aria-label="Close"
-                onClick={() => setShowAddPostModal(false)}
-                className="rounded-full px-2 py-1 text-xl leading-none text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                onClick={closeAddPostModal}
+                className="rounded-full px-2 py-1 text-xl leading-none text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
               >
                 ×
               </button>
             </div>
 
             <div className="space-y-4">
-              {/* PHOTO */}
               <div>
-                <label
-                  htmlFor="post-photo"
-                  className="mb-1.5 block text-sm font-medium text-gray-700"
-                >
-                  Photo <span className="text-red-500">*</span>
-                </label>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Photos <span className="text-red-500">*</span>
+                  </label>
+                  <span className="text-xs text-gray-500">
+                    {activeDraft.photos.length}/{MAX_PHOTOS} photos
+                  </span>
+                </div>
 
-                <label
-                  htmlFor="post-photo"
-                  className="flex min-h-[92px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 px-4 py-4 text-center transition-colors hover:border-[#12395A] hover:bg-gray-100"
+                <div
+                  className={`grid grid-cols-2 gap-3 rounded-xl sm:grid-cols-3 ${
+                    showValidation && activeDraft.photos.length === 0
+                      ? "border border-red-500 p-2"
+                      : ""
+                  }`}
                 >
-                  <span className="text-sm font-medium text-gray-700">
-                    {photoName || "Choose a photo to upload"}
-                  </span>
-                  <span className="mt-1 text-xs text-gray-500">
-                    PNG, JPG, or JPEG
-                  </span>
-                </label>
+                  {activeDraft.photos.map((photo, index) => (
+                    <div
+                      key={`${activeDraft.id}-${photo.name}-${index}`}
+                      className="relative overflow-hidden rounded-xl border border-gray-200 bg-gray-50"
+                    >
+                      <img
+                        src={photo.dataUrl}
+                        alt={`Selected photo ${index + 1}`}
+                        className="h-28 w-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        aria-label={`Remove photo ${index + 1}`}
+                        onClick={() => removePhoto(index)}
+                        className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white transition-colors hover:bg-red-600"
+                      >
+                        ×
+                      </button>
+                      <p className="truncate px-2 py-1.5 text-xs text-gray-600">
+                        {photo.name}
+                      </p>
+                    </div>
+                  ))}
+
+                  {activeDraft.photos.length < MAX_PHOTOS && (
+                    <button
+                      type="button"
+                      onClick={() => photoInputRef.current?.click()}
+                      className="flex min-h-[112px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 px-3 py-4 text-center transition-colors hover:border-[#12395A] hover:bg-gray-100"
+                    >
+                      <Plus size={25} className="mb-1 text-gray-500" />
+                      <span className="text-sm font-medium text-gray-700">
+                        Add photo
+                      </span>
+                      <span className="mt-1 text-xs text-gray-500">
+                        PNG, JPG, or JPEG
+                      </span>
+                    </button>
+                  )}
+                </div>
 
                 <input
+                  ref={photoInputRef}
                   id="post-photo"
                   type="file"
-                  accept="image/png,image/jpeg,image/jpg"
+                  accept="image/png,image/jpeg"
+                  multiple
                   className="hidden"
-                  onChange={(e) => {
-  const file = e.target.files?.[0] ?? null;
-  setPhotoFile(file);
-  setPhotoName(file?.name ?? "");
-}}
+                  onChange={handlePhotoChange}
                 />
               </div>
 
-              {/* CAPTION */}
               <div>
                 <label
                   htmlFor="post-caption"
@@ -495,15 +927,20 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
                 </label>
                 <textarea
                   id="post-caption"
-                  value={caption}
-                  onChange={(event) => setCaption(event.target.value)}
+                  value={activeDraft.caption}
+                  onChange={(event) =>
+                    updateActiveDraft({ caption: event.target.value })
+                  }
                   placeholder="Share your route experience..."
                   rows={2}
-                  className="w-full resize-y rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#12395A] focus:ring-1 focus:ring-[#12395A]"
+                  className={`w-full resize-none rounded-lg border px-3 py-2 text-sm outline-none focus:ring-1 ${
+                    showValidation && !activeDraft.caption.trim()
+                      ? "border-red-500 focus:border-red-500 focus:ring-red-500"
+                      : "border-gray-300 focus:border-[#12395A] focus:ring-[#12395A]"
+                  }`}
                 />
               </div>
 
-              {/* TERMINAL */}
               <div>
                 <label
                   htmlFor="post-terminal"
@@ -513,14 +950,15 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
                 </label>
                 <input
                   id="post-terminal"
-                  value={terminal}
-                  onChange={(event) => setTerminal(event.target.value)}
+                  value={activeDraft.terminal}
+                  onChange={(event) =>
+                    updateActiveDraft({ terminal: event.target.value })
+                  }
                   placeholder="Enter terminal name"
-                  className="h-10 w-full rounded-lg border border-gray-300 px-3 text-sm outline-none focus:border-[#12395A] focus:ring-1 focus:ring-[#12395A]"
+                  className={fieldClass(routeError)}
                 />
               </div>
 
-              {/* ROUTE */}
               <div>
                 <p className="mb-1.5 block text-sm font-medium text-gray-700">
                   Route details
@@ -535,13 +973,14 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
                     </label>
                     <input
                       id="post-point-a"
-                      value={pointA}
-                      onChange={(event) => setPointA(event.target.value)}
+                      value={activeDraft.origin}
+                      onChange={(event) =>
+                        updateActiveDraft({ origin: event.target.value })
+                      }
                       placeholder="Starting point"
-                      className="h-10 w-full rounded-lg border border-gray-300 px-3 text-sm outline-none focus:border-[#12395A] focus:ring-1 focus:ring-[#12395A]"
+                      className={fieldClass(routeError)}
                     />
                   </div>
-
                   <div>
                     <label
                       htmlFor="post-point-b"
@@ -551,17 +990,25 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
                     </label>
                     <input
                       id="post-point-b"
-                      value={pointB}
-                      onChange={(event) => setPointB(event.target.value)}
+                      value={activeDraft.destination}
+                      onChange={(event) =>
+                        updateActiveDraft({
+                          destination: event.target.value,
+                        })
+                      }
                       placeholder="Destination"
-                      className="h-10 w-full rounded-lg border border-gray-300 px-3 text-sm outline-none focus:border-[#12395A] focus:ring-1 focus:ring-[#12395A]"
+                      className={fieldClass(routeError)}
                     />
                   </div>
                 </div>
+                {routeError && (
+                  <p className="mt-1 text-xs text-red-500">
+                    Fill in at least one route detail.
+                  </p>
+                )}
               </div>
 
-              {/* VEHICLE, COMMUTER, FARE */}
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4">
                 <div>
                   <label
                     htmlFor="post-vehicle"
@@ -571,32 +1018,44 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
                   </label>
                   <select
                     id="post-vehicle"
-                    value={vehicle}
-                    onChange={(event) => setVehicle(event.target.value)}
-                    className="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm outline-none focus:border-[#12395A] focus:ring-1 focus:ring-[#12395A]"
+                    value={activeDraft.vehicle}
+                    onChange={(event) =>
+                      updateActiveDraft({ vehicle: event.target.value })
+                    }
+                    className={fieldClass(
+                      showValidation && !activeDraft.vehicle.trim(),
+                    )}
                   >
-                    <option>Bus</option>
-                    <option>Jeepney</option>
-                    <option>Train</option>
+                    <option value="">Select vehicle type</option>
+                    <option value="Bus">Bus</option>
+                    <option value="Jeepney">Jeepney</option>
+                    <option value="Train">Train</option>
                   </select>
                 </div>
 
                 <div>
                   <label
-                    htmlFor="post-commuter"
+                    htmlFor="post-commuter-type"
                     className="mb-1.5 block text-sm font-medium text-gray-700"
                   >
                     Type of commuter <span className="text-red-500">*</span>
                   </label>
                   <select
-  id="post-commuter-type"
-  value={commuterType}
-  onChange={(e) => setCommuterType(e.target.value)}
-  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
->
-  <option value="Regular">Regular</option>
-  <option value="Discounted">Discounted</option>
-</select>
+                    id="post-commuter-type"
+                    value={activeDraft.commuterType}
+                    onChange={(event) =>
+                      updateActiveDraft({
+                        commuterType: event.target.value,
+                      })
+                    }
+                    className={fieldClass(
+                      showValidation && !activeDraft.commuterType.trim(),
+                    )}
+                  >
+                    <option value="">Select commuter type</option>
+                    <option value="Regular">Regular</option>
+                    <option value="Discounted">Discounted</option>
+                  </select>
                 </div>
 
                 <div>
@@ -609,41 +1068,198 @@ if (!fare.trim() || !/^\d+$/.test(fare)) {
                   <input
                     id="post-fare"
                     type="text"
-inputMode="numeric"
-value={fare}
-onChange={(e) => {
-  const value = e.target.value;
-  if (/^\d*$/.test(value)) {
-    setFare(value);
+                    inputMode="decimal"
+                    value={activeDraft.fare}
+                    onChange={(event) => {
+  const value = event.target.value;
+
+  if (/^\d*\.?\d{0,2}$/.test(value)) {
+    updateActiveDraft({ fare: value });
   }
 }}
                     placeholder="0.00"
-                    className="h-10 w-full rounded-lg border border-gray-300 px-3 text-sm outline-none focus:border-[#12395A] focus:ring-1 focus:ring-[#12395A]"
+                    className={fieldClass(fareError)}
                   />
                 </div>
               </div>
+
+              {showValidation && !isDraftValid(activeDraft) && (
+                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  Complete the required fields in this draft before
+                  submitting the batch.
+                </p>
+              )}
             </div>
 
-            {/* ACTIONS */}
-            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={() => setShowAddPostModal(false)}
-                className="h-10 rounded-lg border border-gray-300 px-5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSubmitPost}
-                className="h-10 rounded-lg bg-[#12395A] px-5 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f]"
-              >
-                Add Post
-              </button>
+            <div className="mt-6 border-t border-gray-100 pt-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">
+                    Your draft posts
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {drafts.length} of {MAX_DRAFTS} drafts
+                  </p>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Draft {activeDraftIndex + 1} of {drafts.length}
+                </p>
+              </div>
+
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                {drafts.map((draft, index) => {
+                  const isActive = index === activeDraftIndex;
+                  const hasContent = Boolean(
+                    draft.caption.trim() ||
+                      draft.terminal.trim() ||
+                      draft.origin.trim() ||
+                      draft.destination.trim() ||
+                      draft.photos.length > 0,
+                  );
+
+                  return (
+                    <div
+                      key={draft.id}
+                      className={`flex items-center overflow-hidden rounded-lg border transition-colors ${
+                        isActive
+                          ? "border-[#12395A] bg-[#12395A] text-white"
+                          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-100"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveDraftIndex(index);
+                          setShowValidation(false);
+                          setShowDraftNotice("");
+                        }}
+                        className="px-3 py-2 text-xs font-semibold"
+                      >
+                        Draft {index + 1}
+                        {hasContent ? " •" : ""}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete draft ${index + 1}`}
+                        onClick={() => handleDeleteDraft(index)}
+                        className={`border-l px-2 py-2 transition-colors ${
+                          isActive
+                            ? "border-white/20 hover:bg-red-600"
+                            : "border-gray-200 hover:bg-red-50 hover:text-red-600"
+                        }`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mb-4 flex items-center justify-between">
+                <button
+                  type="button"
+                  disabled={activeDraftIndex === 0}
+                  onClick={() => {
+                    setActiveDraftIndex((index) => Math.max(0, index - 1));
+                    setShowValidation(false);
+                    setShowDraftNotice("");
+                  }}
+                  className="flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ChevronLeft size={16} />
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  disabled={activeDraftIndex >= drafts.length - 1}
+                  onClick={() => {
+                    setActiveDraftIndex((index) =>
+                      Math.min(drafts.length - 1, index + 1),
+                    );
+                    setShowValidation(false);
+                    setShowDraftNotice("");
+                  }}
+                  className="flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={handleAddAnotherPost}
+                  disabled={drafts.length >= MAX_DRAFTS}
+                  className="h-10 rounded-lg border border-[#12395A] bg-white px-5 text-sm font-semibold text-[#12395A] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#12395A] hover:text-white hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0 disabled:hover:bg-white disabled:hover:text-[#12395A] disabled:hover:shadow-none"
+                >
+                  + Add Another Post
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSubmitAll}
+                  disabled={isSubmitting || drafts.length === 0}
+                  className="h-10 rounded-lg bg-[#12395A] px-5 text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#1b4b6f] hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSubmitting ? "Submitting..." : "Submit All"}
+                </button>
+              </div>
             </div>
           </section>
         </div>
       )}
+
+      
+{showSubmitConfirmation && (
+  <div
+    className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
+    onClick={() => setShowSubmitConfirmation(false)}
+  >
+    <section
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="submit-confirmation-title"
+      aria-describedby="submit-confirmation-message"
+      className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <h2
+        id="submit-confirmation-title"
+        className="text-lg font-semibold text-gray-900"
+      >
+        Confirm Submission
+      </h2>
+
+      <p
+        id="submit-confirmation-message"
+        className="mt-3 text-sm leading-6 text-gray-600"
+      >
+        Are you sure you want to submit all {drafts.length}{" "}
+        {drafts.length === 1 ? "post" : "posts"} for admin review?
+        They will not appear in the Community until approved.
+      </p>
+
+      <div className="mt-6 flex justify-end gap-3">
+        <button
+          type="button"
+          onClick={() => setShowSubmitConfirmation(false)}
+          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100"
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          onClick={confirmSubmitAll}
+          disabled={isSubmitting}
+          className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isSubmitting ? "Submitting..." : "Confirm"}
+        </button>
+      </div>
+    </section>
+  </div>
+)}
     </main>
   );
 }
