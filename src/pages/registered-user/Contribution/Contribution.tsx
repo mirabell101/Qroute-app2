@@ -54,12 +54,10 @@ interface SubmittedContribution extends ContributionDraft {
   batchId: string;
   adminFeedback?: string;
 }
-
 const ACCOUNTS_KEY = "qroute_accounts";
 const SUBMITTED_KEY = "qroute_submitted_contributions";
 const MAX_PHOTOS = 5;
 const MAX_DRAFTS = 5;
-
 const navItems = [
   { label: "Recents", icon: HomeIcon },
   { label: "Saved", icon: MapPin },
@@ -150,18 +148,13 @@ export default function Contributions({
   const [showSubmitConfirmation, setShowSubmitConfirmation] = useState(false);
   const [showWithdrawConfirmation, setShowWithdrawConfirmation] = useState(false);
 const [pendingWithdrawPostId, setPendingWithdrawPostId] = useState<string | null>(null);
+const [draftIndexToDelete, setDraftIndexToDelete] = useState<number | null>(null);
   const accounts = getStoredAccounts();
   const currentAccount = accounts.find(
     (account) => account.id === currentUserId,
   );
 
   const activeDraft = drafts[activeDraftIndex];
-  const [confirmation, setConfirmation] = useState<{
-  type: "delete" | "submit" | "withdraw";
-  message: string;
-  draftIndex?: number;
-  postId?: string;
-} | null>(null);
 
   useEffect(() => {
     if (!currentUserId) {
@@ -189,7 +182,7 @@ const [pendingWithdrawPostId, setPendingWithdrawPostId] = useState<string | null
 
     if (!success) {
       setShowDraftNotice(
-        "Hindi ma-save ang drafts. Maaaring puno na ang browser storage. Subukang magbawas ng photos.",
+        "Unable to save drafts. Browser storage may be full. Try removing some photos.",
       );
     }
   }, [drafts, currentUserId, isLoaded]);
@@ -267,37 +260,35 @@ const [pendingWithdrawPostId, setPendingWithdrawPostId] = useState<string | null
     setShowDraftNotice("");
   };
 
-  const handleDeleteDraft = (indexToDelete: number) => {
-    const draftToDelete = drafts[indexToDelete];
+const handleDeleteDraft = (indexToDelete: number) => {
+  setDraftIndexToDelete(indexToDelete);
+};
 
-    if (!draftToDelete) return;
+const confirmDeleteDraft = () => {
+  if (draftIndexToDelete === null) return;
 
-    const confirmed = window.confirm(
-      `Delete Draft ${indexToDelete + 1}? This cannot be undone.`,
+  const indexToDelete = draftIndexToDelete;
+  const nextDrafts = drafts.filter(
+    (_, index) => index !== indexToDelete,
+  );
+
+  setDrafts(nextDrafts);
+  setDraftIndexToDelete(null);
+
+  if (nextDrafts.length === 0) {
+    setActiveDraftIndex(0);
+    setShowValidation(false);
+    return;
+  }
+
+  if (indexToDelete < activeDraftIndex) {
+    setActiveDraftIndex(activeDraftIndex - 1);
+  } else if (indexToDelete === activeDraftIndex) {
+    setActiveDraftIndex(
+      Math.min(indexToDelete, nextDrafts.length - 1),
     );
-
-    if (!confirmed) return;
-
-    const nextDrafts = drafts.filter(
-      (_, index) => index !== indexToDelete,
-    );
-
-    setDrafts(nextDrafts);
-
-    if (nextDrafts.length === 0) {
-      setActiveDraftIndex(0);
-      setShowValidation(false);
-      return;
-    }
-
-    if (indexToDelete < activeDraftIndex) {
-      setActiveDraftIndex(activeDraftIndex - 1);
-    } else if (indexToDelete === activeDraftIndex) {
-      setActiveDraftIndex(
-        Math.min(indexToDelete, nextDrafts.length - 1),
-      );
-    }
-  };
+  }
+};
 
   const handlePhotoChange = async (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -414,10 +405,10 @@ const handleSubmitAll = () => {
 };
 
 const confirmSubmitAll = () => {
-  if (isSubmitting) return;
+  if (isSubmitting || drafts.length === 0) return;
 
-  setShowSubmitConfirmation(false);
   setIsSubmitting(true);
+  setShowDraftNotice("");
 
   try {
     const batchId = crypto.randomUUID();
@@ -439,17 +430,19 @@ const confirmSubmitAll = () => {
     setActiveDraftIndex(0);
     setShowValidation(false);
     setShowAddPostModal(false);
+    setShowSubmitConfirmation(false);
     setShowDraftNotice("");
-  } catch {
+  } catch (error) {
+    console.error("Failed to submit contributions:", error);
+
     setShowDraftNotice(
-      "Unable to submit your posts. Please try again.",
+      "Unable to submit your posts. Browser storage may be full. Try removing some photos.",
     );
   } finally {
     setIsSubmitting(false);
   }
 };
 
-  
 const withdrawPendingPost = (postId: string) => {
   const allPosts = getAllSubmitted();
 
@@ -466,16 +459,47 @@ const withdrawPendingPost = (postId: string) => {
 
   if (updatedDrafts.length >= MAX_DRAFTS) {
     setShowDraftNotice(
-      "May 5 drafts ka na. Tanggalin muna ang isang draft bago bawiin ang post na ito.",
+      "You already have 5 drafts. Delete a draft before withdrawing this post.",
     );
     return;
   }
 
-  const confirmed = window.confirm(
-    "Bawiin ang pending post para ma-edit at muling isumite?",
+  setPendingWithdrawPostId(postId);
+  setShowWithdrawConfirmation(true);
+};
+
+const cancelWithdrawConfirmation = () => {
+  setShowWithdrawConfirmation(false);
+  setPendingWithdrawPostId(null);
+};
+
+const confirmWithdrawPendingPost = () => {
+  if (!pendingWithdrawPostId) return;
+
+  const postId = pendingWithdrawPostId;
+  const allPosts = getAllSubmitted();
+
+  const post = allPosts.find(
+    (item) =>
+      item.id === postId &&
+      item.userId === currentUserId &&
+      item.status === "Pending",
   );
 
-  if (!confirmed) return;
+  if (!post) {
+    cancelWithdrawConfirmation();
+    return;
+  }
+
+  const updatedDrafts = getUserDrafts(currentUserId);
+
+  if (updatedDrafts.length >= MAX_DRAFTS) {
+    cancelWithdrawConfirmation();
+    setShowDraftNotice(
+      "You already have 5 drafts. Delete a draft before withdrawing this post.",
+    );
+    return;
+  }
 
   const editableDraft: ContributionDraft = {
     id: post.id,
@@ -492,10 +516,10 @@ const withdrawPendingPost = (postId: string) => {
 
   const nextDrafts = [...updatedDrafts, editableDraft];
 
-  // Save the draft first so the post is not lost if saving fails.
   if (!saveUserDrafts(currentUserId, nextDrafts)) {
+    cancelWithdrawConfirmation();
     setShowDraftNotice(
-      "Hindi ma-save ang draft. Maaaring puno na ang browser storage. Subukang magbawas ng photos.",
+      "Unable to save the draft. Browser storage may be full. Try removing some photos.",
     );
     return;
   }
@@ -508,8 +532,9 @@ const withdrawPendingPost = (postId: string) => {
       ),
     );
   } catch {
+    cancelWithdrawConfirmation();
     setShowDraftNotice(
-      "Hindi na-update ang submitted posts. Nananatili ang editable draft mo; pakisubukang muli.",
+      "Unable to update submitted posts. Your editable draft remains saved. Please try again.",
     );
     return;
   }
@@ -518,6 +543,40 @@ const withdrawPendingPost = (postId: string) => {
   setContributions((previous) =>
     previous.filter((item) => item.id !== postId),
   );
+  setActiveDraftIndex(nextDrafts.length - 1);
+  setShowValidation(false);
+  setShowDraftNotice("");
+  cancelWithdrawConfirmation();
+  setShowAddPostModal(true);
+};
+
+const startRevision = (contribution: SubmittedContribution) => {
+  const revisionDraft: ContributionDraft = {
+    id: contribution.id,
+    caption: contribution.caption,
+    terminal: contribution.terminal,
+    origin: contribution.origin,
+    destination: contribution.destination,
+    vehicle: contribution.vehicle,
+    commuterType: contribution.commuterType,
+    fare: contribution.fare,
+    photos: contribution.photos,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const existingDrafts = getUserDrafts(currentUserId);
+
+  const nextDrafts = [
+    ...existingDrafts.filter((draft) => draft.id !== contribution.id),
+    revisionDraft,
+  ];
+
+  if (!saveUserDrafts(currentUserId, nextDrafts)) {
+    setShowDraftNotice("Unable to save the revision draft. Please try again.");
+    return;
+  }
+
+  setDrafts(nextDrafts);
   setActiveDraftIndex(nextDrafts.length - 1);
   setShowValidation(false);
   setShowDraftNotice("");
@@ -531,7 +590,6 @@ const withdrawPendingPost = (postId: string) => {
     !activeDraft.origin.trim() &&
     !activeDraft.destination.trim();
 
-  
 const fareError =
   showValidation &&
   Boolean(activeDraft) &&
@@ -847,7 +905,14 @@ contributions.map((contribution) => (
                 ×
               </button>
             </div>
-
+{showDraftNotice && (
+  <p
+    role="alert"
+    className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+  >
+    {showDraftNotice}
+  </p>
+)}
             <div className="space-y-4">
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
@@ -1072,7 +1137,6 @@ contributions.map((contribution) => (
                     value={activeDraft.fare}
                     onChange={(event) => {
   const value = event.target.value;
-
   if (/^\d*\.?\d{0,2}$/.test(value)) {
     updateActiveDraft({ fare: value });
   }
@@ -1210,6 +1274,7 @@ contributions.map((contribution) => (
       )}
 
       
+
 {showSubmitConfirmation && (
   <div
     className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
@@ -1223,23 +1288,27 @@ contributions.map((contribution) => (
       className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
       onClick={(event) => event.stopPropagation()}
     >
+      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-2xl text-amber-700">
+  ?
+</div>
+
       <h2
         id="submit-confirmation-title"
-        className="text-lg font-semibold text-gray-900"
+        className="mb-2 text-center text-xl font-semibold"
       >
         Confirm Submission
       </h2>
 
       <p
         id="submit-confirmation-message"
-        className="mt-3 text-sm leading-6 text-gray-600"
+        className="mb-6 text-justify text-sm text-gray-600"
       >
         Are you sure you want to submit all {drafts.length}{" "}
         {drafts.length === 1 ? "post" : "posts"} for admin review?
         They will not appear in the Community until approved.
       </p>
 
-      <div className="mt-6 flex justify-end gap-3">
+      <div className="flex justify-center gap-8">
         <button
           type="button"
           onClick={() => setShowSubmitConfirmation(false)}
@@ -1249,17 +1318,107 @@ contributions.map((contribution) => (
         </button>
 
         <button
+  type="button"
+  onClick={confirmSubmitAll}
+  disabled={isSubmitting}
+  className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-50"
+>
+  {isSubmitting ? "Submitting..." : "Confirm"}
+</button>
+      </div>
+    </section>
+  </div>
+)}
+
+{showWithdrawConfirmation && (
+  <div
+    className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/45 px-4"
+    onClick={cancelWithdrawConfirmation}
+  >
+    <section
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="withdraw-confirmation-title"
+      aria-describedby="withdraw-confirmation-message"
+      className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
+      onClick={(event) => event.stopPropagation()}
+    >
+     <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-2xl text-amber-700">
+  ?
+</div>
+
+      <h2
+        id="withdraw-confirmation-title"
+        className="mmb-3 text-center text-xl font-semibold"
+      >
+        Withdraw Pending Post?
+      </h2>
+
+      <p
+        id="withdraw-confirmation-message"
+        className="mb-6 text-justify text-sm text-gray-600"
+      >
+        Are you sure you want to withdraw this pending post? It will
+        be returned to your drafts so you can edit and resubmit it.
+      </p>
+
+      <div className="flex justify-center gap-8">
+        <button
           type="button"
-          onClick={confirmSubmitAll}
-          disabled={isSubmitting}
-          className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={cancelWithdrawConfirmation}
+          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100"
         >
-          {isSubmitting ? "Submitting..." : "Confirm"}
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          onClick={confirmWithdrawPendingPost}
+          className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f]"
+        >
+          Confirm
         </button>
       </div>
     </section>
   </div>
 )}
+
+{draftIndexToDelete !== null && (
+  <div className="fixed inset-0 z-7000 flex items-center justify-center bg-black/60 p-4">
+    <div className="w-full max-w-md rounded-3xl bg-white px-7 py-8 text-center shadow-2xl">
+      <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 text-3xl text-amber-700">
+        ?
+      </div>
+
+      <h2 className="mb-3 text-center text-xl font-semibold">
+        Delete Draft
+      </h2>
+
+      <p className="mb-7 text-center text-sm leading-relaxed text-gray-600">
+        Delete Draft {draftIndexToDelete + 1}? This cannot be undone.
+      </p>
+
+      <div className="flex justify-center gap-4">
+        <button
+          type="button"
+          onClick={() => setDraftIndexToDelete(null)}
+          className="rounded-xl border border-gray-300 px-5 py-3 font-semibold text-gray-700 transition-all duration-200 hover:-translate-y-0.5 hover:bg-gray-100 hover:shadow-md active:translate-y-0"
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          onClick={confirmDeleteDraft}
+          className="rounded-xl bg-[#153e60] px-5 py-3 font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#10314d] hover:shadow-md active:translate-y-0"
+        >
+          Confirm
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+```
     </main>
   );
 }

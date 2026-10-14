@@ -1,17 +1,10 @@
-import { useState } from "react";
-
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-
 import { Eye, EyeOff, User, Mail, Lock } from "lucide-react";
-
 import { Input } from "@/components/ui/input";
-
 import { Checkbox } from "@/components/ui/checkbox";
-
 import { Button } from "@/components/ui/button";
-
 import qrouteLogo from "@/assets/logoboi.png";
-
 import appLogo from "@/assets/APP VER (1).png";
 
 interface Account {
@@ -23,6 +16,7 @@ interface Account {
 }
 
 const ACCOUNTS_KEY = "qroute_accounts";
+const SIGNUP_FORM_KEY = "qroute_signup_form";
 
 function getStoredAccounts(): Account[] {
   try {
@@ -45,6 +39,26 @@ function SignUp() {
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const [termsAccepted, setTermsAccepted] = useState(false);
+  const [formRestored, setFormRestored] = useState(false);
+useEffect(() => {
+  try {
+    const savedForm = sessionStorage.getItem(SIGNUP_FORM_KEY);
+
+    if (savedForm) {
+      const form = JSON.parse(savedForm);
+
+      setUsername(form.username ?? "");
+      setEmail(form.email ?? "");
+      setPassword(form.password ?? "");
+      setConfirmPassword(form.confirmPassword ?? "");
+      setTermsAccepted(form.termsAccepted ?? false);
+    }
+  } catch {
+    sessionStorage.removeItem(SIGNUP_FORM_KEY);
+  } finally {
+    setFormRestored(true);
+  }
+}, []);
 
   const [usernameError, setUsernameError] = useState("");
   const [emailError, setEmailError] = useState("");
@@ -59,6 +73,32 @@ function SignUp() {
 
     return "";
   };
+
+  useEffect(() => {
+  if (!formRestored) return;
+
+  try {
+    sessionStorage.setItem(
+      SIGNUP_FORM_KEY,
+      JSON.stringify({
+        username,
+        email,
+        password,
+        confirmPassword,
+        termsAccepted,
+      })
+    );
+  } catch {
+    // Ignore storage errors; the form remains usable.
+  }
+}, [
+  formRestored,
+  username,
+  email,
+  password,
+  confirmPassword,
+  termsAccepted,
+]);
 
   const validateEmail = (value: string) => {
     if (!value.trim()) {
@@ -172,6 +212,8 @@ function SignUp() {
         ACCOUNTS_KEY,
         JSON.stringify(updatedAccounts)
       );
+
+sessionStorage.removeItem(SIGNUP_FORM_KEY);
 
       navigate("/otp", {
         state: {
@@ -448,7 +490,11 @@ function SignUp() {
               I agree to{" "}
               <button
                 type="button"
-                onClick={() => navigate("/terms-and-condition")}
+                onClick={() =>
+  navigate("/terms-and-condition", {
+    state: { from: "/signup" },
+  })
+}
                 className="font-medium text-[#6C3FF5] hover:underline"
               >
                 Terms and Conditions
@@ -456,7 +502,11 @@ function SignUp() {
               and acknowledge the{" "}
               <button
                 type="button"
-                onClick={() => navigate("/privacy-policy")}
+                onClick={() =>
+  navigate("/privacy-policy", {
+    state: { from: "/signup" },
+  })
+}
                 className="font-medium text-[#6C3FF5] hover:underline"
               >
                 Privacy Policy
