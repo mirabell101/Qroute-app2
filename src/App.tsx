@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
@@ -13,7 +14,8 @@ import PrivacyPolicy from "./pages/visitor/legal/privacypolicy";
 import Profile from "./pages/registered-user/profile/profile";
 import Contributions from "./pages/registered-user/contribution/contribution";
 import AdminBase from "./pages/admin/base/base";
-
+import Dashboard from "./pages/admin/dashboard/dashboard";
+import RouteManagement from "./pages/admin/route-management/route-management";
 const CURRENT_USER_KEY = "qroute_current_user";
 
 function getCurrentUserId(): string | null {
@@ -34,78 +36,94 @@ function getCurrentUserId(): string | null {
 
 function App() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(
-  getCurrentUserId()
-);
+    getCurrentUserId()
+  );
 
-const handleLogout = () => {
-  localStorage.removeItem(CURRENT_USER_KEY);
-  sessionStorage.removeItem(CURRENT_USER_KEY);
-  setCurrentUserId(null);
-};
+  const handleLogout = () => {
+    localStorage.removeItem(CURRENT_USER_KEY);
+    sessionStorage.removeItem(CURRENT_USER_KEY);
+    setCurrentUserId(null);
+  };
 
   return (
     <BrowserRouter>
       <Routes>
         <Route
-  path="/"
-  element={
-    <Landing
-      currentUserId={currentUserId}
-      onLogout={handleLogout}
-    />
-  }
-/>
+          path="/"
+          element={
+            <Landing
+              currentUserId={currentUserId}
+              onLogout={handleLogout}
+            />
+          }
+        />
 
-<Route
-  path="/home"
-  element={
-    currentUserId ? (
-      <Home
-        currentUserId={currentUserId}
-        onLogout={handleLogout}
-      />
-    ) : (
-      <Navigate to="/login" replace />
-    )
-  }
-/>
+        <Route
+          path="/home"
+          element={
+            currentUserId ? (
+              <Home
+                currentUserId={currentUserId}
+                onLogout={handleLogout}
+              />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
 
-<Route
-  path="/contribution"
-  element={
-    currentUserId ? (
-      <Contributions
-        currentUserId={currentUserId}
-        onLogout={handleLogout}
-      />
-    ) : (
-      <Navigate to="/login" replace />
-    )
-  }
-/>
+        <Route
+          path="/contribution"
+          element={
+            currentUserId ? (
+              <Contributions
+                currentUserId={currentUserId}
+                onLogout={handleLogout}
+              />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
 
-<Route
-  path="/profile"
-  element={
-    currentUserId ? (
-      <Profile
-        currentUserId={currentUserId}
-        onLogout={handleLogout}
-      />
-    ) : (
-      <Navigate to="/login" replace />
-    )
-  }
-/>
+        <Route
+          path="/profile"
+          element={
+            currentUserId ? (
+              <Profile
+                currentUserId={currentUserId}
+                onLogout={handleLogout}
+              />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        <Route
+          path="/admin/dashboard"
+          element={<Dashboard />}
+        />
+
+        <Route
+          path="/admin"
+          element={<AdminBase />}
+        />
 
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<SignUp />} />
         <Route path="/otp" element={<OTP />} />
         <Route path="/forgot-password" element={<Forgotpassword />} />
         <Route path="/reset-password" element={<Resetpassword />} />
-        <Route path="/terms-and-condition" element={<TermsAndConditions />} />
-        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-        <Route path="/admin" element={<AdminBase />} />
+        <Route
+          path="/terms-and-condition"
+          element={<TermsAndConditions />}
+        />
+        <Route
+          path="/privacy-policy"
+          element={<PrivacyPolicy />}
+        />
+        <Route path="/admin/routes" element={<RouteManagement />} />
       </Routes>
     </BrowserRouter>
   );

@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import {
   Bell,
   Bus,
@@ -66,6 +67,8 @@ const navItems = [
 // ==================================================
 
 export default function Base() {
+  const navigate = useNavigate();
+
   const handleClick = (name: string) => {
     console.log(`${name} clicked`);
   };
@@ -244,7 +247,7 @@ export default function Base() {
 
         <button
           type="button"
-          onClick={() => handleClick("Manage Site")}
+          onClick={() => navigate("/admin/dashboard")}
           className="
             group
             absolute
