@@ -16,6 +16,10 @@ import Contributions from "./pages/registered-user/contribution/contribution";
 import AdminBase from "./pages/admin/base/base";
 import Dashboard from "./pages/admin/dashboard/dashboard";
 import RouteManagement from "./pages/admin/route-management/route-management";
+import PostManagement from "./pages/admin/post-management/post-management";
+import Reports from "./pages/admin/reports/reports";
+import UserManagement from "./pages/admin/user-management/user-management";
+
 const CURRENT_USER_KEY = "qroute_current_user";
 
 function getCurrentUserId(): string | null {
@@ -124,6 +128,12 @@ function App() {
           element={<PrivacyPolicy />}
         />
         <Route path="/admin/routes" element={<RouteManagement />} />
+        <Route
+  path="/admin/post-management"
+  element={<PostManagement />}
+/>
+<Route path="/admin/reports" element={<Reports />} />
+<Route path="/admin/users" element={<UserManagement />} />
       </Routes>
     </BrowserRouter>
   );
