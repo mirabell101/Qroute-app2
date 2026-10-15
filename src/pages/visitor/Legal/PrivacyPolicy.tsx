@@ -18,18 +18,18 @@ function PrivacyPolicy() {
       <div className="mx-auto mt-20 w-full max-w-[800px] rounded-[6px] border border-[#e1e1e1] bg-white px-10 py-8 shadow-[0_1px_6px_rgba(0,0,0,0.08)]">
         {/* HEADER */}
         <div className="border-b border-[#e1e1e1] pb-5">
-          <h1 className="text-[28px] font-bold tracking-[-0.5px] text-black">
+          <h1 className="text-[28px] font-bold tracking-[-0.5px] text-[#12395A]">
             Privacy Policy
           </h1>
 
-          <p className="mt-2 text-[12px] leading-relaxed text-gray-600">
+          <p className="mt-2 text-[14px] leading-relaxed text-[#6B7280]">
             This Privacy Policy explains how QRoute collects, uses, stores,
             and protects user information.
           </p>
         </div>
 
         {/* CONTENT */}
-        <div className="mt-6 space-y-6 text-[12px] leading-[1.7] text-gray-700">
+        <div className="mt-6 space-y-6 text-[14px] leading-[1.7] text-[#374151]">
           <p>
             QRoute respects the privacy of its users. This Privacy Policy
             explains how QRoute collects, uses, stores, and protects user
@@ -38,7 +38,7 @@ function PrivacyPolicy() {
 
           {/* 1. INFORMATION WE COLLECT */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               1. Information We Collect
             </h2>
 
@@ -65,7 +65,7 @@ function PrivacyPolicy() {
 
           {/* 2. HOW WE USE INFORMATION */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               2. How We Use Information
             </h2>
 
@@ -93,7 +93,7 @@ function PrivacyPolicy() {
 
           {/* 3. LOCATION INFORMATION */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               3. Location Information
             </h2>
 
@@ -118,7 +118,7 @@ function PrivacyPolicy() {
 
           {/* 4. CROWDSOURCED INFORMATION */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A] ">
               4. Crowdsourced Information
             </h2>
 
@@ -138,7 +138,7 @@ function PrivacyPolicy() {
 
           {/* 5. AI-ASSISTED MODERATION */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               5. AI-Assisted Moderation
             </h2>
 
@@ -158,7 +158,7 @@ function PrivacyPolicy() {
 
           {/* 6. DATA PROTECTION */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               6. Data Protection
             </h2>
 
@@ -184,7 +184,7 @@ function PrivacyPolicy() {
 
           {/* 7. SHARING OF INFORMATION */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               7. Sharing of Information
             </h2>
 
@@ -209,7 +209,7 @@ function PrivacyPolicy() {
 
           {/* 8. USER RIGHTS */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               8. User Rights
             </h2>
 
@@ -233,7 +233,7 @@ function PrivacyPolicy() {
 
           {/* 9. CHANGES TO THIS PRIVACY POLICY */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               9. Changes to This Privacy Policy
             </h2>
 
@@ -246,7 +246,7 @@ function PrivacyPolicy() {
 
           {/* 10. CONTACT INFORMATION */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               10. Contact Information
             </h2>
 

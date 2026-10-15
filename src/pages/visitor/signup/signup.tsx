@@ -1,11 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Eye, EyeOff,  User, Mail, Lock } from "lucide-react";
-
+import { Eye, EyeOff, User, Mail, Lock } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-
 import qrouteLogo from "@/assets/logoboi.png";
 import appLogo from "@/assets/APP VER (1).png";
 
@@ -18,6 +16,7 @@ interface Account {
 }
 
 const ACCOUNTS_KEY = "qroute_accounts";
+const SIGNUP_FORM_KEY = "qroute_signup_form";
 
 function getStoredAccounts(): Account[] {
   try {
@@ -38,7 +37,28 @@ function SignUp() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+
   const [termsAccepted, setTermsAccepted] = useState(false);
+  const [formRestored, setFormRestored] = useState(false);
+useEffect(() => {
+  try {
+    const savedForm = sessionStorage.getItem(SIGNUP_FORM_KEY);
+
+    if (savedForm) {
+      const form = JSON.parse(savedForm);
+
+      setUsername(form.username ?? "");
+      setEmail(form.email ?? "");
+      setPassword(form.password ?? "");
+      setConfirmPassword(form.confirmPassword ?? "");
+      setTermsAccepted(form.termsAccepted ?? false);
+    }
+  } catch {
+    sessionStorage.removeItem(SIGNUP_FORM_KEY);
+  } finally {
+    setFormRestored(true);
+  }
+}, []);
 
   const [usernameError, setUsernameError] = useState("");
   const [emailError, setEmailError] = useState("");
@@ -53,6 +73,32 @@ function SignUp() {
 
     return "";
   };
+
+  useEffect(() => {
+  if (!formRestored) return;
+
+  try {
+    sessionStorage.setItem(
+      SIGNUP_FORM_KEY,
+      JSON.stringify({
+        username,
+        email,
+        password,
+        confirmPassword,
+        termsAccepted,
+      })
+    );
+  } catch {
+    // Ignore storage errors; the form remains usable.
+  }
+}, [
+  formRestored,
+  username,
+  email,
+  password,
+  confirmPassword,
+  termsAccepted,
+]);
 
   const validateEmail = (value: string) => {
     if (!value.trim()) {
@@ -88,8 +134,8 @@ function SignUp() {
     }
 
     if (!/[!@#$%^&*(),.?":{}|<>_\-]/.test(value)) {
-  return "Password must contain at least one special character.";
-}
+      return "Password must contain at least one special character.";
+    }
 
     return "";
   };
@@ -162,19 +208,21 @@ function SignUp() {
     const updatedAccounts = [...accounts, newAccount];
 
     try {
-  localStorage.setItem(
-    ACCOUNTS_KEY,
-    JSON.stringify(updatedAccounts)
-  );
+      localStorage.setItem(
+        ACCOUNTS_KEY,
+        JSON.stringify(updatedAccounts)
+      );
 
-  navigate("/otp", {
-    state: {
-      userId: newAccount.id,
-      email: newAccount.email,
-      mode: "signup",
-    },
-  });
-} catch {
+sessionStorage.removeItem(SIGNUP_FORM_KEY);
+
+      navigate("/otp", {
+        state: {
+          userId: newAccount.id,
+          email: newAccount.email,
+          mode: "signup",
+        },
+      });
+    } catch {
       setEmailError(
         "Unable to save your account. Please try again."
       );
@@ -217,34 +265,34 @@ function SignUp() {
             htmlFor="username"
             className="text-[12px] font-medium text-black"
           >
-            Username
+            Username <span className="text-red-500">*</span>
           </label>
 
           <div className="relative mt-1.5">
-  <User
-    size={15}
-    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-  />
+            <User
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            />
 
-  <Input
-    id="username"
-    type="text"
-    placeholder="Enter your username"
-    value={username}
-    onChange={(e) => {
-      setUsername(e.target.value);
+            <Input
+              id="username"
+              type="text"
+              placeholder="Enter your username"
+              value={username}
+              onChange={(e) => {
+                setUsername(e.target.value);
 
-      if (usernameError) {
-        setUsernameError("");
-      }
-    }}
-    className={`h-9 rounded-[5px] border pl-9 pr-3 text-[12px] shadow-none ${
-      usernameError
-        ? "border-red-500 focus-visible:ring-red-500"
-        : "border-[#b8b8b8]"
-    }`}
-  />
-</div>
+                if (usernameError) {
+                  setUsernameError("");
+                }
+              }}
+              className={`h-9 rounded-[5px] border pl-9 pr-3 text-[12px] shadow-none ${
+                usernameError
+                  ? "border-red-500 focus-visible:ring-red-500"
+                  : "border-[#b8b8b8]"
+              }`}
+            />
+          </div>
 
           {usernameError && (
             <p className="mt-1 px-1 text-[10px] leading-none text-red-500">
@@ -259,34 +307,34 @@ function SignUp() {
             htmlFor="email"
             className="text-[12px] font-medium text-black"
           >
-            Email
+            Email <span className="text-red-500">*</span>
           </label>
 
           <div className="relative mt-1.5">
-  <Mail
-    size={15}
-    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-  />
+            <Mail
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            />
 
-  <Input
-    id="email"
-    type="email"
-    placeholder="Enter your email"
-    value={email}
-    onChange={(e) => {
-      setEmail(e.target.value);
+            <Input
+              id="email"
+              type="email"
+              placeholder="Enter your email"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
 
-      if (emailError) {
-        setEmailError("");
-      }
-    }}
-    className={`h-9 rounded-[5px] border pl-9 pr-3 text-[12px] shadow-none ${
-      emailError
-        ? "border-red-500 focus-visible:ring-red-500"
-        : "border-[#b8b8b8]"
-    }`}
-  />
-</div>
+                if (emailError) {
+                  setEmailError("");
+                }
+              }}
+              className={`h-9 rounded-[5px] border pl-9 pr-3 text-[12px] shadow-none ${
+                emailError
+                  ? "border-red-500 focus-visible:ring-red-500"
+                  : "border-[#b8b8b8]"
+              }`}
+            />
+          </div>
 
           {emailError && (
             <p className="mt-1 px-1 text-[10px] leading-none text-red-500">
@@ -301,15 +349,15 @@ function SignUp() {
             htmlFor="password"
             className="text-[12px] font-medium text-black"
           >
-            Password
+            Password <span className="text-red-500">*</span>
           </label>
 
           <div className="relative mt-1.5">
             <Lock
-    size={15}
-    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-  />
-            
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            />
+
             <Input
               id="password"
               type={showPassword ? "text" : "password"}
@@ -364,14 +412,15 @@ function SignUp() {
             htmlFor="confirmPassword"
             className="text-[12px] font-medium text-black"
           >
-            Confirm Password
+            Confirm Password <span className="text-red-500">*</span>
           </label>
 
           <div className="relative mt-1.5">
             <Lock
-  size={15}
-  className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-/>
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            />
+
             <Input
               id="confirmPassword"
               type={showConfirmPassword ? "text" : "password"}
@@ -435,27 +484,35 @@ function SignUp() {
             />
 
             <label
-  htmlFor="terms"
-  className="cursor-pointer text-[10px] leading-tight text-gray-700"
->
-  I agree to{" "}
-  <button
-    type="button"
-    onClick={() => navigate("/terms-and-condition")}
-    className="font-medium text-[#6C3FF5] hover:underline"
-  >
-    Terms and Conditions
-  </button>{" "}
-  and acknowledge the{" "}
-  <button
-    type="button"
-    onClick={() => navigate("/privacy-policy")}
-    className="font-medium text-[#6C3FF5] hover:underline"
-  >
-    Privacy Policy
-  </button>
-  .
-</label>
+              htmlFor="terms"
+              className="cursor-pointer text-[10px] leading-tight text-gray-700"
+            >
+              I agree to{" "}
+              <button
+                type="button"
+                onClick={() =>
+  navigate("/terms-and-condition", {
+    state: { from: "/signup" },
+  })
+}
+                className="font-medium text-[#6C3FF5] hover:underline"
+              >
+                Terms and Conditions
+              </button>{" "}
+              and acknowledge the{" "}
+              <button
+                type="button"
+                onClick={() =>
+  navigate("/privacy-policy", {
+    state: { from: "/signup" },
+  })
+}
+                className="font-medium text-[#6C3FF5] hover:underline"
+              >
+                Privacy Policy
+              </button>{" "}
+              . <span className="text-red-500">*</span>
+            </label>
           </div>
 
           {termsError && (

@@ -18,18 +18,18 @@ function TermsAndCondition() {
       <div className="mx-auto mt-20 w-full max-w-[800px] rounded-[6px] border border-[#e1e1e1] bg-white px-10 py-8 shadow-[0_1px_6px_rgba(0,0,0,0.08)]">
         {/* HEADER */}
         <div className="border-b border-[#e1e1e1] pb-5">
-          <h1 className="text-[28px] font-bold tracking-[-0.5px] text-black">
+          <h1 className="text-[28px] font-bold tracking-[-0.5px] text-[#12395A]">
             Terms and Conditions
           </h1>
 
-          <p className="mt-2 text-[12px] leading-relaxed text-gray-600">
+          <p className="mt-2 text-[14px] leading-relaxed text-[#6B7280]">
             Please read these Terms and Conditions carefully before using
             QRoute.
           </p>
         </div>
 
         {/* CONTENT */}
-        <div className="mt-6 space-y-6 text-[12px] leading-[1.7] text-gray-700">
+        <div className="mt-6 space-y-6 text-[14px] leading-[1.7] text-[#374151]">
           <p>
             Welcome to QRoute, a web-based platform designed to help commuters
             find possible bus, jeepney, and train routes within Quezon City.
@@ -42,7 +42,7 @@ function TermsAndCondition() {
 
           {/* 1. USE OF QROUTE */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               1. Use of QRoute
             </h2>
 
@@ -61,7 +61,7 @@ function TermsAndCondition() {
 
           {/* 2. USER ACCOUNTS */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               2. User Accounts
             </h2>
 
@@ -91,7 +91,7 @@ function TermsAndCondition() {
 
           {/* 3. ROUTE AND FARE ESTIMATES */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               3. Route and Fare Estimates
             </h2>
 
@@ -111,7 +111,7 @@ function TermsAndCondition() {
 
           {/* 4. USER CONTRIBUTIONS */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]  ">
               4. User Contributions
             </h2>
 
@@ -148,7 +148,7 @@ function TermsAndCondition() {
 
           {/* 5. POINTS AND BADGES */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               5. Points and Badges
             </h2>
 
@@ -171,7 +171,7 @@ function TermsAndCondition() {
 
           {/* 6. REPORTS AND MODERATION */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               6. Reports and Moderation
             </h2>
 
@@ -195,7 +195,7 @@ function TermsAndCondition() {
 
           {/* 7. PROHIBITED ACTIVITIES */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               7. Prohibited Activities
             </h2>
 
@@ -221,7 +221,7 @@ function TermsAndCondition() {
 
           {/* 8. LIMITATION OF LIABILITY */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               8. Limitation of Liability
             </h2>
 
@@ -241,7 +241,7 @@ function TermsAndCondition() {
 
           {/* 9. CHANGES TO THE TERMS */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               9. Changes to the Terms
             </h2>
 
@@ -254,7 +254,7 @@ function TermsAndCondition() {
 
           {/* 10. CONTACT INFORMATION */}
           <section>
-            <h2 className="mb-2 text-[14px] font-semibold text-black">
+            <h2 className="mb-2 text-[16px] font-semibold text-[#12395A]">
               10. Contact Information
             </h2>
 
