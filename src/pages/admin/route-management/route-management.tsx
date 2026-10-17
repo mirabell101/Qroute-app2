@@ -37,7 +37,7 @@ type Filter = (typeof filters)[number];
 const navigationItems = [
   { label: "Dashboard", icon: LayoutDashboard, path: "/admin/dashboard" },
   { label: "Route Management", icon: RouteIcon, path: "/admin/routes" },
-  { label: "Post Management", icon: FileText, path: "/admin/posts" },
+  { label: "Post Management", icon: FileText, path: "/admin/post-management" },
   { label: "Reports", icon: Flag, path: "/admin/reports" },
   { label: "User Management", icon: Users, path: "/admin/users" },
   { label: "Settings", icon: Settings, path: "/admin/settings" },
@@ -146,7 +146,11 @@ export default function RouteManagement() {
             className="text-left"
             aria-label="QRoute dashboard"
           >
-            <h1 className="text-[32px] font-extrabold tracking-[-1.5px]">QRoute</h1>
+            <img
+                src="/White%20Qroute%20Logo.png"
+                alt="QRoute Logo"
+                className="h-auto w-[150px] object-contain"
+              />
             <p className="mt-0.5 text-xs tracking-wide text-blue-200">ADMINISTRATION</p>
           </button>
         </div>
@@ -219,10 +223,7 @@ export default function RouteManagement() {
             </p>
           </div>
           <div className="flex items-center gap-3 sm:gap-5">
-            <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-2.5 lg:flex">
-              <Search size={17} className="text-slate-400" />
-              <span className="text-xs text-slate-400">Search routes...</span>
-            </div>
+
             <button
               type="button"
               aria-label="Notifications"
@@ -247,9 +248,7 @@ export default function RouteManagement() {
         <div className="mx-auto max-w-[1500px] p-5 sm:p-8 lg:p-10">
           <section className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
-              <p className="text-sm text-slate-500">
-                Administration / <span className="font-medium text-[#102E4D]">Route Management</span>
-              </p>
+
               <h3 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">
                 Transport Routes
               </h3>

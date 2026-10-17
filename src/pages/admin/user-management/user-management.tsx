@@ -172,9 +172,11 @@ export default function UserManagement() {
       >
         <div className="flex h-[105px] items-center border-b border-white/10 px-7">
           <div>
-            <h1 className="text-[32px] font-extrabold tracking-[-1.5px]">
-              QRoute
-            </h1>
+             <img
+                src="/White%20Qroute%20Logo.png"
+                alt="QRoute Logo"
+                className="h-auto w-[150px] object-contain"
+              />
             <p className="mt-0.5 text-xs tracking-wide text-blue-200">
               ADMINISTRATION
             </p>
@@ -285,12 +287,6 @@ export default function UserManagement() {
           {/* Page heading */}
           <section className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
-              <p className="text-sm text-slate-500">
-                Overview /{" "}
-                <span className="font-medium text-[#102E4D]">
-                  User Management
-                </span>
-              </p>
 
               <h3 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">
                 Registered Users

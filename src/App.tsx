@@ -129,9 +129,9 @@ function App() {
         />
         <Route path="/admin/routes" element={<RouteManagement />} />
         <Route
-  path="/admin/post-management"
-  element={<PostManagement />}
-/>
+          path="/admin/post-management"
+          element={<PostManagement />}
+        />
 <Route path="/admin/reports" element={<Reports />} />
 <Route path="/admin/users" element={<UserManagement />} />
       </Routes>

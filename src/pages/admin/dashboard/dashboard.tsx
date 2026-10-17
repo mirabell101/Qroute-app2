@@ -8,10 +8,9 @@ import {
   Users,
   Settings,
   Bell,
-  Search,
+
   ArrowUpRight,
   Clock,
-  CheckCircle2,
   MapPinned,
   Menu,
 } from "lucide-react";
@@ -51,30 +50,21 @@ const summaryCards = [
   },
 ];
 
+const accessDate = new Date();
+
 const activities = [
   {
-    title: "New community post submitted",
-    description: "A user shared transportation information.",
-    time: "Recently",
-    icon: FileText,
-    iconBg: "bg-blue-100",
-    iconColor: "text-blue-700",
-  },
-  {
-    title: "Report submitted for review",
-    description: "A reported post needs admin attention.",
-    time: "Recently",
-    icon: Flag,
-    iconBg: "bg-orange-100",
-    iconColor: "text-orange-700",
-  },
-  {
-    title: "Transport route information updated",
-    description: "Route information was updated in the system.",
-    time: "Recently",
-    icon: Route,
-    iconBg: "bg-green-100",
-    iconColor: "text-green-700",
+    title: "Admin accessed the dashboard",
+    description: "Administrator account accessed the dashboard.",
+    time: accessDate.toLocaleTimeString("en-PH", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+    date: accessDate.toLocaleDateString("en-PH", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    }),
   },
 ];
 
@@ -92,12 +82,15 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-[#F4F8FC] text-slate-800">
+      {/* Sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[250px] flex-col bg-[#102E4D] text-white md:flex">
         <div className="flex h-[105px] items-center border-b border-white/10 px-7">
           <div>
-            <h1 className="text-[32px] font-extrabold tracking-[-1.5px]">
-              QRoute
-            </h1>
+            <img
+                src="/White%20Qroute%20Logo.png"
+                alt="QRoute Logo"
+                className="h-auto w-[150px] object-contain"
+              />
             <p className="mt-0.5 text-xs tracking-wide text-blue-200">
               ADMINISTRATION
             </p>
@@ -117,11 +110,28 @@ export default function Dashboard() {
                 <button
                   key={item.label}
                   type="button"
-                  onClick={() => {
-                    if (item.label === "Dashboard") {
-                      navigate("/admin/dashboard");
-                    }
-                  }}
+                 onClick={() => {
+                      switch (item.label) {
+                        case "Dashboard":
+                          navigate("/admin/dashboard");
+                          break;
+                        case "Route Management":
+                          navigate("/admin/routes");
+                          break;
+                        case "Post Management":
+                          navigate("/admin/post-management");
+                          break;
+                        case "Reports":
+                          navigate("/admin/reports");
+                          break;
+                        case "User Management":
+                          navigate("/admin/users");
+                          break;
+                        case "Settings":
+                          navigate("/admin/settings");
+                          break;
+                      }
+                    }}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${
                     item.active
                       ? "bg-[#CFD5DB] font-semibold text-[#102E4D]"
@@ -130,6 +140,7 @@ export default function Dashboard() {
                 >
                   <Icon size={19} strokeWidth={1.8} />
                   <span>{item.label}</span>
+
                   {item.label === "Reports" && (
                     <span className="ml-auto rounded-full bg-orange-500 px-2 py-0.5 text-[10px] font-bold text-white">
                       12
@@ -141,6 +152,7 @@ export default function Dashboard() {
           </nav>
         </div>
 
+        {/* Sidebar bottom */}
         <div className="mt-auto p-5">
           <div className="mb-4 rounded-xl border border-white/10 bg-white/5 p-4">
             <div className="flex items-center gap-3">
@@ -149,7 +161,9 @@ export default function Dashboard() {
               </div>
               <div>
                 <p className="text-sm font-semibold">Admin Panel</p>
-                <p className="text-xs text-slate-300">System management</p>
+                <p className="text-xs text-slate-300">
+                  System management
+                </p>
               </div>
             </div>
           </div>
@@ -160,17 +174,20 @@ export default function Dashboard() {
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-4 py-3 text-sm font-medium transition hover:bg-white/10"
           >
             <MapPinned size={17} />
-            Preview of the System
+            Switch to User Mode
           </button>
         </div>
       </aside>
 
+      {/* Main Content */}
       <main className="min-h-screen md:ml-[250px]">
+        {/* Header */}
         <header className="sticky top-0 z-20 flex min-h-[86px] items-center justify-between border-b border-slate-200 bg-white/95 px-5 backdrop-blur sm:px-8 lg:px-10">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#102E4D] text-white md:hidden">
               <Menu size={21} />
             </div>
+
             <div>
               <h2 className="text-xl font-bold tracking-tight text-[#102E4D] sm:text-2xl">
                 Dashboard
@@ -182,12 +199,7 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-3 sm:gap-5">
-            <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-2.5 lg:flex">
-              <Search size={17} className="text-slate-400" />
-              <span className="text-xs text-slate-400">
-                Search dashboard...
-              </span>
-            </div>
+
 
             <button
               type="button"
@@ -205,38 +217,36 @@ export default function Dashboard() {
                 A
               </div>
               <div className="hidden sm:block">
-                <p className="text-sm font-semibold text-slate-800">Admin</p>
-                <p className="text-xs text-slate-500">Administrator</p>
+                <p className="text-sm font-semibold text-slate-800">
+                  Admin
+                </p>
+                <p className="text-xs text-slate-500">
+                  Administrator
+                </p>
               </div>
             </div>
           </div>
         </header>
 
+        {/* Dashboard Body */}
         <div className="mx-auto max-w-[1500px] p-5 sm:p-8 lg:p-10">
+          {/* Welcome Section */}
           <section className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
-              <p className="text-sm text-slate-500">
-                Overview / <span className="font-medium text-[#102E4D]">Dashboard</span>
-              </p>
+
+
               <h3 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">
                 Welcome back, Admin!
               </h3>
+
               <p className="mt-2 text-sm text-slate-500">
                 Here&apos;s an overview of your QRoute system.
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => navigate("/admin")}
-              className="inline-flex w-fit items-center gap-2 rounded-lg bg-[#102E4D] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#19476D]"
-            >
-              <MapPinned size={17} />
-              Preview System
-              <ArrowUpRight size={16} />
-            </button>
           </section>
 
+          {/* Summary Cards */}
           <section className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
             {summaryCards.map((card) => {
               const Icon = card.icon;
@@ -264,114 +274,68 @@ export default function Dashboard() {
                   </div>
 
                   <div className="mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
-                    <span className="text-xs text-slate-500">{card.note}</span>
+                    <span className="text-xs text-slate-500">
+                      {card.note}
+                    </span>
                   </div>
                 </article>
               );
             })}
           </section>
 
-          <section className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-[1.5fr_1fr]">
+          {/* Admin Attendance */}
+          <section className="mt-8 grid grid-cols-1 gap-6">
             <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_3px_14px_rgba(15,23,42,0.035)]">
               <div className="flex items-center justify-between border-b border-slate-100 px-5 py-5 sm:px-6">
                 <div>
-                  <h4 className="font-bold text-slate-900">Recent Activity</h4>
+                  <h4 className="font-bold text-slate-900">
+                    Admin Attendance
+                  </h4>
                   <p className="mt-1 text-xs text-slate-500">
-                    A quick look at recent system activity
+                    Recent dashboard access history
                   </p>
                 </div>
+
                 <Clock size={19} className="text-slate-400" />
               </div>
 
               <div className="divide-y divide-slate-100 px-5 sm:px-6">
-                {activities.map((activity) => {
-                  const Icon = activity.icon;
+{activities.map((activity) => (
+  <div
+    key={activity.title}
+    className="flex items-center gap-4 py-5"
+  >
+    {/* Admin Avatar */}
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 font-bold text-blue-700">
+      A
+    </div>
 
-                  return (
-                    <div
-                      key={activity.title}
-                      className="flex items-start gap-4 py-5"
-                    >
-                      <div
-                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${activity.iconBg} ${activity.iconColor}`}
-                      >
-                        <Icon size={19} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-slate-800">
-                          {activity.title}
-                        </p>
-                        <p className="mt-1 text-xs leading-5 text-slate-500">
-                          {activity.description}
-                        </p>
-                      </div>
-                      <span className="shrink-0 pt-1 text-[11px] text-slate-400">
-                        {activity.time}
-                      </span>
-                    </div>
-                  );
-                })}
+    {/* Admin Details - Left Side */}
+    <div className="min-w-0 flex-1">
+      <p className="text-sm font-semibold text-slate-800">
+        Admin
+      </p>
+      <p className="mt-1 text-xs leading-5 text-slate-500">
+        {activity.description}
+      </p>
+    </div>
+
+    {/* Date and Time - Right Side */}
+    <div className="flex w-36 shrink-0 flex-col items-end text-right">
+      <p className="whitespace-nowrap text-xs font-medium text-slate-600">
+        {activity.time}
+      </p>
+      <p className="mt-1 whitespace-nowrap text-xs text-slate-400">
+        {activity.date}
+      </p>
+    </div>
+  </div>
+))}
               </div>
 
-              <div className="border-t border-slate-100 px-5 py-4 sm:px-6">
-                <p className="text-xs text-slate-400">
-                  Sample activity entries for UI preview.
-                </p>
-              </div>
-            </div>
 
-            <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_3px_14px_rgba(15,23,42,0.035)] sm:p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="font-bold text-slate-900">System Overview</h4>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Current dashboard status
-                  </p>
-                </div>
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-100 text-green-700">
-                  <CheckCircle2 size={21} />
-                </div>
-              </div>
-
-              <div className="mt-6 rounded-xl bg-[#F4F8FC] p-5">
-                <p className="text-sm font-medium text-slate-600">
-                  System status
-                </p>
-                <div className="mt-3 flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full bg-green-500" />
-                  <span className="text-lg font-bold text-slate-800">
-                    UI Preview
-                  </span>
-                </div>
-                <p className="mt-2 text-xs leading-5 text-slate-500">
-                  This dashboard currently displays sample figures. Live system
-                  data can be connected when the backend is ready.
-                </p>
-              </div>
-
-              <div className="mt-5 space-y-4">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">Dashboard layout</span>
-                  <span className="font-medium text-green-700">Ready</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                  <div className="h-full w-full rounded-full bg-[#102E4D]" />
-                </div>
-
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">Live data connection</span>
-                  <span className="font-medium text-amber-600">Pending</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                  <div className="h-full w-1/4 rounded-full bg-amber-400" />
-                </div>
-              </div>
             </div>
           </section>
-
-          <footer className="pb-4 pt-8 text-center text-xs text-slate-400">
-            QRoute Admin Dashboard · UI Preview
-          </footer>
         </div>
       </main>
     </div>
