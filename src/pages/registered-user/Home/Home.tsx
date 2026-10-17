@@ -189,6 +189,10 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
     return;
   }
 
+   if (item.label === "Community") {
+    window.location.href = "/community";
+    return;
+  }
   handleNavigation(item.label);
 }}
                 className="

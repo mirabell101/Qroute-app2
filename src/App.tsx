@@ -11,7 +11,8 @@ import Resetpassword from "./pages/visitor/resetpassword/resetpassword";
 import TermsAndConditions from "./pages/visitor/legal/termsandcondition";
 import PrivacyPolicy from "./pages/visitor/legal/privacypolicy";
 import Profile from "./pages/registered-user/profile/profile";
-import Contributions from "./pages/registered-user/contribution/contribution";
+import Contribution from "./pages/registered-user/contribution/contribution";
+import Community from "./pages/registered-user/community/community";
 import AdminBase from "./pages/admin/base/base";
 
 const CURRENT_USER_KEY = "qroute_current_user";
@@ -74,7 +75,7 @@ const handleLogout = () => {
   path="/contribution"
   element={
     currentUserId ? (
-      <Contributions
+      <Contribution
         currentUserId={currentUserId}
         onLogout={handleLogout}
       />
@@ -97,6 +98,17 @@ const handleLogout = () => {
     )
   }
 />
+
+<Route
+  path="/community"
+  element={
+    <Community
+      currentUserId={currentUserId}
+      onLogout={handleLogout}
+    />
+  }
+/>
+
 
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<SignUp />} />

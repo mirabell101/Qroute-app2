@@ -1,4 +1,3 @@
-
 import { useEffect, useRef, useState } from "react";
 import {
   Bell,
@@ -8,13 +7,11 @@ import {
   MessageSquare,
   UserCircle,
   Plus,
-  ChevronLeft,
-  ChevronRight,
   Trash2,
 } from "lucide-react";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 
-interface ContributionsProps {
+interface ContributionProps {
   currentUserId: string;
   onLogout: () => void;
 }
@@ -121,6 +118,25 @@ function createEmptyDraft(): ContributionDraft {
   };
 }
 
+function isSameDraftContent(
+  draft: ContributionDraft,
+  original: ContributionDraft,
+) {
+  return (
+    draft.caption === original.caption &&
+    draft.terminal === original.terminal &&
+    draft.origin === original.origin &&
+    draft.destination === original.destination &&
+    draft.vehicle === original.vehicle &&
+    draft.commuterType === original.commuterType &&
+    draft.fare === original.fare &&
+    draft.photos.length === original.photos.length &&
+    draft.photos.every(
+      (photo, index) => photo.dataUrl === original.photos[index]?.dataUrl,
+    )
+  );
+}
+
 function formatDate(date: string) {
   return new Date(date).toLocaleDateString("en-PH", {
     month: "short",
@@ -129,26 +145,38 @@ function formatDate(date: string) {
   });
 }
 
-export default function Contributions({
+export default function Contribution({
   currentUserId,
   onLogout,
-}: ContributionsProps) {
+}: ContributionProps) {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showAddPostModal, setShowAddPostModal] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
   const [showDraftNotice, setShowDraftNotice] = useState("");
   const [drafts, setDrafts] = useState<ContributionDraft[]>([]);
   const [activeDraftIndex, setActiveDraftIndex] = useState(0);
-  const [contributions, setContributions] = useState<
+  const [contribution, setContribution] = useState<
     SubmittedContribution[]
   >([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [showSubmitConfirmation, setShowSubmitConfirmation] = useState(false);
-  const [showWithdrawConfirmation, setShowWithdrawConfirmation] = useState(false);
-const [pendingWithdrawPostId, setPendingWithdrawPostId] = useState<string | null>(null);
-const [draftIndexToDelete, setDraftIndexToDelete] = useState<number | null>(null);
+  const [showWithdrawConfirmation, setShowWithdrawConfirmation] =
+    useState(false);
+  const [pendingWithdrawPostId, setPendingWithdrawPostId] = useState<
+    string | null
+  >(null);
+  const [draftIndexToDelete, setDraftIndexToDelete] = useState<number | null>(
+    null,
+  );
+  const [withdrawnOriginal, setWithdrawnOriginal] =
+    useState<SubmittedContribution | null>(null);
+  const [showLeaveConfirmation, setShowLeaveConfirmation] = useState(false);
+  const [showSaveChangesConfirmation, setShowSaveChangesConfirmation] =
+    useState(false);
+  const [notice, setNotice] = useState("");
+
   const accounts = getStoredAccounts();
   const currentAccount = accounts.find(
     (account) => account.id === currentUserId,
@@ -156,10 +184,19 @@ const [draftIndexToDelete, setDraftIndexToDelete] = useState<number | null>(null
 
   const activeDraft = drafts[activeDraftIndex];
 
+  const withdrawnDraft = withdrawnOriginal
+    ? (drafts.find((draft) => draft.id === withdrawnOriginal.id) ?? null)
+    : null;
+
+  const isWithdrawnUnchanged =
+    withdrawnOriginal !== null &&
+    withdrawnDraft !== null &&
+    isSameDraftContent(withdrawnDraft, withdrawnOriginal);
+
   useEffect(() => {
     if (!currentUserId) {
       setDrafts([]);
-      setContributions([]);
+      setContribution([]);
       setIsLoaded(true);
       return;
     }
@@ -170,7 +207,7 @@ const [draftIndexToDelete, setDraftIndexToDelete] = useState<number | null>(null
     );
 
     setDrafts(storedDrafts);
-    setContributions(userPosts);
+    setContribution(userPosts);
     setActiveDraftIndex(0);
     setIsLoaded(true);
   }, [currentUserId]);
@@ -187,9 +224,15 @@ const [draftIndexToDelete, setDraftIndexToDelete] = useState<number | null>(null
     }
   }, [drafts, currentUserId, isLoaded]);
 
-  const updateActiveDraft = (
-    updates: Partial<ContributionDraft>,
-  ) => {
+  useEffect(() => {
+    if (!notice) return;
+
+    const timer = window.setTimeout(() => setNotice(""), 4000);
+
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  const updateActiveDraft = (updates: Partial<ContributionDraft>) => {
     setDrafts((previous) =>
       previous.map((draft, index) =>
         index === activeDraftIndex
@@ -223,6 +266,7 @@ const [draftIndexToDelete, setDraftIndexToDelete] = useState<number | null>(null
   const openAddPostModal = () => {
     setShowValidation(false);
     setShowDraftNotice("");
+    setWithdrawnOriginal(null);
 
     if (drafts.length === 0) {
       setDrafts([createEmptyDraft()]);
@@ -238,12 +282,78 @@ const [draftIndexToDelete, setDraftIndexToDelete] = useState<number | null>(null
     setShowAddPostModal(false);
     setShowValidation(false);
     setShowDraftNotice("");
+    setShowLeaveConfirmation(false);
+    setShowSaveChangesConfirmation(false);
+    setWithdrawnOriginal(null);
+  };
+
+  const requestCloseAddPostModal = () => {
+    if (isWithdrawnUnchanged) {
+      setShowLeaveConfirmation(true);
+      return;
+    }
+
+    if (withdrawnOriginal && withdrawnDraft) {
+      setShowSaveChangesConfirmation(true);
+      return;
+    }
+
+    closeAddPostModal();
+  };
+
+  const confirmSaveChanges = () => {
+    if (!withdrawnDraft) {
+      closeAddPostModal();
+      return;
+    }
+
+    const label =
+      withdrawnDraft.terminal.trim() ||
+      `${withdrawnDraft.origin.trim() || "—"} → ${
+        withdrawnDraft.destination.trim() || "—"
+      }`;
+
+    closeAddPostModal();
+    setNotice(`Draft (${label}) updated.`);
+  };
+
+  const confirmLeaveWithoutChanges = () => {
+    if (!withdrawnOriginal) {
+      closeAddPostModal();
+      return;
+    }
+
+    const original = withdrawnOriginal;
+
+    try {
+      const allPosts = getAllSubmitted();
+
+      saveAllSubmitted([
+        ...allPosts.filter((post) => post.id !== original.id),
+        original,
+      ]);
+    } catch {
+      setShowLeaveConfirmation(false);
+      setShowDraftNotice(
+        "Unable to return the post to your pending list. Browser storage may be full. Your draft remains saved.",
+      );
+      return;
+    }
+
+    setDrafts((previous) => previous.filter((draft) => draft.id !== original.id));
+    setContribution((previous) =>
+      previous.some((item) => item.id === original.id)
+        ? previous
+        : [original, ...previous],
+    );
+    setActiveDraftIndex(0);
+    closeAddPostModal();
   };
 
   const handleAddAnotherPost = () => {
     if (drafts.length >= MAX_DRAFTS) {
       setShowDraftNotice(
-        `Maximum na ang ${MAX_DRAFTS} drafts sa isang batch. Isumite muna ang batch bago gumawa ng panibago.`,
+        `You've reached the maximum of ${MAX_DRAFTS} drafts for this batch. Please submit the batch before creating a new one.`,
       );
       return;
     }
@@ -260,35 +370,31 @@ const [draftIndexToDelete, setDraftIndexToDelete] = useState<number | null>(null
     setShowDraftNotice("");
   };
 
-const handleDeleteDraft = (indexToDelete: number) => {
-  setDraftIndexToDelete(indexToDelete);
-};
+  const handleDeleteDraft = (indexToDelete: number) => {
+    setDraftIndexToDelete(indexToDelete);
+  };
 
-const confirmDeleteDraft = () => {
-  if (draftIndexToDelete === null) return;
+  const confirmDeleteDraft = () => {
+    if (draftIndexToDelete === null) return;
 
-  const indexToDelete = draftIndexToDelete;
-  const nextDrafts = drafts.filter(
-    (_, index) => index !== indexToDelete,
-  );
+    const indexToDelete = draftIndexToDelete;
+    const nextDrafts = drafts.filter((_, index) => index !== indexToDelete);
 
-  setDrafts(nextDrafts);
-  setDraftIndexToDelete(null);
+    setDrafts(nextDrafts);
+    setDraftIndexToDelete(null);
 
-  if (nextDrafts.length === 0) {
-    setActiveDraftIndex(0);
-    setShowValidation(false);
-    return;
-  }
+    if (nextDrafts.length === 0) {
+      setActiveDraftIndex(0);
+      setShowValidation(false);
+      return;
+    }
 
-  if (indexToDelete < activeDraftIndex) {
-    setActiveDraftIndex(activeDraftIndex - 1);
-  } else if (indexToDelete === activeDraftIndex) {
-    setActiveDraftIndex(
-      Math.min(indexToDelete, nextDrafts.length - 1),
-    );
-  }
-};
+    if (indexToDelete < activeDraftIndex) {
+      setActiveDraftIndex(activeDraftIndex - 1);
+    } else if (indexToDelete === activeDraftIndex) {
+      setActiveDraftIndex(Math.min(indexToDelete, nextDrafts.length - 1));
+    }
+  };
 
   const handlePhotoChange = async (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -299,9 +405,7 @@ const confirmDeleteDraft = () => {
     const remainingSlots = MAX_PHOTOS - activeDraft.photos.length;
 
     const imageFiles = selectedFiles.filter(
-      (file) =>
-        file.type === "image/png" ||
-        file.type === "image/jpeg",
+      (file) => file.type === "image/png" || file.type === "image/jpeg",
     );
 
     const filesToAdd = imageFiles.slice(0, remainingSlots);
@@ -323,15 +427,14 @@ const confirmDeleteDraft = () => {
               }
             };
 
-            reader.onerror = () =>
-              reject(new Error("Unable to read image."));
+            reader.onerror = () => reject(new Error("Unable to read image."));
 
             reader.readAsDataURL(file);
           }),
       ),
     ).catch(() => {
       setShowDraftNotice(
-        "May photo na hindi mabasa. Subukan ulit gamit ang PNG o JPG.",
+        "The photo cannot be read. Please try again using a PNG or JPG image..",
       );
       return [];
     });
@@ -344,7 +447,7 @@ const confirmDeleteDraft = () => {
 
     if (imageFiles.length > remainingSlots) {
       setShowDraftNotice(
-        `Hanggang ${MAX_PHOTOS} photos lang bawat post.`,
+        `You can only add up to ${MAX_PHOTOS} photos per post.`,
       );
     }
 
@@ -355,9 +458,7 @@ const confirmDeleteDraft = () => {
     if (!activeDraft) return;
 
     updateActiveDraft({
-      photos: activeDraft.photos.filter(
-        (_, index) => index !== photoIndex,
-      ),
+      photos: activeDraft.photos.filter((_, index) => index !== photoIndex),
     });
   };
 
@@ -368,9 +469,7 @@ const confirmDeleteDraft = () => {
         draft.destination.trim(),
     );
 
-const isFareValid = /^\d+(\.\d{1,2})?$/.test(
-  draft.fare.trim(),
-);
+    const isFareValid = /^\d+(\.\d{1,2})?$/.test(draft.fare.trim());
 
     return (
       draft.photos.length > 0 &&
@@ -382,206 +481,192 @@ const isFareValid = /^\d+(\.\d{1,2})?$/.test(
     );
   };
 
-const handleSubmitAll = () => {
-  setShowValidation(true);
-  setShowDraftNotice("");
+  const handleSubmitAll = () => {
+    setShowValidation(true);
+    setShowDraftNotice("");
 
-  if (drafts.length === 0) {
-    setShowDraftNotice("There are no drafts to submit.");
-    return;
-  }
+    if (drafts.length === 0) {
+      setShowDraftNotice("There are no drafts to submit.");
+      return;
+    }
 
-  const invalidIndex = drafts.findIndex((draft) => !isDraftValid(draft));
+    const invalidIndex = drafts.findIndex((draft) => !isDraftValid(draft));
 
-  if (invalidIndex !== -1) {
-    setActiveDraftIndex(invalidIndex);
-    setShowDraftNotice(
-      `Some fields are missing or invalid in Draft ${invalidIndex + 1}. Please complete all drafts before submitting.`,
-    );
-    return;
-  }
+    if (invalidIndex !== -1) {
+      setActiveDraftIndex(invalidIndex);
+      setShowDraftNotice(
+        `Some fields are missing or invalid in Draft ${invalidIndex + 1}. Please complete all drafts before submitting.`,
+      );
+      return;
+    }
 
-  setShowSubmitConfirmation(true);
-};
+    setShowSubmitConfirmation(true);
+  };
 
 const confirmSubmitAll = () => {
-  if (isSubmitting || drafts.length === 0) return;
+  if (!currentUserId || drafts.length === 0) return;
 
-  setIsSubmitting(true);
-  setShowDraftNotice("");
+  const submittedAt = new Date().toISOString();
 
-  try {
-    const batchId = crypto.randomUUID();
-    const submittedAt = new Date().toISOString();
+  const newPosts: SubmittedContribution[] = drafts.map((draft) => ({
+    ...draft,
+    userId: currentUserId,
+    status: "Pending",
+    submittedAt,
+    batchId: crypto.randomUUID(),
+  }));
 
-    const newPosts: SubmittedContribution[] = drafts.map((draft) => ({
-      ...draft,
-      userId: currentUserId,
-      status: "Pending",
-      submittedAt,
-      batchId,
-    }));
+  const allPosts = getAllSubmitted();
+  saveAllSubmitted([...allPosts, ...newPosts]);
 
+  setContribution((previous) => [...newPosts, ...previous]);
+  setDrafts([]);
+  setActiveDraftIndex(0);
+  setShowSubmitConfirmation(false);
+};
+
+  const withdrawPendingPost = (postId: string) => {
     const allPosts = getAllSubmitted();
-    saveAllSubmitted([...allPosts, ...newPosts]);
 
-    setContributions((previous) => [...newPosts, ...previous]);
-    setDrafts([]);
-    setActiveDraftIndex(0);
+    const post = allPosts.find(
+      (item) =>
+        item.id === postId &&
+        item.userId === currentUserId &&
+        item.status === "Pending",
+    );
+
+    if (!post) return;
+
+    const updatedDrafts = getUserDrafts(currentUserId);
+
+    if (updatedDrafts.length >= MAX_DRAFTS) {
+      setShowDraftNotice(
+        "You already have 5 drafts. Delete a draft before withdrawing this post.",
+      );
+      return;
+    }
+
+    setPendingWithdrawPostId(postId);
+    setShowWithdrawConfirmation(true);
+  };
+
+  const cancelWithdrawConfirmation = () => {
+    setShowWithdrawConfirmation(false);
+    setPendingWithdrawPostId(null);
+  };
+
+  const confirmWithdrawPendingPost = () => {
+    if (!pendingWithdrawPostId) return;
+
+    const postId = pendingWithdrawPostId;
+    const allPosts = getAllSubmitted();
+
+    const post = allPosts.find(
+      (item) =>
+        item.id === postId &&
+        item.userId === currentUserId &&
+        item.status === "Pending",
+    );
+
+    if (!post) {
+      cancelWithdrawConfirmation();
+      return;
+    }
+
+    const updatedDrafts = getUserDrafts(currentUserId);
+
+    if (updatedDrafts.length >= MAX_DRAFTS) {
+      cancelWithdrawConfirmation();
+      setShowDraftNotice(
+        "You already have 5 drafts. Delete a draft before withdrawing this post.",
+      );
+      return;
+    }
+
+    const editableDraft: ContributionDraft = {
+      id: post.id,
+      caption: post.caption,
+      terminal: post.terminal,
+      origin: post.origin,
+      destination: post.destination,
+      vehicle: post.vehicle,
+      commuterType: post.commuterType,
+      fare: post.fare,
+      photos: post.photos,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const nextDrafts = [...updatedDrafts, editableDraft];
+
+    if (!saveUserDrafts(currentUserId, nextDrafts)) {
+      cancelWithdrawConfirmation();
+      setShowDraftNotice(
+        "Unable to save the draft. Browser storage may be full. Try removing some photos.",
+      );
+      return;
+    }
+
+    try {
+      saveAllSubmitted(
+        allPosts.filter(
+          (item) => !(item.id === postId && item.userId === currentUserId),
+        ),
+      );
+    } catch {
+      cancelWithdrawConfirmation();
+      setShowDraftNotice(
+        "Unable to update submitted posts. Your editable draft remains saved. Please try again.",
+      );
+      return;
+    }
+
+    setWithdrawnOriginal(post);
+    setDrafts(nextDrafts);
+    setContribution((previous) =>
+      previous.filter((item) => item.id !== postId),
+    );
+    setActiveDraftIndex(nextDrafts.length - 1);
     setShowValidation(false);
-    setShowAddPostModal(false);
-    setShowSubmitConfirmation(false);
     setShowDraftNotice("");
-  } catch (error) {
-    console.error("Failed to submit contributions:", error);
-
-    setShowDraftNotice(
-      "Unable to submit your posts. Browser storage may be full. Try removing some photos.",
-    );
-  } finally {
-    setIsSubmitting(false);
-  }
-};
-
-const withdrawPendingPost = (postId: string) => {
-  const allPosts = getAllSubmitted();
-
-  const post = allPosts.find(
-    (item) =>
-      item.id === postId &&
-      item.userId === currentUserId &&
-      item.status === "Pending",
-  );
-
-  if (!post) return;
-
-  const updatedDrafts = getUserDrafts(currentUserId);
-
-  if (updatedDrafts.length >= MAX_DRAFTS) {
-    setShowDraftNotice(
-      "You already have 5 drafts. Delete a draft before withdrawing this post.",
-    );
-    return;
-  }
-
-  setPendingWithdrawPostId(postId);
-  setShowWithdrawConfirmation(true);
-};
-
-const cancelWithdrawConfirmation = () => {
-  setShowWithdrawConfirmation(false);
-  setPendingWithdrawPostId(null);
-};
-
-const confirmWithdrawPendingPost = () => {
-  if (!pendingWithdrawPostId) return;
-
-  const postId = pendingWithdrawPostId;
-  const allPosts = getAllSubmitted();
-
-  const post = allPosts.find(
-    (item) =>
-      item.id === postId &&
-      item.userId === currentUserId &&
-      item.status === "Pending",
-  );
-
-  if (!post) {
     cancelWithdrawConfirmation();
-    return;
-  }
-
-  const updatedDrafts = getUserDrafts(currentUserId);
-
-  if (updatedDrafts.length >= MAX_DRAFTS) {
-    cancelWithdrawConfirmation();
-    setShowDraftNotice(
-      "You already have 5 drafts. Delete a draft before withdrawing this post.",
-    );
-    return;
-  }
-
-  const editableDraft: ContributionDraft = {
-    id: post.id,
-    caption: post.caption,
-    terminal: post.terminal,
-    origin: post.origin,
-    destination: post.destination,
-    vehicle: post.vehicle,
-    commuterType: post.commuterType,
-    fare: post.fare,
-    photos: post.photos,
-    updatedAt: new Date().toISOString(),
+    setShowAddPostModal(true);
   };
 
-  const nextDrafts = [...updatedDrafts, editableDraft];
+  const startRevision = (contribution: SubmittedContribution) => {
+    const revisionDraft: ContributionDraft = {
+      id: contribution.id,
+      caption: contribution.caption,
+      terminal: contribution.terminal,
+      origin: contribution.origin,
+      destination: contribution.destination,
+      vehicle: contribution.vehicle,
+      commuterType: contribution.commuterType,
+      fare: contribution.fare,
+      photos: contribution.photos,
+      updatedAt: new Date().toISOString(),
+    };
 
-  if (!saveUserDrafts(currentUserId, nextDrafts)) {
-    cancelWithdrawConfirmation();
-    setShowDraftNotice(
-      "Unable to save the draft. Browser storage may be full. Try removing some photos.",
-    );
-    return;
-  }
+    const existingDrafts = getUserDrafts(currentUserId);
 
-  try {
-    saveAllSubmitted(
-      allPosts.filter(
-        (item) =>
-          !(item.id === postId && item.userId === currentUserId),
-      ),
-    );
-  } catch {
-    cancelWithdrawConfirmation();
-    setShowDraftNotice(
-      "Unable to update submitted posts. Your editable draft remains saved. Please try again.",
-    );
-    return;
-  }
+    const nextDrafts = [
+      ...existingDrafts.filter((draft) => draft.id !== contribution.id),
+      revisionDraft,
+    ];
 
-  setDrafts(nextDrafts);
-  setContributions((previous) =>
-    previous.filter((item) => item.id !== postId),
-  );
-  setActiveDraftIndex(nextDrafts.length - 1);
-  setShowValidation(false);
-  setShowDraftNotice("");
-  cancelWithdrawConfirmation();
-  setShowAddPostModal(true);
-};
+    if (!saveUserDrafts(currentUserId, nextDrafts)) {
+      setShowDraftNotice(
+        "Unable to save the revision draft. Please try again.",
+      );
+      return;
+    }
 
-const startRevision = (contribution: SubmittedContribution) => {
-  const revisionDraft: ContributionDraft = {
-    id: contribution.id,
-    caption: contribution.caption,
-    terminal: contribution.terminal,
-    origin: contribution.origin,
-    destination: contribution.destination,
-    vehicle: contribution.vehicle,
-    commuterType: contribution.commuterType,
-    fare: contribution.fare,
-    photos: contribution.photos,
-    updatedAt: new Date().toISOString(),
+    setWithdrawnOriginal(null);
+    setDrafts(nextDrafts);
+    setActiveDraftIndex(nextDrafts.length - 1);
+    setShowValidation(false);
+    setShowDraftNotice("");
+    setShowAddPostModal(true);
   };
-
-  const existingDrafts = getUserDrafts(currentUserId);
-
-  const nextDrafts = [
-    ...existingDrafts.filter((draft) => draft.id !== contribution.id),
-    revisionDraft,
-  ];
-
-  if (!saveUserDrafts(currentUserId, nextDrafts)) {
-    setShowDraftNotice("Unable to save the revision draft. Please try again.");
-    return;
-  }
-
-  setDrafts(nextDrafts);
-  setActiveDraftIndex(nextDrafts.length - 1);
-  setShowValidation(false);
-  setShowDraftNotice("");
-  setShowAddPostModal(true);
-};
 
   const routeError =
     showValidation &&
@@ -590,11 +675,11 @@ const startRevision = (contribution: SubmittedContribution) => {
     !activeDraft.origin.trim() &&
     !activeDraft.destination.trim();
 
-const fareError =
-  showValidation &&
-  Boolean(activeDraft) &&
-  (!activeDraft.fare.trim() ||
-    !/^\d+(\.\d{1,2})?$/.test(activeDraft.fare.trim()));
+  const fareError =
+    showValidation &&
+    Boolean(activeDraft) &&
+    (!activeDraft.fare.trim() ||
+      !/^\d+(\.\d{1,2})?$/.test(activeDraft.fare.trim()));
 
   const fieldClass = (hasError: boolean) =>
     `h-10 w-full rounded-lg border px-3 text-sm outline-none focus:ring-1 ${
@@ -657,7 +742,7 @@ const fareError =
         </nav>
       </aside>
 
-      <header className="absolute left-[40px] right-0 top-0 z-[40] flex min-h-[130px] items-start justify-between bg-[#f7f7f7] px-[30px] pt-[35px] sm:left-[280px] md:left-[290px] lg:left-[300px]">
+      <header className="absolute left-[220px] right-0 top-0 z-[40] flex min-h-[130px] items-start justify-between bg-[#f7f7f7] px-[30px] pt-[35px] sm:left-[20px] md:left-[290px] lg:left-[300px]">
         <div className="flex flex-col justify-center">
           <h1 className="text-[26px] font-semibold tracking-[-0.4px] text-gray-900">
             Your Contributions
@@ -733,8 +818,8 @@ const fareError =
       </header>
 
       <section className="absolute inset-0 z-0 ml-[220px] overflow-y-auto pt-[10px] sm:ml-[230px] md:ml-[170px] lg:ml-[250px]">
-          <div className="mx-auto w-full max-w-[900px] px-8 pb-12 pt-[105px]">
-            <div className="h-[23px]" />
+        <div className="mx-auto w-full max-w-[900px] px-8 pb-12 pt-[105px]">
+          <div className="h-[23px]" />
 
           <button
             type="button"
@@ -755,7 +840,7 @@ const fareError =
           </button>
 
           <div className="mt-6 flex flex-col gap-3">
-            {contributions.length === 0 ? (
+            {contribution.length === 0 ? (
               <div className="flex min-h-[330px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-6 text-center shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
                 <div className="flex h-[58px] w-[58px] items-center justify-center rounded-full bg-[#f1f3f5]">
                   <Car
@@ -773,100 +858,107 @@ const fareError =
                 </p>
               </div>
             ) : (
-              
-contributions.map((contribution) => (
-  <article
-    key={contribution.id}
-    className="rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-[0_2px_8px_rgba(0,0,0,0.06)]"
-  >
-    <div className="flex flex-col gap-4 sm:flex-row">
-      {/* Picture preview */}
-      {contribution.photos[0] && (
-        <img
-          src={contribution.photos[0].dataUrl}
-          alt="Contribution preview"
-          className="h-28 w-full rounded-lg object-cover sm:w-36"
-        />
-      )}
+              [...contribution]
+  .sort(
+    (a, b) =>
+      new Date(b.submittedAt).getTime() -
+      new Date(a.submittedAt).getTime()
+  )
+  .map((contribution) => (
+                <article
+                  key={contribution.id}
+                  className="rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-[0_2px_8px_rgba(0,0,0,0.06)]"
+                >
+                  <div className="flex flex-col gap-4 sm:flex-row">
+                    {/* Picture preview */}
+                    {contribution.photos[0] && (
+                      <img
+                        src={contribution.photos[0].dataUrl}
+                        alt="Contribution preview"
+                        className="h-28 w-full rounded-lg object-cover sm:w-36"
+                      />
+                    )}
 
-      <div className="min-w-0 flex-1">
-        {/* Submission date and status */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs text-gray-500">
-            Submitted {formatDate(contribution.submittedAt)}
-          </p>
+                    <div className="min-w-0 flex-1">
+                      {/* Submission date and status */}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs text-gray-500">
+                          Submitted {formatDate(contribution.submittedAt)}
+                        </p>
 
-          <span
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${
-              contribution.status === "Pending"
-                ? "bg-amber-100 text-amber-800"
-                : contribution.status === "Approved"
-                  ? "bg-green-100 text-green-800"
-                  : "bg-red-100 text-red-800"
-            }`}
-          >
-            {contribution.status}
-          </span>
-        </div>
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            contribution.status === "Pending"
+                              ? "bg-amber-100 text-amber-800"
+                              : contribution.status === "Approved"
+                                ? "bg-green-100 text-green-800"
+                                : "bg-red-100 text-red-800"
+                          }`}
+                        >
+                          {contribution.status}
+                        </span>
+                      </div>
 
-        {/* Route or terminal */}
-        <p className="mt-2 break-words text-sm font-semibold text-gray-900">
-          {contribution.terminal?.trim()
-            ? contribution.terminal
-            : `${contribution.origin || "—"} → ${contribution.destination || "—"}`}
-        </p>
+                      {/* Route or terminal */}
+                      <p className="mt-2 break-words text-sm font-semibold text-gray-900">
+                        {contribution.terminal?.trim()
+                          ? contribution.terminal
+                          : `${contribution.origin || "—"} → ${contribution.destination || "—"}`}
+                      </p>
 
-        {/* Full details for Approved posts only */}
-        {contribution.status === "Approved" && (
-          <>
-            <p className="mt-2 break-words text-sm text-gray-700">
-              {contribution.caption}
-            </p>
+                      {/* Full details for Approved posts only */}
+                      {contribution.status === "Approved" && (
+                        <>
+                          <p className="mt-2 break-words text-sm text-gray-700">
+                            {contribution.caption}
+                          </p>
 
-            <p className="mt-1 text-sm text-gray-600">
-              {contribution.origin || "—"} → {contribution.destination || "—"}
-            </p>
+                          <p className="mt-1 text-sm text-gray-600">
+                            {contribution.origin || "—"} →{" "}
+                            {contribution.destination || "—"}
+                          </p>
 
-            <p className="mt-1 text-xs text-gray-500">
-              {contribution.vehicle} · {contribution.commuterType} · ₱
-              {contribution.fare}
-            </p>
-          </>
-        )}
+                          <p className="mt-1 text-xs text-gray-500">
+                            {contribution.vehicle} ·{" "}
+                            {contribution.commuterType} · ₱
+                            {contribution.fare}
+                          </p>
+                        </>
+                      )}
 
-        {/* Pending action */}
-        {contribution.status === "Pending" && (
-          <button
-            type="button"
-            onClick={() => withdrawPendingPost(contribution.id)}
-            className="mt-3 rounded-lg border border-[#12395A] px-3 py-1.5 text-xs font-semibold text-[#12395A] transition-colors hover:bg-[#12395A] hover:text-white"
-          >
-            Withdraw to Edit
-          </button>
-        )}
+                      {/* Pending action */}
+                      {contribution.status === "Pending" && (
+                        <button
+                          type="button"
+                          onClick={() => withdrawPendingPost(contribution.id)}
+                          className="mt-3 rounded-lg border border-[#12395A] px-3 py-1.5 text-xs font-semibold text-[#12395A] transition-colors hover:bg-[#12395A] hover:text-white"
+                        >
+                          Withdraw to Edit
+                        </button>
+                      )}
 
-        {/* Needs Revision */}
-        {contribution.status === "Needs Revision" && (
-          <div className="mt-3">
-            {contribution.adminFeedback && (
-              <p className="mb-2 text-sm text-red-700">
-                Admin feedback: {contribution.adminFeedback}
-              </p>
-            )}
+                      {/* Needs Revision */}
+                      {contribution.status === "Needs Revision" && (
+                        <div className="mt-3">
+                          {contribution.adminFeedback && (
+                            <p className="mb-2 text-sm text-red-700">
+                              Admin feedback: {contribution.adminFeedback}
+                            </p>
+                          )}
 
-            <button
-              type="button"
-              onClick={() => startRevision(contribution)}
-              className="rounded-lg border border-[#12395A] px-3 py-1.5 text-xs font-semibold text-[#12395A] transition-colors hover:bg-[#12395A] hover:text-white"
-            >
-              Edit and Resubmit
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  </article>
-))
+                          <button
+                            type="button"
+                            onClick={() => startRevision(contribution)}
+                            className="rounded-lg border border-[#12395A] px-3 py-1.5 text-xs font-semibold text-[#12395A] transition-colors hover:bg-[#12395A] hover:text-white"
+                          >
+                            Edit and Resubmit
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </article>
+              ))
             )}
           </div>
         </div>
@@ -875,7 +967,7 @@ contributions.map((contribution) => (
       {showAddPostModal && activeDraft && (
         <div
           className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/45 px-4 py-6"
-          onClick={closeAddPostModal}
+          onClick={requestCloseAddPostModal}
         >
           <section
             role="dialog"
@@ -899,20 +991,22 @@ contributions.map((contribution) => (
               <button
                 type="button"
                 aria-label="Close"
-                onClick={closeAddPostModal}
+                onClick={requestCloseAddPostModal}
                 className="rounded-full px-2 py-1 text-xl leading-none text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
               >
                 ×
               </button>
             </div>
-{showDraftNotice && (
-  <p
-    role="alert"
-    className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
-  >
-    {showDraftNotice}
-  </p>
-)}
+
+            {showDraftNotice && (
+              <p
+                role="alert"
+                className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+              >
+                {showDraftNotice}
+              </p>
+            )}
+
             <div className="space-y-4">
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
@@ -981,6 +1075,11 @@ contributions.map((contribution) => (
                   className="hidden"
                   onChange={handlePhotoChange}
                 />
+                {showValidation && activeDraft.photos.length === 0 && (
+                  <p className="mt-1 text-xs text-red-600">
+                    Please add at least one photo.
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1004,6 +1103,11 @@ contributions.map((contribution) => (
                       : "border-gray-300 focus:border-[#12395A] focus:ring-[#12395A]"
                   }`}
                 />
+                {showValidation && !activeDraft.caption.trim() && (
+                  <p className="mt-1 text-xs text-red-600">
+                    Caption is required.
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1067,8 +1171,8 @@ contributions.map((contribution) => (
                   </div>
                 </div>
                 {routeError && (
-                  <p className="mt-1 text-xs text-red-500">
-                    Fill in at least one route detail.
+                  <p className="mt-1 text-xs text-red-600">
+                    Enter a terminal, origin, or destination.
                   </p>
                 )}
               </div>
@@ -1091,7 +1195,9 @@ contributions.map((contribution) => (
                       showValidation && !activeDraft.vehicle.trim(),
                     )}
                   >
-                    <option value="">Select vehicle type</option>
+                    <option value="" disabled>
+                      Vehicle Type
+                    </option>
                     <option value="Bus">Bus</option>
                     <option value="Jeepney">Jeepney</option>
                     <option value="Train">Train</option>
@@ -1109,15 +1215,15 @@ contributions.map((contribution) => (
                     id="post-commuter-type"
                     value={activeDraft.commuterType}
                     onChange={(event) =>
-                      updateActiveDraft({
-                        commuterType: event.target.value,
-                      })
+                      updateActiveDraft({ commuterType: event.target.value })
                     }
                     className={fieldClass(
-                      showValidation && !activeDraft.commuterType.trim(),
+                      showValidation && !activeDraft.commuterType,
                     )}
                   >
-                    <option value="">Select commuter type</option>
+                    <option value="" disabled>
+                      Commuter Type
+                    </option>
                     <option value="Regular">Regular</option>
                     <option value="Discounted">Discounted</option>
                   </select>
@@ -1136,14 +1242,19 @@ contributions.map((contribution) => (
                     inputMode="decimal"
                     value={activeDraft.fare}
                     onChange={(event) => {
-  const value = event.target.value;
-  if (/^\d*\.?\d{0,2}$/.test(value)) {
-    updateActiveDraft({ fare: value });
-  }
-}}
+                      const value = event.target.value;
+                      if (/^\d*\.?\d{0,2}$/.test(value)) {
+                        updateActiveDraft({ fare: value });
+                      }
+                    }}
                     placeholder="0.00"
                     className={fieldClass(fareError)}
                   />
+                  {fareError && (
+                    <p className="mt-1 text-xs text-red-600">
+                      Enter a valid fare with up to two decimal places.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1219,43 +1330,12 @@ contributions.map((contribution) => (
                 })}
               </div>
 
-              <div className="mb-4 flex items-center justify-between">
-                <button
-                  type="button"
-                  disabled={activeDraftIndex === 0}
-                  onClick={() => {
-                    setActiveDraftIndex((index) => Math.max(0, index - 1));
-                    setShowValidation(false);
-                    setShowDraftNotice("");
-                  }}
-                  className="flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <ChevronLeft size={16} />
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={activeDraftIndex >= drafts.length - 1}
-                  onClick={() => {
-                    setActiveDraftIndex((index) =>
-                      Math.min(drafts.length - 1, index + 1),
-                    );
-                    setShowValidation(false);
-                    setShowDraftNotice("");
-                  }}
-                  className="flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Next
-                  <ChevronRight size={16} />
-                </button>
-              </div>
-
-              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <div className="mt-4 flex flex-col-reverse justify-end gap-3 sm:flex-row">
                 <button
                   type="button"
                   onClick={handleAddAnotherPost}
                   disabled={drafts.length >= MAX_DRAFTS}
-                  className="h-10 rounded-lg border border-[#12395A] bg-white px-5 text-sm font-semibold text-[#12395A] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#12395A] hover:text-white hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0 disabled:hover:bg-white disabled:hover:text-[#12395A] disabled:hover:shadow-none"
+                  className="rounded-lg border border-[#12395A] px-4 py-2.5 text-sm font-semibold text-[#12395A] transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   + Add Another Post
                 </button>
@@ -1263,7 +1343,7 @@ contributions.map((contribution) => (
                   type="button"
                   onClick={handleSubmitAll}
                   disabled={isSubmitting || drafts.length === 0}
-                  className="h-10 rounded-lg bg-[#12395A] px-5 text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#1b4b6f] hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-lg bg-[#12395A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isSubmitting ? "Submitting..." : "Submit All"}
                 </button>
@@ -1273,152 +1353,231 @@ contributions.map((contribution) => (
         </div>
       )}
 
-      
+      {showSaveChangesConfirmation && (
+        <div
+          className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
+          onClick={() => setShowSaveChangesConfirmation(false)}
+        >
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="save-changes-title"
+            aria-describedby="save-changes-message"
+            className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2
+              id="save-changes-title"
+              className="text-lg font-semibold text-gray-900"
+            >
+              Confirm changes?
+            </h2>
+            <p
+              id="save-changes-message"
+              className="mt-2 text-sm leading-relaxed text-gray-600"
+            >
+              Do you want to save your changes to this draft? It will stay in
+              your drafts until you submit it again.
+            </p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowSaveChangesConfirmation(false)}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+              >
+                Keep Editing
+              </button>
+              <button
+                type="button"
+                onClick={confirmSaveChanges}
+                className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f]"
+              >
+                Yes, Save Changes
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
-{showSubmitConfirmation && (
-  <div
-    className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
-    onClick={() => setShowSubmitConfirmation(false)}
-  >
-    <section
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="submit-confirmation-title"
-      aria-describedby="submit-confirmation-message"
-      className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
-      onClick={(event) => event.stopPropagation()}
-    >
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-2xl text-amber-700">
-  ?
-</div>
+      {showLeaveConfirmation && (
+        <div
+          className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
+          onClick={() => setShowLeaveConfirmation(false)}
+        >
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="leave-confirmation-title"
+            aria-describedby="leave-confirmation-message"
+            className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2
+              id="leave-confirmation-title"
+              className="text-lg font-semibold text-gray-900"
+            >
+              Leave without changes?
+            </h2>
+            <p
+              id="leave-confirmation-message"
+              className="mt-2 text-sm leading-relaxed text-gray-600"
+            >
+              Are you sure you want to leave without changing anything? This
+              post will go back to your pending posts.
+            </p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowLeaveConfirmation(false)}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+              >
+                Keep Editing
+              </button>
+              <button
+                type="button"
+                onClick={confirmLeaveWithoutChanges}
+                className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f]"
+              >
+                Yes, Leave
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
-      <h2
-        id="submit-confirmation-title"
-        className="mb-2 text-center text-xl font-semibold"
-      >
-        Confirm Submission
-      </h2>
-
-      <p
-        id="submit-confirmation-message"
-        className="mb-6 text-justify text-sm text-gray-600"
-      >
-        Are you sure you want to submit all {drafts.length}{" "}
-        {drafts.length === 1 ? "post" : "posts"} for admin review?
-        They will not appear in the Community until approved.
-      </p>
-
-      <div className="flex justify-center gap-8">
-        <button
-          type="button"
+      {showSubmitConfirmation && (
+        <div
+          className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
           onClick={() => setShowSubmitConfirmation(false)}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100"
         >
-          Cancel
-        </button>
+          <section
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-[390px] rounded-2xl bg-white p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-900">
+              Submit your posts?
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-gray-600">
+              Submit {drafts.length} post{drafts.length === 1 ? "" : "s"} for
+              admin review? You cannot edit them while they are pending.
+            </p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowSubmitConfirmation(false)}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+              >
+                Cancel
+              </button>
 
-        <button
-  type="button"
-  onClick={confirmSubmitAll}
-  disabled={isSubmitting}
-  className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-50"
->
-  {isSubmitting ? "Submitting..." : "Confirm"}
-</button>
-      </div>
-    </section>
-  </div>
-)}
+              <button
+                type="button"
+                onClick={confirmSubmitAll}
+                disabled={isSubmitting}
+                className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1b4b6f] disabled:opacity-50"
+              >
+                {isSubmitting ? "Submitting..." : "Confirm"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
-{showWithdrawConfirmation && (
-  <div
-    className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/45 px-4"
-    onClick={cancelWithdrawConfirmation}
-  >
-    <section
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="withdraw-confirmation-title"
-      aria-describedby="withdraw-confirmation-message"
-      className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
-      onClick={(event) => event.stopPropagation()}
-    >
-     <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-2xl text-amber-700">
-  ?
-</div>
-
-      <h2
-        id="withdraw-confirmation-title"
-        className="mmb-3 text-center text-xl font-semibold"
-      >
-        Withdraw Pending Post?
-      </h2>
-
-      <p
-        id="withdraw-confirmation-message"
-        className="mb-6 text-justify text-sm text-gray-600"
-      >
-        Are you sure you want to withdraw this pending post? It will
-        be returned to your drafts so you can edit and resubmit it.
-      </p>
-
-      <div className="flex justify-center gap-8">
-        <button
-          type="button"
+      {showWithdrawConfirmation && (
+        <div
+          className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
           onClick={cancelWithdrawConfirmation}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100"
         >
-          Cancel
-        </button>
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="withdraw-confirmation-title"
+            aria-describedby="withdraw-confirmation-message"
+            className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2
+              id="withdraw-confirmation-title"
+              className="text-lg font-semibold text-gray-900"
+            >
+              Withdraw Pending Post?
+            </h2>
 
-        <button
-          type="button"
-          onClick={confirmWithdrawPendingPost}
-          className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f]"
-        >
-          Confirm
-        </button>
-      </div>
-    </section>
-  </div>
-)}
+            <p
+              id="withdraw-confirmation-message"
+              className="mt-2 text-sm leading-relaxed text-gray-600"
+            >
+              Are you sure you want to withdraw this pending post? It will be
+              returned to your drafts so you can edit and resubmit it.
+            </p>
 
-{draftIndexToDelete !== null && (
-  <div className="fixed inset-0 z-7000 flex items-center justify-center bg-black/60 p-4">
-    <div className="w-full max-w-md rounded-3xl bg-white px-7 py-8 text-center shadow-2xl">
-      <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 text-3xl text-amber-700">
-        ?
-      </div>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={cancelWithdrawConfirmation}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+              >
+                Cancel
+              </button>
 
-      <h2 className="mb-3 text-center text-xl font-semibold">
-        Delete Draft
-      </h2>
+              <button
+                type="button"
+                onClick={confirmWithdrawPendingPost}
+                className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f]"
+              >
+                Confirm
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
-      <p className="mb-7 text-center text-sm leading-relaxed text-gray-600">
-        Delete Draft {draftIndexToDelete + 1}? This cannot be undone.
-      </p>
+      {draftIndexToDelete !== null && (
+        <div className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4">
+          <div className="w-full max-w-[390px] rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-semibold text-gray-900">
+              Delete this draft?
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-gray-600">
+              The current draft and its photos will be removed.
+            </p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setDraftIndexToDelete(null)}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+              >
+                Cancel
+              </button>
 
-      <div className="flex justify-center gap-4">
-        <button
-          type="button"
-          onClick={() => setDraftIndexToDelete(null)}
-          className="rounded-xl border border-gray-300 px-5 py-3 font-semibold text-gray-700 transition-all duration-200 hover:-translate-y-0.5 hover:bg-gray-100 hover:shadow-md active:translate-y-0"
-        >
-          Cancel
-        </button>
-
-        <button
-          type="button"
-          onClick={confirmDeleteDraft}
-          className="rounded-xl bg-[#153e60] px-5 py-3 font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#10314d] hover:shadow-md active:translate-y-0"
-        >
-          Confirm
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-```
+              <button
+                type="button"
+                onClick={confirmDeleteDraft}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+              >
+                Delete Draft
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {notice && (
+        <div className="fixed bottom-5 right-5 z-[9000] max-w-sm rounded-xl bg-[#12395A] px-4 py-3 text-sm text-white shadow-xl">
+          <div className="flex items-start gap-3">
+            <p>{notice}</p>
+            <button
+              type="button"
+              aria-label="Dismiss"
+              onClick={() => setNotice("")}
+              className="shrink-0 text-lg leading-none text-white/80 hover:text-white"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
