@@ -690,14 +690,14 @@ const confirmSubmitAll = () => {
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#f7f7f7]">
-      <aside className="absolute left-0 top-0 z-[2000] flex h-screen w-[220px] flex-col bg-[#12395A] text-white sm:w-[230px] md:w-[240px] lg:w-[250px]">
+      <aside className="absolute left-0 top-0 z-[2000] flex h-screen w-[220px] flex-col border-r border-white/10 bg-[#0f2a47] text-white sm:w-[230px] md:w-[240px] lg:w-[250px]">
         <button
           type="button"
           onClick={() => {
             window.location.href = "/home";
           }}
           title="Home"
-          className="absolute flex items-center justify-center rounded-lg transition-colors duration-200 hover:bg-[#1b4b6f]"
+          className="absolute flex items-center justify-center rounded-lg transition-colors duration-200 hover:bg-white/10"
           style={{ top: "30px", width: "100%", height: "75px" }}
         >
           <img
@@ -707,7 +707,7 @@ const confirmSubmitAll = () => {
           />
         </button>
 
-        <nav className="absolute left-0 top-[145px] flex w-full flex-col gap-0">
+        <nav className="absolute left-0 top-[145px] flex w-full flex-col gap-1.5 px-3">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = item.label === "Your Contribution";
@@ -717,10 +717,10 @@ const confirmSubmitAll = () => {
                 key={item.label}
                 type="button"
                 onClick={() => handleNavigation(item.label)}
-                className={`group flex h-[46px] w-full items-center px-6 text-left transition-colors duration-200 ${
+                className={`group flex h-[46px] w-full items-center rounded-xl px-3 text-left transition-colors duration-200 ${
                   isActive
-                    ? "bg-[#1b4b6f]"
-                    : "hover:bg-[#d9dee3] hover:text-[#12395A]"
+                    ? "bg-[#d9dee3] font-semibold text-[#0f2a47]"
+                    : "font-medium text-white hover:bg-[#d0d5db] hover:text-[#0f2a47]"
                 }`}
               >
                 <span className="flex w-[28px] shrink-0 items-center justify-center">
@@ -731,7 +731,7 @@ const confirmSubmitAll = () => {
                   />
                 </span>
                 <span
-                  className="ml-2 whitespace-nowrap font-medium"
+                  className="ml-2 whitespace-nowrap"
                   style={{ fontSize: "16px" }}
                 >
                   {item.label}

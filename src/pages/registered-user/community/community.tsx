@@ -14,10 +14,11 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 
 interface CommunityProps {
-  currentUserId: string;
+  currentUserId: string | null;
   onLogout: () => void;
 }
 
@@ -146,17 +147,19 @@ export default function Community({
   currentUserId,
   onLogout,
 }: CommunityProps) {
+  const navigate = useNavigate();
+
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [profileMenu, setProfileMenu] = useState(false);
   const [commentOpen, setCommentOpen] = useState<string[]>([]);
   const [commentText, setCommentText] = useState<Record<string, string>>({});
   const [reportTarget, setReportTarget] = useState<{
-  postId: string;
-  commentId?: string;
-} | null>(null);
+    postId: string;
+    commentId?: string;
+  } | null>(null);
 
-const [reportReason, setReportReason] = useState("");
+  const [reportReason, setReportReason] = useState("");
   const [loginPrompt, setLoginPrompt] = useState("");
   const [notice, setNotice] = useState("");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -171,8 +174,13 @@ const [reportReason, setReportReason] = useState("");
     useState(false);
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+
   const photoInputRef = useRef<HTMLInputElement>(null);
+
+  // ==================================================
+  // LOAD APPROVED POSTS
+  // ==================================================
 
   const reload = () => {
     setAccounts(readStorage<Account[]>(ACCOUNTS_KEY, []));
@@ -188,7 +196,11 @@ const [selectedImage, setSelectedImage] = useState<string | null>(null);
           likedBy: post.likedBy ?? [],
           dislikedBy: post.dislikedBy ?? [],
           reportedBy: post.reportedBy ?? [],
-          comments: post.comments ?? [],
+          reports: post.reports ?? [],
+          comments: (post.comments ?? []).map((comment) => ({
+            ...comment,
+            reports: comment.reports ?? [],
+          })),
         }))
         .sort(
           (a, b) =>
@@ -209,14 +221,18 @@ const [selectedImage, setSelectedImage] = useState<string | null>(null);
   }, []);
 
   useEffect(() => {
-  if (!notice) return;
+    if (!notice) return;
 
-  const timeoutId = window.setTimeout(() => {
-    setNotice("");
-  }, 3500);
+    const timeoutId = window.setTimeout(() => {
+      setNotice("");
+    }, 3500);
 
-  return () => window.clearTimeout(timeoutId);
-}, [notice]);
+    return () => window.clearTimeout(timeoutId);
+  }, [notice]);
+
+  // ==================================================
+  // SAVE POST CHANGES
+  // ==================================================
 
   const saveChanges = (updated: CommunityPost[]) => {
     const all = readStorage<CommunityPost[]>(SUBMITTED_KEY, []);
@@ -238,6 +254,10 @@ const [selectedImage, setSelectedImage] = useState<string | null>(null);
     );
   };
 
+  // ==================================================
+  // LOGIN GUARD
+  // ==================================================
+
   const needsLogin = (message: string) => {
     if (currentUserId) return false;
 
@@ -245,8 +265,16 @@ const [selectedImage, setSelectedImage] = useState<string | null>(null);
     return true;
   };
 
+  // ==================================================
+  // LIKE / DISLIKE
+  // ==================================================
+
   const react = (postId: string, type: "like" | "dislike") => {
-    if (needsLogin("Log in to react to community posts.")) return;
+    if (needsLogin("Please log in or sign in to your QRoute account to access this feature.")) {
+      return;
+    }
+
+    if (!currentUserId) return;
 
     saveChanges(
       posts.map((post) => {
@@ -282,8 +310,16 @@ const [selectedImage, setSelectedImage] = useState<string | null>(null);
     );
   };
 
+  // ==================================================
+  // COMMENTS
+  // ==================================================
+
   const comment = (postId: string) => {
-    if (needsLogin("Log in to comment on community posts.")) return;
+    if (needsLogin("Please log in or sign in to your QRoute account to access this feature.")) {
+      return;
+    }
+
+    if (!currentUserId) return;
 
     const text = (commentText[postId] ?? "").trim();
 
@@ -315,85 +351,104 @@ const [selectedImage, setSelectedImage] = useState<string | null>(null);
     );
   };
 
-const submitReport = () => {
-  if (!reportTarget || !reportReason) return;
+  // ==================================================
+  // REPORT POST / COMMENT
+  // ==================================================
 
-  if (needsLogin("Log in to report a community post or comment.")) {
-    setReportTarget(null);
-    setReportReason("");
-    return;
-  }
+  const submitReport = () => {
+    if (!reportTarget || !reportReason) return;
 
-  const report: ReportRecord = {
-    id: crypto.randomUUID(),
-    userId: currentUserId,
-    reason: reportReason,
-    createdAt: new Date().toISOString(),
-  };
-
-  const updatedPosts = posts.map((post) => {
-    if (post.id !== reportTarget.postId) return post;
-
-    // Report a specific comment.
-    if (reportTarget.commentId) {
-      return {
-        ...post,
-        comments: (post.comments ?? []).map((item) =>
-          item.id !== reportTarget.commentId
-            ? item
-            : {
-                ...item,
-                reports: [...(item.reports ?? []), report],
-              },
-        ),
-      };
+    if (
+      needsLogin(
+        "Please log in or sign in to your QRoute account to access this feature.",
+      )
+    ) {
+      setReportTarget(null);
+      setReportReason("");
+      return;
     }
 
-    // Report the post itself.
-    return {
-      ...post,
-      reports: [...(post.reports ?? []), report],
+    if (!currentUserId) return;
+
+    const report: ReportRecord = {
+      id: crypto.randomUUID(),
+      userId: currentUserId,
+      reason: reportReason,
+      createdAt: new Date().toISOString(),
     };
-  });
 
-  saveChanges(updatedPosts);
+    const updatedPosts = posts.map((post) => {
+      if (post.id !== reportTarget.postId) return post;
 
-  setReportTarget(null);
-  setReportReason("");
-  setNotice(
-    "Report received. Together we keep QRoute updated and accurate!",
-  );
-};
+      if (reportTarget.commentId) {
+        return {
+          ...post,
+          comments: (post.comments ?? []).map((item) =>
+            item.id !== reportTarget.commentId
+              ? item
+              : {
+                  ...item,
+                  reports: [...(item.reports ?? []), report],
+                },
+          ),
+        };
+      }
+
+      return {
+        ...post,
+        reports: [...(post.reports ?? []), report],
+      };
+    });
+
+    saveChanges(updatedPosts);
+
+    setReportTarget(null);
+    setReportReason("");
+    setNotice(
+      "Report received. Together we keep QRoute updated and accurate!",
+    );
+  };
+
+  // ==================================================
+  // CURRENT ACCOUNT / NOTIFICATIONS
+  // ==================================================
 
   const currentAccount = accounts.find(
     (account) => account.id === currentUserId,
   );
 
-  const notifications = posts
-    .filter((post) => post.userId === currentUserId)
-    .flatMap((post) => [
-      ...(post.likedBy ?? [])
-        .filter((id) => id !== currentUserId)
-        .map((id) => ({
-          id: `${post.id}-like-${id}`,
-          postId: post.id,
-          text: `${displayName(id, accounts)} liked your post`,
-        })),
-      ...(post.dislikedBy ?? [])
-        .filter((id) => id !== currentUserId)
-        .map((id) => ({
-          id: `${post.id}-dislike-${id}`,
-          postId: post.id,
-          text: `${displayName(id, accounts)} disliked your post`,
-        })),
-      ...(post.comments ?? [])
-        .filter((item) => item.userId !== currentUserId)
-        .map((item) => ({
-          id: `${post.id}-comment-${item.id}`,
-          postId: post.id,
-          text: `${displayName(item.userId, accounts)} commented on your post`,
-        })),
-    ]);
+  const notifications = currentUserId
+    ? posts
+        .filter((post) => post.userId === currentUserId)
+        .flatMap((post) => [
+          ...(post.likedBy ?? [])
+            .filter((id) => id !== currentUserId)
+            .map((id) => ({
+              id: `${post.id}-like-${id}`,
+              postId: post.id,
+              text: `${displayName(id, accounts)} liked your post`,
+            })),
+          ...(post.dislikedBy ?? [])
+            .filter((id) => id !== currentUserId)
+            .map((id) => ({
+              id: `${post.id}-dislike-${id}`,
+              postId: post.id,
+              text: `${displayName(id, accounts)} disliked your post`,
+            })),
+          ...(post.comments ?? [])
+            .filter((item) => item.userId !== currentUserId)
+            .map((item) => ({
+              id: `${post.id}-comment-${item.id}`,
+              postId: post.id,
+              text: `${displayName(item.userId, accounts)} commented on your post`,
+            })),
+          ...(post.reports ?? []).map((item) => ({
+            id: `${post.id}-report-${item.id}`,
+            postId: post.id,
+            text: "Someone reported your post",
+          })),
+        ])
+    : [];
 
   const openPost = (postId: string) => {
     setNotificationsOpen(false);
@@ -410,14 +465,23 @@ const submitReport = () => {
     }, 100);
   };
 
-  const getDraftsKey = () => `qroute_contribution_drafts_${currentUserId}`;
+  // ==================================================
+  // DRAFTS
+  // ==================================================
+
+  const getDraftsKey = () =>
+    `qroute_contribution_drafts_${currentUserId}`;
 
   const loadDrafts = () => {
+    if (!currentUserId) return [];
+
     const saved = readStorage<ContributionDraft[]>(getDraftsKey(), []);
     return saved.slice(0, MAX_DRAFTS);
   };
 
   const saveDrafts = (nextDrafts: ContributionDraft[]) => {
+    if (!currentUserId) return false;
+
     try {
       localStorage.setItem(getDraftsKey(), JSON.stringify(nextDrafts));
       setDrafts(nextDrafts);
@@ -449,7 +513,15 @@ const submitReport = () => {
   };
 
   const openAddPostModal = () => {
-    if (needsLogin("Log in to create a community post.")) return;
+    if (
+      needsLogin(
+        "Please log in or sign in to your QRoute account to access this feature.",
+      )
+    ) {
+      return;
+    }
+
+    if (!currentUserId) return;
 
     const savedDrafts = loadDrafts();
     const startingDrafts =
@@ -474,6 +546,8 @@ const submitReport = () => {
   };
 
   const addAnotherDraft = () => {
+    if (!currentUserId) return;
+
     if (drafts.length >= MAX_DRAFTS) {
       setDraftNotice(`You can create up to ${MAX_DRAFTS} drafts at a time.`);
       return;
@@ -489,7 +563,7 @@ const submitReport = () => {
   };
 
   const deleteActiveDraft = () => {
-    if (!activeDraft) return;
+    if (!activeDraft || !currentUserId) return;
 
     const nextDrafts = drafts.filter(
       (_, index) => index !== activeDraftIndex,
@@ -523,8 +597,11 @@ const submitReport = () => {
 
     const selectedFiles = Array.from(event.target.files ?? []);
     const remainingSlots = MAX_PHOTOS - activeDraft.photos.length;
+
     const imageFiles = selectedFiles
-      .filter((file) => file.type === "image/png" || file.type === "image/jpeg")
+      .filter(
+        (file) => file.type === "image/png" || file.type === "image/jpeg",
+      )
       .slice(0, remainingSlots);
 
     if (imageFiles.length === 0 && selectedFiles.length > 0) {
@@ -551,6 +628,7 @@ const submitReport = () => {
 
               reader.onerror = () =>
                 reject(new Error("Unable to read image."));
+
               reader.readAsDataURL(file);
             }),
         ),
@@ -600,6 +678,10 @@ const submitReport = () => {
   };
 
   const handleSubmitAll = () => {
+    if (needsLogin("Please log in or sign in to your QRoute account to access this feature.")) {
+      return;
+    }
+
     setShowValidation(true);
     setDraftNotice("");
 
@@ -624,6 +706,13 @@ const submitReport = () => {
   const confirmSubmitAll = () => {
     if (isSubmitting || drafts.length === 0) return;
 
+    if (needsLogin("Please log in or sign in to your QRoute account to access this feature.")) {
+      setShowSubmitConfirmation(false);
+      return;
+    }
+
+    if (!currentUserId) return;
+
     setIsSubmitting(true);
     setDraftNotice("");
 
@@ -640,6 +729,7 @@ const submitReport = () => {
         likedBy: [],
         dislikedBy: [],
         reportedBy: [],
+        reports: [],
         comments: [],
       }));
 
@@ -690,19 +780,23 @@ const submitReport = () => {
 
   const visiblePosts =
     feedFilter === "My Posts"
-      ? posts.filter((post) => post.userId === currentUserId)
+      ? currentUserId
+        ? posts.filter((post) => post.userId === currentUserId)
+        : []
       : posts;
+
+  // ==================================================
+  // RENDER
+  // ==================================================
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#f7f7f7]">
-      <aside className="absolute left-0 top-0 z-[2000] flex h-screen w-[220px] flex-col bg-[#12395A] text-white sm:w-[230px] md:w-[240px] lg:w-[250px]">
+      <aside className="absolute left-0 top-0 z-[2000] flex h-screen w-[220px] flex-col border-r border-white/10 bg-[#0f2a47] text-white sm:w-[230px] md:w-[240px] lg:w-[250px]">
         <button
           type="button"
-          onClick={() => {
-            window.location.href = "/home";
-          }}
+          onClick={() => navigate("/")}
           title="Home"
-          className="absolute flex items-center justify-center rounded-lg transition-colors duration-200 hover:bg-[#1b4b6f]"
+          className="absolute flex items-center justify-center rounded-lg transition-colors duration-200 hover:bg-white/10"
           style={{ top: "30px", width: "100%", height: "75px" }}
         >
           <img
@@ -712,18 +806,30 @@ const submitReport = () => {
           />
         </button>
 
-        <nav className="absolute left-0 top-[145px] flex w-full flex-col">
+        <nav className="absolute left-0 top-[145px] flex w-full flex-col gap-1.5 px-3">
           {navItems.map(({ label, icon: Icon, path }) => (
             <button
               key={label}
               type="button"
               onClick={() => {
-                window.location.href = path;
+                if (label === "Community") {
+                  navigate(path);
+                  return;
+                }
+
+                if (!currentUserId) {
+                  setLoginPrompt(
+                    "Please log in or sign in to your QRoute account to access this feature.",
+                  );
+                  return;
+                }
+
+                navigate(path);
               }}
-              className={`group flex h-[46px] w-full items-center px-6 text-left transition-colors duration-200 ${
+              className={`group flex h-[46px] w-full items-center rounded-xl px-3 text-left transition-colors duration-200 ${
                 label === "Community"
-                  ? "bg-[#1b4b6f]"
-                  : "hover:bg-[#d9dee3] hover:text-[#12395A]"
+                  ? "bg-[#d9dee3] font-semibold text-[#0f2a47]"
+                  : "font-medium text-white hover:bg-[#d0d5db] hover:text-[#0f2a47]"
               }`}
             >
               <span className="flex w-[28px] shrink-0 items-center justify-center">
@@ -733,15 +839,28 @@ const submitReport = () => {
                   className="transition-transform duration-200 group-hover:scale-110"
                 />
               </span>
-              <span className="ml-2 whitespace-nowrap text-[16px] font-medium">
+
+              <span className="ml-2 whitespace-nowrap text-[16px]">
                 {label}
               </span>
             </button>
           ))}
         </nav>
+
+        {!currentUserId && (
+          <button
+            type="button"
+            onClick={() => navigate("/login")}
+            className="absolute bottom-[30px] left-1/2 flex h-[40px] w-[160px] -translate-x-1/2 items-center justify-center rounded-xl bg-[#d9dee3] font-semibold text-[#0f2a47] transition-all duration-200 hover:-translate-y-0.5 hover:bg-white"
+          >
+            Sign In
+          </button>
+        )}
       </aside>
 
-      <header className="absolute left-[220px] right-0 top-0 z-[40] flex min-h-[130px] items-start justify-between bg-[#f7f7f7] px-[30px] pt-[35px] sm:left-[20px] md:left-[290px] lg:left-[300px]">
+      {/* HEADER */}
+
+<header className="absolute left-[220px] right-0 top-0 z-[40] flex min-h-[130px] items-start justify-between bg-[#f7f7f7] px-[30px] pt-[35px] sm:left-[20px] md:left-[290px] lg:left-[300px]">
         <div className="flex flex-col justify-center">
           <h1 className="text-[26px] font-semibold tracking-[-0.4px] text-gray-900">
             Community
@@ -752,12 +871,21 @@ const submitReport = () => {
         </div>
 
         <div className="relative flex h-[55px] -translate-y-[5px] items-center gap-[20px]">
+          {/* NOTIFICATIONS */}
+
           <div className="relative">
             <button
               type="button"
               title="Notifications"
               onClick={() => {
-                if (needsLogin("Log in to view your notifications.")) return;
+                if (
+                  needsLogin(
+                    "Please log in or sign in to your QRoute account to access this feature.",
+                  )
+                ) {
+                  return;
+                }
+
                 setNotificationsOpen((previous) => !previous);
               }}
               className="group relative flex h-[45px] w-[45px] items-center justify-center rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)] transition-all duration-200 hover:scale-105 hover:bg-gray-100 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]"
@@ -767,14 +895,15 @@ const submitReport = () => {
                 strokeWidth={2}
                 className="transition-transform duration-200 group-hover:rotate-6"
               />
-              {notifications.length > 0 && (
+
+              {currentUserId && notifications.length > 0 && (
                 <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
                   {notifications.length}
                 </span>
               )}
             </button>
 
-            {notificationsOpen && (
+            {notificationsOpen && currentUserId && (
               <div className="absolute right-0 top-[55px] z-[3000] w-[300px] rounded-xl border border-gray-100 bg-white p-3 shadow-xl">
                 <h2 className="mb-2 px-1 text-sm font-semibold text-gray-900">
                   Notifications
@@ -802,6 +931,8 @@ const submitReport = () => {
             )}
           </div>
 
+          {/* PROFILE */}
+
           <button
             type="button"
             onClick={() => setProfileMenu((previous) => !previous)}
@@ -825,32 +956,49 @@ const submitReport = () => {
 
           {profileMenu && (
             <div className="absolute right-0 top-[58px] z-[4000] w-[150px] rounded-xl bg-white p-2 shadow-[0_4px_15px_rgba(0,0,0,0.18)]">
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileMenu(false);
-                  window.location.href = "/profile";
-                }}
-                className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-              >
-                Account
-              </button>
+              {!currentUserId ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileMenu(false);
+                    navigate("/login");
+                  }}
+                  className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                >
+                  Sign In
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileMenu(false);
+                      navigate("/profile");
+                    }}
+                    className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                  >
+                    Account
+                  </button>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileMenu(false);
-                  onLogout();
-                  window.location.href = "/";
-                }}
-                className="mt-1 w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-              >
-                Log Out
-              </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileMenu(false);
+                      onLogout();
+                      navigate("/");
+                    }}
+                    className="mt-1 w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                  >
+                    Log Out
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
       </header>
+
+      {/* FEED */}
 
       <section className="absolute inset-0 z-0 ml-[220px] overflow-y-auto pt-[10px] sm:ml-[230px] md:ml-[240px] lg:ml-[250px]">
         <div className="mx-auto w-full max-w-[900px] px-8 pb-12 pt-[125px]">
@@ -862,6 +1010,7 @@ const submitReport = () => {
             <div className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full bg-[#12395A] text-white transition-transform duration-200 group-hover:scale-105">
               <Plus size={21} strokeWidth={2.2} />
             </div>
+
             <div>
               <p className="text-[15px] font-semibold text-gray-900">
                 Add Post
@@ -877,7 +1026,18 @@ const submitReport = () => {
               <button
                 key={filter}
                 type="button"
-                onClick={() => setFeedFilter(filter)}
+                onClick={() => {
+                  if (
+                    filter === "My Posts" &&
+                    needsLogin(
+                      "Please log in or sign in to your QRoute account to access this feature.",
+                    )
+                  ) {
+                    return;
+                  }
+
+                  setFeedFilter(filter);
+                }}
                 className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
                   feedFilter === filter
                     ? "bg-[#12395A] text-white"
@@ -890,195 +1050,264 @@ const submitReport = () => {
           </div>
 
           <div className="mt-4 w-full">
-            
-{visiblePosts.map((post) => {
-  const liked = (post.likedBy ?? []).includes(currentUserId);
-  const disliked = (post.dislikedBy ?? []).includes(currentUserId);
-  const comments = post.comments ?? [];
-  const author = accounts.find((account) => account.id === post.userId);
+            {visiblePosts.map((post) => {
+              const liked = currentUserId
+                ? (post.likedBy ?? []).includes(currentUserId)
+                : false;
 
-  return (
-    <article
-      id={`community-post-${post.id}`}
-      key={post.id}
-      className="mx-auto mb-3 w-full max-w-[4000px] rounded-xl border border-gray-200 bg-white p-3 shadow-[0_2px_8px_rgba(0,0,0,0.05)]"
-    >
-      {/* Profile, username, badge, and date */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
-          {author?.profilePicture ? (
-            <img
-              src={author.profilePicture}
-              alt="Profile"
-              className="h-11 w-11 shrink-0 rounded-full object-cover"
-            />
-          ) : (
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#e8eef3] text-[#12395A]">
-              <UserCircle size={25} />
-            </div>
-          )}
+              const disliked = currentUserId
+                ? (post.dislikedBy ?? []).includes(currentUserId)
+                : false;
 
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-gray-900">
-              {displayName(post.userId, accounts)}
-            </p>
-            <span className="mt-1 inline-block rounded-full bg-[#eaf1f7] px-2.5 py-1 text-[11px] font-medium text-[#12395A]">
-              Contributor
-            </span>
-          </div>
-        </div>
+              const comments = post.comments ?? [];
+              const author = accounts.find(
+                (account) => account.id === post.userId,
+              );
 
-        <p className="shrink-0 pt-0.5 text-xs text-gray-500">
-          {dateLabel(post.submittedAt)}
-        </p>
-      </div>
+              return (
+                <article
+                  id={`community-post-${post.id}`}
+                  key={post.id}
+                  className="mx-auto mb-3 w-full max-w-[4000px] rounded-xl border border-gray-200 bg-white p-3 shadow-[0_2px_8px_rgba(0,0,0,0.05)]"
+                >
+                  {/* AUTHOR */}
 
-      {/* Route */}
-      {(post.terminal || post.origin || post.destination) && (
-        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-700">
-          <MapPin size={16} className="shrink-0 text-[#12395A]" />
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-3">
+                      {author?.profilePicture ? (
+                        <img
+                          src={author.profilePicture}
+                          alt="Profile"
+                          className="h-11 w-11 shrink-0 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#e8eef3] text-[#12395A]">
+                          <UserCircle size={25} />
+                        </div>
+                      )}
 
-          {post.terminal && (
-            <span>
-              <span className="font-medium">Terminal:</span> {post.terminal}
-            </span>
-          )}
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-gray-900">
+                          {displayName(post.userId, accounts)}
+                        </p>
+                        <span className="mt-1 inline-block rounded-full bg-[#eaf1f7] px-2.5 py-1 text-[11px] font-medium text-[#12395A]">
+                          Contributor
+                        </span>
+                      </div>
+                    </div>
 
-          {(post.origin || post.destination) && (
-            <span className="font-medium">
-              {post.origin || "—"} → {post.destination || "—"}
-            </span>
-          )}
-        </div>
-      )}
+                    <p className="shrink-0 pt-0.5 text-xs text-gray-500">
+                      {dateLabel(post.submittedAt)}
+                    </p>
+                  </div>
 
-      {/* Square post image, aligned with the profile's left edge */}
-      {post.photos?.[0] && (
-  <img
-    src={post.photos[0].dataUrl}
-    alt="Community post"
-    onClick={() => setSelectedImage(post.photos![0].dataUrl)}
-    className="mt-2 h-[180px] w-full cursor-pointer rounded-lg bg-gray-50 object-cover transition-opacity hover:opacity-95"
-  />
-)}
+                  {/* ROUTE */}
 
-      {/* Caption and details */}
-      <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800">
-        {post.caption}
-      </p>
+                  {(post.terminal || post.origin || post.destination) && (
+                    <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-700">
+                      <MapPin
+                        size={16}
+                        className="shrink-0 text-[#12395A]"
+                      />
 
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
-        {post.vehicle && <span>{post.vehicle}</span>}
-        {post.commuterType && <span>{post.commuterType}</span>}
-        <span className="font-semibold">₱{post.fare}</span>
-      </div>
+                      {post.terminal && (
+                        <span>
+                          <span className="font-medium">Terminal:</span>{" "}
+                          {post.terminal}
+                        </span>
+                      )}
 
-      {/* Interactions */}
-      <div className="mt-3 flex flex-wrap items-center gap-1 border-t border-gray-100 pt-2">
-        <button
-          type="button"
-          onClick={() => react(post.id, "like")}
-          className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-            liked
-              ? "bg-pink-50 text-pink-700"
-              : "text-gray-600 hover:bg-gray-100"
-          }`}
-        >
-          <Heart size={17} className={liked ? "fill-current" : ""} />
-          {post.likedBy?.length ?? 0}
-        </button>
+                      {(post.origin || post.destination) && (
+                        <span className="font-medium">
+                          {post.origin || "—"} → {post.destination || "—"}
+                        </span>
+                      )}
+                    </div>
+                  )}
 
-        <button
-          type="button"
-          onClick={() => react(post.id, "dislike")}
-          className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-            disliked
-              ? "bg-blue-50 text-blue-700"
-              : "text-gray-600 hover:bg-gray-100"
-          }`}
-        >
-          <ThumbsDown size={17} />
-          {post.dislikedBy?.length ?? 0}
-        </button>
+                  {/* POST IMAGE */}
 
-        <button
-          type="button"
-          onClick={() =>
-            setCommentOpen((previous) =>
-              previous.includes(post.id)
-                ? previous.filter((id) => id !== post.id)
-                : [...previous, post.id],
-            )
-          }
-          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 transition-colors hover:bg-gray-100"
-        >
-          <MessageSquare size={17} />
-          {comments.length} Comments
-        </button>
+                  {post.photos?.[0] && (
+                    <img
+                      src={post.photos[0].dataUrl}
+                      alt="Community post"
+                      onClick={() =>
+                        setSelectedImage(post.photos![0].dataUrl)
+                      }
+                      className="mt-2 h-[180px] w-full cursor-pointer rounded-lg bg-gray-50 object-cover transition-opacity hover:opacity-95"
+                    />
+                  )}
 
-        <div className="ml-auto flex items-center gap-1">
-  <span className="text-xs text-gray-500">
-    {(post.reports?.length ?? 0) + (post.reportedBy?.length ?? 0)}
-  </span>
+                  {/* CAPTION */}
 
-  <button
-    type="button"
-    title="Report post"
-    onClick={() => {
-      if (needsLogin("Log in to report a community post.")) return;
+                  <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800">
+                    {post.caption}
+                  </p>
 
-      setReportReason("");
-      setReportTarget({ postId: post.id });
-    }}
-    className="inline-flex items-center gap-1 rounded-lg px-2 py-2 text-sm text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600"
-  >
-    <Flag size={16} />
-    Report
-  </button>
-</div>
-      </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
+                    {post.vehicle && <span>{post.vehicle}</span>}
+                    {post.commuterType && <span>{post.commuterType}</span>}
+                    <span className="font-semibold">₱{post.fare}</span>
+                  </div>
 
-      {/* Comments */}
-      {commentOpen.includes(post.id) && (
-        <div className="min-w-0 flex-1 rounded-lg bg-gray-50 px-3 py-2">
-  <div className="flex items-start justify-between gap-2">
-    <p className="text-xs font-semibold text-gray-800">
-      {displayName(item.userId, accounts)}
-    </p>
+                  {/* INTERACTIONS */}
 
-    <div className="flex shrink-0 items-center gap-1">
-      <span className="text-[11px] text-gray-500">
-        {(item.reports?.length ?? 0)}
-      </span>
+                  <div className="mt-3 flex flex-wrap items-center gap-1 border-t border-gray-100 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => react(post.id, "like")}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
+                        liked
+                          ? "bg-pink-50 text-pink-700"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      <Heart
+                        size={17}
+                        className={liked ? "fill-current" : ""}
+                      />
+                      {post.likedBy?.length ?? 0}
+                    </button>
 
-      <button
-        type="button"
-        title="Report comment"
-        aria-label="Report comment"
-        onClick={() => {
-          if (needsLogin("Log in to report a community comment.")) return;
+                    <button
+                      type="button"
+                      onClick={() => react(post.id, "dislike")}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
+                        disliked
+                          ? "bg-blue-50 text-blue-700"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      <ThumbsDown size={17} />
+                      {post.dislikedBy?.length ?? 0}
+                    </button>
 
-          setReportReason("");
-          setReportTarget({
-            postId: post.id,
-            commentId: item.id,
-          });
-        }}
-        className="rounded-md p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
-      >
-        <Flag size={14} />
-      </button>
-    </div>
-  </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCommentOpen((previous) =>
+                          previous.includes(post.id)
+                            ? previous.filter((id) => id !== post.id)
+                            : [...previous, post.id],
+                        );
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 transition-colors hover:bg-gray-100"
+                    >
+                      <MessageSquare size={17} />
+                      {comments.length} Comments
+                    </button>
 
-  <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-gray-700">
-    {item.text}
-  </p>
-</div>
-      )}
-    </article>
-  );
-})}
+                    <div className="ml-auto flex items-center gap-1">
+                      <span className="text-xs text-gray-500">
+                        {(post.reports?.length ?? 0) +
+                          (post.reportedBy?.length ?? 0)}
+                      </span>
+
+                      <button
+                        type="button"
+                        title="Report post"
+                        onClick={() => {
+                          if (
+                            needsLogin(
+                              "Please log in or sign in to your QRoute account to access this feature.",
+                            )
+                          ) {
+                            return;
+                          }
+
+                          setReportReason("");
+                          setReportTarget({ postId: post.id });
+                        }}
+                        className="inline-flex items-center gap-1 rounded-lg px-2 py-2 text-sm text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600"
+                      >
+                        <Flag size={16} />
+                        Report
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* COMMENTS */}
+
+                  {commentOpen.includes(post.id) && (
+                    <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
+                      {comments.map((item) => (
+                        <div
+                          key={item.id}
+                          className="min-w-0 rounded-lg bg-gray-50 px-3 py-2"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-xs font-semibold text-gray-800">
+                              {displayName(item.userId, accounts)}
+                            </p>
+
+                            <div className="flex shrink-0 items-center gap-1">
+                              <span className="text-[11px] text-gray-500">
+                                {item.reports?.length ?? 0}
+                              </span>
+
+                              <button
+                                type="button"
+                                title="Report comment"
+                                aria-label="Report comment"
+                                onClick={() => {
+                                  if (
+                                    needsLogin(
+                                      "Please log in or sign in to your QRoute account to access this feature.",
+                                    )
+                                  ) {
+                                    return;
+                                  }
+
+                                  setReportReason("");
+                                  setReportTarget({
+                                    postId: post.id,
+                                    commentId: item.id,
+                                  });
+                                }}
+                                className="rounded-md p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                              >
+                                <Flag size={14} />
+                              </button>
+                            </div>
+                          </div>
+
+                          <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-gray-700">
+                            {item.text}
+                          </p>
+                        </div>
+                      ))}
+
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={commentText[post.id] ?? ""}
+                          onChange={(event) =>
+                            setCommentText((previous) => ({
+                              ...previous,
+                              [post.id]: event.target.value,
+                            }))
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") comment(post.id);
+                          }}
+                          placeholder="Write a comment..."
+                          className="min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#12395A]"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => comment(post.id)}
+                          className="rounded-lg bg-[#12395A] px-3 py-2 text-white transition-colors hover:bg-[#1b4b6f]"
+                          aria-label="Send comment"
+                        >
+                          <Send size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
 
             {visiblePosts.length === 0 && (
               <div className="mt-4 flex min-h-[260px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-6 text-center shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
@@ -1089,11 +1318,13 @@ const submitReport = () => {
                     className="text-gray-400"
                   />
                 </div>
+
                 <h2 className="mt-5 text-[17px] font-semibold text-gray-800">
                   {feedFilter === "My Posts"
                     ? "You have no published posts yet."
                     : "No community posts yet."}
                 </h2>
+
                 <p className="mt-2 max-w-[380px] text-[13px] leading-[1.6] text-gray-500">
                   {feedFilter === "My Posts"
                     ? "Your approved posts will appear here."
@@ -1104,6 +1335,8 @@ const submitReport = () => {
           </div>
         </div>
       </section>
+
+      {/* CREATE POST MODAL */}
 
       {showAddPostModal && activeDraft && (
         <div
@@ -1129,6 +1362,7 @@ const submitReport = () => {
                   Save up to {MAX_DRAFTS} separate posts for admin review.
                 </p>
               </div>
+
               <button
                 type="button"
                 aria-label="Close"
@@ -1149,11 +1383,14 @@ const submitReport = () => {
             )}
 
             <div className="space-y-4">
+              {/* PHOTOS */}
+
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
                   <label className="block text-sm font-medium text-gray-900">
                     Photos <span className="text-red-500">*</span>
                   </label>
+
                   <span className="text-xs text-gray-500">
                     {activeDraft.photos.length}/{MAX_PHOTOS} photos
                   </span>
@@ -1176,6 +1413,7 @@ const submitReport = () => {
                         alt={`Selected photo ${index + 1}`}
                         className="h-28 w-full object-cover"
                       />
+
                       <button
                         type="button"
                         aria-label={`Remove photo ${index + 1}`}
@@ -1184,6 +1422,7 @@ const submitReport = () => {
                       >
                         ×
                       </button>
+
                       <p className="truncate px-2 py-1.5 text-xs text-gray-600">
                         {photo.name}
                       </p>
@@ -1223,6 +1462,8 @@ const submitReport = () => {
                 )}
               </div>
 
+              {/* CAPTION */}
+
               <div>
                 <label
                   htmlFor="post-caption"
@@ -1230,6 +1471,7 @@ const submitReport = () => {
                 >
                   Caption <span className="text-red-500">*</span>
                 </label>
+
                 <textarea
                   id="post-caption"
                   value={activeDraft.caption}
@@ -1244,12 +1486,15 @@ const submitReport = () => {
                       : "border-gray-300 focus:border-[#12395A] focus:ring-[#12395A]"
                   }`}
                 />
+
                 {showValidation && !activeDraft.caption.trim() && (
                   <p className="mt-1 text-xs text-red-600">
                     Caption is required.
                   </p>
                 )}
               </div>
+
+              {/* TERMINAL */}
 
               <div>
                 <label
@@ -1258,6 +1503,7 @@ const submitReport = () => {
                 >
                   Terminal
                 </label>
+
                 <input
                   id="post-terminal"
                   value={activeDraft.terminal}
@@ -1269,10 +1515,13 @@ const submitReport = () => {
                 />
               </div>
 
+              {/* ROUTE */}
+
               <div>
                 <p className="mb-1.5 block text-sm font-medium text-gray-900">
                   Route details
                 </p>
+
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <label
@@ -1281,6 +1530,7 @@ const submitReport = () => {
                     >
                       Point A / Origin
                     </label>
+
                     <input
                       id="post-origin"
                       value={activeDraft.origin}
@@ -1291,6 +1541,7 @@ const submitReport = () => {
                       className={fieldClass(routeError)}
                     />
                   </div>
+
                   <div>
                     <label
                       htmlFor="post-destination"
@@ -1298,23 +1549,29 @@ const submitReport = () => {
                     >
                       Point B / Destination
                     </label>
+
                     <input
                       id="post-destination"
                       value={activeDraft.destination}
                       onChange={(event) =>
-                        updateActiveDraft({ destination: event.target.value })
+                        updateActiveDraft({
+                          destination: event.target.value,
+                        })
                       }
                       placeholder="Destination"
                       className={fieldClass(routeError)}
                     />
                   </div>
                 </div>
+
                 {routeError && (
                   <p className="mt-1 text-xs text-red-600">
                     Enter a terminal, origin, or destination.
                   </p>
                 )}
               </div>
+
+              {/* VEHICLE */}
 
               <div>
                 <label
@@ -1323,13 +1580,16 @@ const submitReport = () => {
                 >
                   Type of vehicle <span className="text-red-500">*</span>
                 </label>
+
                 <select
                   id="post-vehicle"
                   value={activeDraft.vehicle}
                   onChange={(event) =>
                     updateActiveDraft({ vehicle: event.target.value })
                   }
-                  className={fieldClass(showValidation && !activeDraft.vehicle)}
+                  className={fieldClass(
+                    showValidation && !activeDraft.vehicle,
+                  )}
                 >
                   <option value="" disabled>
                     Vehicle Type
@@ -1340,6 +1600,8 @@ const submitReport = () => {
                 </select>
               </div>
 
+              {/* COMMUTER TYPE */}
+
               <div>
                 <label
                   htmlFor="post-commuter-type"
@@ -1347,11 +1609,14 @@ const submitReport = () => {
                 >
                   Type of commuter <span className="text-red-500">*</span>
                 </label>
+
                 <select
                   id="post-commuter-type"
                   value={activeDraft.commuterType}
                   onChange={(event) =>
-                    updateActiveDraft({ commuterType: event.target.value })
+                    updateActiveDraft({
+                      commuterType: event.target.value,
+                    })
                   }
                   className={fieldClass(
                     showValidation && !activeDraft.commuterType,
@@ -1365,6 +1630,8 @@ const submitReport = () => {
                 </select>
               </div>
 
+              {/* FARE */}
+
               <div>
                 <label
                   htmlFor="post-fare"
@@ -1372,6 +1639,7 @@ const submitReport = () => {
                 >
                   Fare (₱) <span className="text-red-500">*</span>
                 </label>
+
                 <input
                   id="post-fare"
                   type="text"
@@ -1379,6 +1647,7 @@ const submitReport = () => {
                   value={activeDraft.fare}
                   onChange={(event) => {
                     const value = event.target.value;
+
                     if (/^\d*\.?\d{0,2}$/.test(value)) {
                       updateActiveDraft({ fare: value });
                     }
@@ -1386,6 +1655,7 @@ const submitReport = () => {
                   placeholder="0.00"
                   className={fieldClass(fareError)}
                 />
+
                 {fareError && (
                   <p className="mt-1 text-xs text-red-600">
                     Enter a valid fare with up to two decimal places.
@@ -1401,6 +1671,8 @@ const submitReport = () => {
               )}
             </div>
 
+            {/* DRAFT TABS */}
+
             <div className="mt-6 border-t border-gray-100 pt-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
@@ -1411,6 +1683,7 @@ const submitReport = () => {
                     {drafts.length} of {MAX_DRAFTS} drafts
                   </p>
                 </div>
+
                 <p className="text-xs text-gray-500">
                   Draft {activeDraftIndex + 1} of {drafts.length}
                 </p>
@@ -1419,6 +1692,7 @@ const submitReport = () => {
               <div className="mb-4 flex flex-wrap items-center gap-2">
                 {drafts.map((draft, index) => {
                   const isActive = index === activeDraftIndex;
+
                   const hasContent = Boolean(
                     draft.caption.trim() ||
                       draft.terminal.trim() ||
@@ -1448,6 +1722,7 @@ const submitReport = () => {
                         Draft {index + 1}
                         {hasContent ? " •" : ""}
                       </button>
+
                       <button
                         type="button"
                         aria-label={`Delete draft ${index + 1}`}
@@ -1493,6 +1768,8 @@ const submitReport = () => {
         </div>
       )}
 
+      {/* SUBMIT CONFIRMATION */}
+
       {showSubmitConfirmation && (
         <div
           className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
@@ -1507,10 +1784,12 @@ const submitReport = () => {
             <h2 className="text-lg font-semibold text-gray-900">
               Submit your posts?
             </h2>
+
             <p className="mt-2 text-sm leading-relaxed text-gray-600">
               Submit {drafts.length} post{drafts.length === 1 ? "" : "s"} for
               admin review? You cannot edit them while they are pending.
             </p>
+
             <div className="mt-5 flex justify-end gap-3">
               <button
                 type="button"
@@ -1519,6 +1798,7 @@ const submitReport = () => {
               >
                 Cancel
               </button>
+
               <button
                 type="button"
                 onClick={confirmSubmitAll}
@@ -1531,6 +1811,8 @@ const submitReport = () => {
           </section>
         </div>
       )}
+
+      {/* DELETE DRAFT CONFIRMATION */}
 
       {showDeleteConfirmation && activeDraft && (
         <div
@@ -1546,9 +1828,11 @@ const submitReport = () => {
             <h2 className="text-lg font-semibold text-gray-900">
               Delete this draft?
             </h2>
+
             <p className="mt-2 text-sm leading-relaxed text-gray-600">
               The current draft and its photos will be removed.
             </p>
+
             <div className="mt-5 flex justify-end gap-3">
               <button
                 type="button"
@@ -1557,6 +1841,7 @@ const submitReport = () => {
               >
                 Cancel
               </button>
+
               <button
                 type="button"
                 onClick={deleteActiveDraft}
@@ -1569,133 +1854,139 @@ const submitReport = () => {
         </div>
       )}
 
+      {/* SIGN-IN POPUP — MATCHES LANDING */}
+
       {loginPrompt && (
         <div
-          className="fixed inset-0 z-[7000] flex items-center justify-center bg-black/45 px-4"
+          className="fixed inset-0 z-[7000] flex items-center justify-center bg-black/30"
           onClick={() => setLoginPrompt("")}
         >
-          <section
+          <div
             role="dialog"
             aria-modal="true"
-            className="w-full max-w-[390px] rounded-2xl bg-white p-6 shadow-2xl"
+            className="w-[320px] rounded-xl bg-white p-6 text-center shadow-[0_4px_20px_rgba(0,0,0,0.2)]"
             onClick={(event) => event.stopPropagation()}
           >
-            <button
-              type="button"
-              aria-label="Close"
-              onClick={() => setLoginPrompt("")}
-              className="float-right rounded-full p-1 text-gray-500 hover:bg-gray-100"
-            >
-              <X size={18} />
-            </button>
-            <h2 className="mb-2 text-lg font-semibold text-gray-900">
-              Log in required
+            <h2 className="text-[18px] font-semibold text-gray-900">
+              Sign in to access this
             </h2>
-            <p className="mb-5 text-sm text-gray-600">{loginPrompt}</p>
-            <div className="flex justify-end gap-3">
+
+            <p className="mt-2 text-[12px] leading-relaxed text-gray-600">
+              Please log in or sign in to your QRoute account to access this
+              feature.
+            </p>
+
+            <div className="mt-5 flex gap-2">
               <button
                 type="button"
                 onClick={() => setLoginPrompt("")}
-                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+                className="h-9 flex-1 rounded-[6px] border border-gray-300 bg-white text-[11px] font-medium text-gray-700 hover:bg-gray-50"
               >
                 Cancel
               </button>
+
               <button
                 type="button"
                 onClick={() => {
                   setLoginPrompt("");
-                  window.location.href = "/login";
+                  navigate("/login");
                 }}
-                className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1b4b6f]"
+                className="h-9 flex-1 rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white hover:bg-[#5547E8]"
               >
-                Log In
+                Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* REPORT MODAL */}
+
+      {reportTarget && (
+        <div
+          className="fixed inset-0 z-[8000] flex items-center justify-center bg-black/45 px-4"
+          onClick={() => {
+            setReportTarget(null);
+            setReportReason("");
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="report-title"
+            className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 w-full">
+              <h2
+                id="report-title"
+                className="w-full text-center text-lg font-bold text-gray-950"
+              >
+                Why are you reporting this{" "}
+                {reportTarget.commentId ? "comment" : "contribution"}?
+              </h2>
+            </div>
+
+            <p className="mb-5 text-center text-sm text-gray-600">
+              Let the admins know why you are reporting this{" "}
+              {reportTarget.commentId ? "comment" : "post"}.
+            </p>
+
+            <div className="space-y-1">
+              {[
+                "Misleading or troll submissions",
+                "Offensive or inappropriate content",
+              ].map((reason) => (
+                <button
+                  key={reason}
+                  type="button"
+                  onClick={() => setReportReason(reason)}
+                  className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-3 text-left text-sm transition-colors ${
+                    reportReason === reason
+                      ? "bg-gray-100 font-semibold text-gray-950"
+                      : "text-gray-800 hover:bg-gray-50"
+                  }`}
+                >
+                  <span>{reason}</span>
+                  <span className="text-lg leading-none text-gray-950">
+                    ›
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setReportTarget(null);
+                  setReportReason("");
+                }}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={submitReport}
+                disabled={!reportReason}
+                className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Submit Report
               </button>
             </div>
           </section>
         </div>
       )}
 
-      {reportTarget && (
-  <div
-    className="fixed inset-0 z-[8000] flex items-center justify-center bg-black/45 px-4"
-    onClick={() => {
-      setReportTarget(null);
-      setReportReason("");
-    }}
-  >
-    <section
-  role="dialog"
-  aria-modal="true"
-  aria-labelledby="report-title"
-  className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
-  onClick={(event) => event.stopPropagation()}
->
-  <div className="mb-4 w-full">
-    <h2
-      id="report-title"
-      className="w-full text-center text-lg font-bold text-gray-950"
-    >
-      Why are you reporting this{" "}
-      {reportTarget.commentId ? "comment" : "contribution"}?
-    </h2>
-  </div>
+      {/* NOTICE */}
 
-  <p className="mb-5 text-center text-sm text-gray-600">
-    Let the admins know why you are reporting this{" "}
-    {reportTarget.commentId ? "comment" : "post"}.
-  </p>
-
-  <div className="space-y-1">
-    {[
-      "Misleading or troll submissions",
-      "Offensive or inappropriate content",
-    ].map((reason) => (
-      <button
-        key={reason}
-        type="button"
-        onClick={() => {
-          setReportReason(reason);
-        }}
-        className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-3 text-left text-sm transition-colors ${
-          reportReason === reason
-            ? "bg-gray-100 font-semibold text-gray-950"
-            : "text-gray-800 hover:bg-gray-50"
-        }`}
-      >
-        <span>{reason}</span>
-        <span className="text-lg leading-none text-gray-950">›</span>
-      </button>
-    ))}
-  </div>
-
-      <div className="mt-5 flex justify-end gap-3">
-        <button
-          type="button"
-          onClick={() => {
-            setReportTarget(null);
-            setReportReason("");
-          }}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
-        >
-          Cancel
-        </button>
-
-        <button
-          type="button"
-          onClick={submitReport}
-          disabled={!reportReason}
-          className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Submit Report
-        </button>
-      </div>
-    </section>
-  </div>
-)}
       {notice && (
         <div className="fixed bottom-5 right-5 z-[9000] max-w-sm rounded-xl bg-[#12395A] px-4 py-3 text-sm text-white shadow-xl">
           <div className="flex items-start gap-3">
             <p>{notice}</p>
+
             <button
               type="button"
               aria-label="Dismiss"
@@ -1708,30 +1999,30 @@ const submitReport = () => {
         </div>
       )}
 
-      
-    
-{selectedImage && (
-  <div
-    className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4"
-    onClick={() => setSelectedImage(null)}
-  >
-    <button
-      type="button"
-      onClick={() => setSelectedImage(null)}
-      className="absolute right-5 top-5 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
-      aria-label="Close image"
-    >
-      <X size={28} />
-    </button>
+      {/* EXPANDED IMAGE */}
 
-    <img
-      src={selectedImage}
-      alt="Expanded post"
-      onClick={(event) => event.stopPropagation()}
-      className="max-h-[90vh] max-w-[95vw] rounded-lg object-contain shadow-2xl"
-    />
-  </div>
-)}
+      {selectedImage && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4"
+          onClick={() => setSelectedImage(null)}
+        >
+          <button
+            type="button"
+            onClick={() => setSelectedImage(null)}
+            className="absolute right-5 top-5 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+            aria-label="Close image"
+          >
+            <X size={28} />
+          </button>
+
+          <img
+            src={selectedImage}
+            alt="Expanded post"
+            onClick={(event) => event.stopPropagation()}
+            className="max-h-[90vh] max-w-[95vw] rounded-lg object-contain shadow-2xl"
+          />
+        </div>
+      )}
     </main>
   );
 }

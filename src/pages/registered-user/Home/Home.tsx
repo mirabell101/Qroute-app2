@@ -129,7 +129,9 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
           h-screen
           w-[220px]
           flex-col
-          bg-[#12395A]
+          border-r
+          border-white/10
+          bg-[#0f2a47]
           text-white
           sm:w-[230px]
           md:w-[240px]
@@ -149,7 +151,7 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
             rounded-lg
             transition-colors
             duration-200
-            hover:bg-[#1b4b6f]
+            hover:bg-white/10
           "
           style={{
             top: "30px",
@@ -173,7 +175,8 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
             flex
             w-full
             flex-col
-            gap-0
+            gap-1.5
+            px-3
           "
         >
           {navItems.map((item) => {
@@ -201,12 +204,15 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
                   h-[46px]
                   w-full
                   items-center
-                  px-6
+                  rounded-xl
+                  px-3
                   text-left
+                  font-medium
+                  text-white
                   transition-colors
                   duration-200
-                  hover:bg-[#d9dee3]
-                  hover:text-[#12395A]
+                  hover:bg-[#d0d5db]
+                  hover:text-[#0f2a47]
                 "
               >
                 <span
@@ -233,7 +239,6 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
                   className="
                     ml-2
                     whitespace-nowrap
-                    font-medium
                   "
                   style={{
                     fontSize: "16px",

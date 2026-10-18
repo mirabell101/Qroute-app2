@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Bell,
   Bus,
@@ -82,8 +83,16 @@ export default function Landing({
     window.location.reload();
   };
 
+const navigate = useNavigate();
 
-  const handleClick = (name: string) => {
+const handleClick = (name: string) => {
+  // Community is accessible to both guests and logged-in users.
+  if (name === "Community") {
+    navigate("/community");
+    return;
+  }
+
+  // These features require login for guests.
   if (
     !currentUserId &&
     (name === "Saved" ||
@@ -97,7 +106,7 @@ export default function Landing({
   console.log(`${name} clicked`, {
     currentUserId,
   });
-};
+};  
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-white">
@@ -144,7 +153,9 @@ export default function Landing({
     h-screen
     w-[220px]
     flex-col
-    bg-[#12395A]
+    border-r
+    border-white/10
+    bg-[#0f2a47]
     text-white
     sm:w-[230px]
     md:w-[240px]
@@ -168,7 +179,7 @@ export default function Landing({
             rounded-lg
             transition-colors
             duration-200
-            hover:bg-[#1b4b6f]
+            hover:bg-white/10
           "
           style={{
             top: "30px",
@@ -195,7 +206,8 @@ export default function Landing({
     flex
     w-full
     flex-col
-    gap-0
+    gap-1.5
+    px-3
   "
 >
           {navItems.map((item) => {
@@ -212,12 +224,15 @@ export default function Landing({
   h-[46px]
   w-full
   items-center
-  px-6
+  rounded-xl
+  px-3
   text-left
+  font-medium
+  text-white
   transition-colors
   duration-200
-  hover:bg-[#d9dee3]
-  hover:text-[#12395A]
+  hover:bg-[#d0d5db]
+  hover:text-[#0f2a47]
 "
               >
                 <span
@@ -244,7 +259,6 @@ export default function Landing({
                   className="
                     ml-2
                     whitespace-nowrap
-                    font-medium
                   "
                   style={{
                     fontSize: "16px",
@@ -273,14 +287,14 @@ export default function Landing({
               -translate-x-1/2
               items-center
               justify-center
-              rounded-lg
-              bg-white
-              text-[#12395A]
+              rounded-xl
+              bg-[#d9dee3]
+              text-[#0f2a47]
               font-semibold
               transition-all
               duration-200
               hover:-translate-y-0.5
-              hover:bg-gray-100
+              hover:bg-white
             "
           >
             Sign In
