@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ChevronLeft,
+ChevronRight,
   Bell,
   Car,
   Heart,
@@ -174,7 +176,9 @@ export default function Community({
     useState(false);
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+const [selectedImage, setSelectedImage] = useState<string | null>(null);
+const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+const [selectedImagePhotos, setSelectedImagePhotos] = useState<Photo[]>([]);
 
   const photoInputRef = useRef<HTMLInputElement>(null);
 
@@ -1124,19 +1128,108 @@ export default function Community({
                       )}
                     </div>
                   )}
+                  
 
-                  {/* POST IMAGE */}
+{/* POST PHOTOS - COLLAGE PREVIEW */}
+{post.photos?.length > 0 && (
+  <div
+    className={`mt-3 grid gap-1 overflow-hidden rounded-lg ${
+      post.photos.length === 1
+        ? "grid-cols-1"
+        : post.photos.length === 2
+          ? "grid-cols-2"
+          : "grid-cols-2 grid-rows-2"
+    }`}
+  >
+    {/* Single photo */}
+    {post.photos.length === 1 && (
+      <img
+        src={post.photos[0].dataUrl}
+        alt="Community post photo 1"
+        onClick={() => {
+          setSelectedImagePhotos(post.photos);
+          setSelectedImageIndex(0);
+          setSelectedImage(post.photos[0].dataUrl);
+        }}
+        className="h-[260px] w-full cursor-pointer object-cover"
+      />
+    )}
 
-                  {post.photos?.[0] && (
-                    <img
-                      src={post.photos[0].dataUrl}
-                      alt="Community post"
-                      onClick={() =>
-                        setSelectedImage(post.photos![0].dataUrl)
-                      }
-                      className="mt-2 h-[180px] w-full cursor-pointer rounded-lg bg-gray-50 object-cover transition-opacity hover:opacity-95"
-                    />
-                  )}
+    {/* Two photos */}
+    {post.photos.length === 2 &&
+      post.photos.map((photo, index) => (
+        <img
+          key={`${post.id}-${index}`}
+          src={photo.dataUrl}
+          alt={`Community post photo ${index + 1}`}
+          onClick={() => {
+            setSelectedImagePhotos(post.photos);
+            setSelectedImageIndex(index);
+            setSelectedImage(photo.dataUrl);
+          }}
+          className="h-[220px] w-full cursor-pointer object-cover"
+        />
+      ))}
+
+    {/* Three or more photos */}
+    {post.photos.length >= 3 && (
+      <>
+        {/* Large photo on the left */}
+        <img
+          src={post.photos[0].dataUrl}
+          alt="Community post photo 1"
+          onClick={() => {
+            setSelectedImagePhotos(post.photos);
+            setSelectedImageIndex(0);
+            setSelectedImage(post.photos[0].dataUrl);
+          }}
+          className="col-start-1 row-span-2 h-[300px] w-full cursor-pointer object-cover"
+        />
+
+        {/* Top-right photo */}
+        <img
+          src={post.photos[1].dataUrl}
+          alt="Community post photo 2"
+          onClick={() => {
+            setSelectedImagePhotos(post.photos);
+            setSelectedImageIndex(1);
+            setSelectedImage(post.photos[1].dataUrl);
+          }}
+          className="h-[148px] w-full cursor-pointer object-cover"
+        />
+
+        {/* Bottom-right photo and remaining count */}
+        <div className="relative h-[148px] overflow-hidden">
+          <img
+            src={post.photos[2].dataUrl}
+            alt="Community post photo 3"
+            onClick={() => {
+              setSelectedImagePhotos(post.photos);
+              setSelectedImageIndex(2);
+              setSelectedImage(post.photos[2].dataUrl);
+            }}
+            className="h-full w-full cursor-pointer object-cover"
+          />
+
+          {post.photos.length > 3 && (
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedImagePhotos(post.photos);
+                setSelectedImageIndex(3);
+                setSelectedImage(post.photos[3].dataUrl);
+              }}
+              className="absolute inset-0 flex items-center justify-center bg-black/55 text-3xl font-semibold text-white transition-colors hover:bg-black/65"
+              aria-label={`View ${post.photos.length - 3} more photos`}
+            >
+              +{post.photos.length - 3}
+            </button>
+          )}
+        </div>
+      </>
+    )}
+  </div>
+)}
 
                   {/* CAPTION */}
 
@@ -2001,28 +2094,80 @@ export default function Community({
 
       {/* EXPANDED IMAGE */}
 
-      {selectedImage && (
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4"
-          onClick={() => setSelectedImage(null)}
-        >
-          <button
-            type="button"
-            onClick={() => setSelectedImage(null)}
-            className="absolute right-5 top-5 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
-            aria-label="Close image"
-          >
-            <X size={28} />
-          </button>
+{selectedImage && (
+  <div
+    className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4"
+    onClick={() => setSelectedImage(null)}
+  >
+    {/* Close button */}
+    <button
+      type="button"
+      onClick={() => setSelectedImage(null)}
+      className="absolute right-5 top-5 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+      aria-label="Close image"
+    >
+      <X size={28} />
+    </button>
 
-          <img
-            src={selectedImage}
-            alt="Expanded post"
-            onClick={(event) => event.stopPropagation()}
-            className="max-h-[90vh] max-w-[95vw] rounded-lg object-contain shadow-2xl"
-          />
-        </div>
+    {/* Previous photo */}
+    {selectedImagePhotos.length > 1 && (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          const nextIndex =
+            (selectedImageIndex - 1 + selectedImagePhotos.length) %
+            selectedImagePhotos.length;
+
+          setSelectedImageIndex(nextIndex);
+          setSelectedImage(selectedImagePhotos[nextIndex].dataUrl);
+        }}
+        className="absolute left-4 z-10 rounded-full bg-black/50 p-3 text-white hover:bg-black/75"
+        aria-label="Previous photo"
+      >
+        <ChevronLeft size={30} />
+      </button>
+    )}
+
+    {/* Current photo */}
+    <div
+      className="flex max-h-[90vh] max-w-[95vw] flex-col items-center gap-3"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <img
+        src={selectedImage}
+        alt="Expanded post"
+        className="max-h-[82vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
+      />
+
+      {selectedImagePhotos.length > 1 && (
+        <p className="text-sm text-white">
+          {selectedImageIndex + 1} / {selectedImagePhotos.length}
+        </p>
       )}
+    </div>
+
+    {/* Next photo */}
+    {selectedImagePhotos.length > 1 && (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          const nextIndex =
+            (selectedImageIndex + 1) % selectedImagePhotos.length;
+
+          setSelectedImageIndex(nextIndex);
+          setSelectedImage(selectedImagePhotos[nextIndex].dataUrl);
+        }}
+        className="absolute right-4 z-10 rounded-full bg-black/50 p-3 text-white hover:bg-black/75"
+        aria-label="Next photo"
+      >
+        <ChevronRight size={30} />
+      </button>
+    )}
+  </div>
+)}
+
     </main>
   );
 }
