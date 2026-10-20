@@ -157,13 +157,21 @@ export default function Contribution({
   const [activeDraftIndex, setActiveDraftIndex] = useState(0);
   const [contribution, setContribution] = useState<
     SubmittedContribution[]
-  >([]);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  >([]);const [isSubmitting] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [showSubmitConfirmation, setShowSubmitConfirmation] = useState(false);
   const [showWithdrawConfirmation, setShowWithdrawConfirmation] =
     useState(false);
+  const [showCancelPostConfirmation, setShowCancelPostConfirmation] =
+  useState(false);
+
+const [pendingCancelPostId, setPendingCancelPostId] =
+  useState<string | null>(null);
+  const [showDeleteConfirmation, setShowDeleteConfirmation] =
+  useState(false);
+const [pendingDeletePostId, setPendingDeletePostId] =
+  useState<string | null>(null);
   const [pendingWithdrawPostId, setPendingWithdrawPostId] = useState<
     string | null
   >(null);
@@ -550,6 +558,66 @@ const confirmSubmitAll = () => {
     setShowWithdrawConfirmation(true);
   };
 
+const cancelPendingPost = (postId: string) => {
+  const post = getAllSubmitted().find(
+    (item) =>
+      item.id === postId &&
+      item.userId === currentUserId &&
+      item.status === "Pending",
+  );
+
+  if (!post) return;
+
+  setPendingCancelPostId(postId);
+  setShowCancelPostConfirmation(true);
+};
+
+const closeCancelPostConfirmation = () => {
+  setShowCancelPostConfirmation(false);
+  setPendingCancelPostId(null);
+};
+
+const confirmCancelPendingPost = () => {
+  if (!pendingCancelPostId) return;
+
+  const allPosts = getAllSubmitted();
+
+  const post = allPosts.find(
+    (item) =>
+      item.id === pendingCancelPostId &&
+      item.userId === currentUserId &&
+      item.status === "Pending",
+  );
+
+  if (!post) {
+    closeCancelPostConfirmation();
+    return;
+  }
+
+  try {
+    const updatedPosts = allPosts.filter(
+      (item) =>
+        !(
+          item.id === pendingCancelPostId &&
+          item.userId === currentUserId &&
+          item.status === "Pending"
+        ),
+    );
+
+    saveAllSubmitted(updatedPosts);
+
+    setContribution((previous) =>
+      previous.filter((item) => item.id !== pendingCancelPostId),
+    );
+
+    closeCancelPostConfirmation();
+    setNotice("Pending post cancelled successfully.");
+  } catch {
+    setNotice("Unable to cancel the post. Please try again.");
+  }
+};
+
+
   const cancelWithdrawConfirmation = () => {
     setShowWithdrawConfirmation(false);
     setPendingWithdrawPostId(null);
@@ -631,7 +699,66 @@ const confirmSubmitAll = () => {
     cancelWithdrawConfirmation();
     setShowAddPostModal(true);
   };
+const deleteApprovedPost = (postId: string) => {
+  const post = getAllSubmitted().find(
+    (item) =>
+      item.id === postId &&
+      item.userId === currentUserId &&
+      item.status === "Approved",
+  );
 
+  if (!post) return;
+
+  setPendingDeletePostId(postId);
+  setShowDeleteConfirmation(true);
+};
+
+const cancelDeleteConfirmation = () => {
+  setShowDeleteConfirmation(false);
+  setPendingDeletePostId(null);
+};
+
+const confirmDeleteApprovedPost = () => {
+  if (!pendingDeletePostId) return;
+
+  const allPosts = getAllSubmitted();
+
+  const post = allPosts.find(
+    (item) =>
+      item.id === pendingDeletePostId &&
+      item.userId === currentUserId &&
+      item.status === "Approved",
+  );
+
+  if (!post) {
+    cancelDeleteConfirmation();
+    return;
+  }
+
+  try {
+    const updatedPosts = allPosts.filter(
+      (item) =>
+        !(
+          item.id === pendingDeletePostId &&
+          item.userId === currentUserId &&
+          item.status === "Approved"
+        ),
+    );
+
+    saveAllSubmitted(updatedPosts);
+
+    setContribution((previous) =>
+      previous.filter((item) => item.id !== pendingDeletePostId),
+    );
+
+    cancelDeleteConfirmation();
+    setNotice("Approved post deleted successfully.");
+  } catch {
+    setNotice(
+      "Unable to delete the post. Please try again.",
+    );
+  }
+};
   const startRevision = (contribution: SubmittedContribution) => {
     const revisionDraft: ContributionDraft = {
       id: contribution.id,
@@ -923,19 +1050,42 @@ const confirmSubmitAll = () => {
                             {contribution.commuterType} · ₱
                             {contribution.fare}
                           </p>
+
+                          <div className="mt-3 flex justify-end">
+  <button
+    type="button"
+    onClick={() => deleteApprovedPost(contribution.id)}
+    className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-50"
+  >
+    <Trash2 size={14} />
+    Delete Post
+  </button>
+</div>
                         </>
                       )}
 
                       {/* Pending action */}
-                      {contribution.status === "Pending" && (
-                        <button
-                          type="button"
-                          onClick={() => withdrawPendingPost(contribution.id)}
-                          className="mt-3 rounded-lg border border-[#12395A] px-3 py-1.5 text-xs font-semibold text-[#12395A] transition-colors hover:bg-[#12395A] hover:text-white"
-                        >
-                          Withdraw to Edit
-                        </button>
-                      )}
+                      
+{contribution.status === "Pending" && (
+  <div className="mt-3 flex flex-wrap gap-2">
+    <button
+      type="button"
+      onClick={() => withdrawPendingPost(contribution.id)}
+      className="rounded-lg border border-[#12395A] px-3 py-1.5 text-xs font-semibold text-[#12395A] transition-colors hover:bg-[#12395A] hover:text-white"
+    >
+      Withdraw to Edit
+    </button>
+
+    <button
+      type="button"
+      onClick={() => cancelPendingPost(contribution.id)}
+      className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-50"
+    >
+      Cancel Post
+    </button>
+  </div>
+)}
+
 
                       {/* Needs Revision */}
                       {contribution.status === "Needs Revision" && (
@@ -1533,6 +1683,102 @@ const confirmSubmitAll = () => {
           </section>
         </div>
       )}
+
+
+{showCancelPostConfirmation && (
+  <div
+    className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
+    onClick={closeCancelPostConfirmation}
+  >
+    <section
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="cancel-post-title"
+      aria-describedby="cancel-post-message"
+      className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <h2
+        id="cancel-post-title"
+        className="text-lg font-semibold text-gray-900"
+      >
+        Cancel Pending Post?
+      </h2>
+
+      <p
+        id="cancel-post-message"
+        className="mt-2 text-sm leading-relaxed text-gray-600"
+      >
+        Are you sure you want to cancel this pending post?
+        It will be permanently removed from your submissions
+        and will not be saved as a draft.
+      </p>
+
+      <div className="mt-5 flex justify-end gap-3">
+        <button
+          type="button"
+          onClick={closeCancelPostConfirmation}
+          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+        >
+          Keep Post
+        </button>
+
+        <button
+          type="button"
+          onClick={confirmCancelPendingPost}
+          className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f]"
+        >
+          Confirm
+        </button>
+      </div>
+    </section>
+  </div>
+)}
+
+{showDeleteConfirmation && (
+  <div
+    className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
+    onClick={cancelDeleteConfirmation}
+  >
+    <section
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="delete-post-title"
+      className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <h2
+        id="delete-post-title"
+        className="text-lg font-semibold text-gray-900"
+      >
+        Delete Approved Post?
+      </h2>
+
+      <p className="mt-2 text-sm leading-relaxed text-gray-600">
+        Are you sure you want to delete this approved post?
+        This action cannot be undone.
+      </p>
+
+      <div className="mt-5 flex justify-end gap-3">
+        <button
+          type="button"
+          onClick={cancelDeleteConfirmation}
+          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+        >
+          Keep Post
+        </button>
+
+        <button
+          type="button"
+          onClick={confirmDeleteApprovedPost}
+          className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+        >
+          Delete Post
+        </button>
+      </div>
+    </section>
+  </div>
+)}
 
       {draftIndexToDelete !== null && (
         <div className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4">

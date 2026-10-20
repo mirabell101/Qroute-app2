@@ -17,7 +17,7 @@ import Resetpassword from "./pages/visitor/resetpassword/resetpassword";
 import TermsAndConditions from "./pages/visitor/legal/termsandcondition";
 import PrivacyPolicy from "./pages/visitor/legal/privacypolicy";
 import Profile from "./pages/registered-user/profile/profile";
-import Contribution from "./pages/registered-user/contribution/Contribution";
+import Contribution from "./pages/registered-user/contribution/contribution";
 import Community from "./pages/registered-user/community/community";
 
 import AdminBase from "./pages/admin/base/base";
