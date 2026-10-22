@@ -19,7 +19,7 @@ import PrivacyPolicy from "./pages/visitor/legal/privacypolicy";
 import Profile from "./pages/registered-user/profile/profile";
 import Contribution from "./pages/registered-user/contribution/contribution";
 import Community from "./pages/registered-user/community/community";
-
+import PointsBadges from "./pages/registered-user/points-badges/points-badges";
 import AdminBase from "./pages/admin/base/base";
 import Dashboard from "./pages/admin/dashboard/dashboard";
 import RouteManagement from "./pages/admin/route-management/route-management";
@@ -117,7 +117,19 @@ function App() {
             )
           }
         />
-
+        <Route
+  path="/points-badges"
+  element={
+    currentUserId ? (
+      <PointsBadges
+        currentUserId={currentUserId}
+        onLogout={handleLogout}
+      />
+    ) : (
+      <Navigate to="/login" replace />
+    )
+  }
+/>
         <Route
           path="/community"
           element={

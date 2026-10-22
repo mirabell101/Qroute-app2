@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface Account {
   id: string;
@@ -24,6 +24,58 @@ function getStoredAccounts(): Account[] {
   }
 }
 
+const SUBMITTED_KEY = "qroute_submitted_contributions";
+
+interface SubmittedContribution {
+  id: string;
+  userId: string;
+  status: "Pending" | "Approved" | "Needs Revision";
+  submittedAt: string;
+}
+
+interface RewardRecord {
+  totalPoints: number;
+  awardedContributionIds: string[];
+}
+
+const getRewardsStorageKey = (userId: string) =>
+  `qroute_rewards_${userId}`;
+
+function getStoredRewards(userId: string): RewardRecord {
+  try {
+    const stored = localStorage.getItem(getRewardsStorageKey(userId));
+
+    if (stored) {
+      const parsed = JSON.parse(stored) as Partial<RewardRecord>;
+
+      return {
+        totalPoints:
+          typeof parsed.totalPoints === "number" ? parsed.totalPoints : 0,
+        awardedContributionIds: Array.isArray(
+          parsed.awardedContributionIds,
+        )
+          ? parsed.awardedContributionIds
+          : [],
+      };
+    }
+  } catch {
+    // Use the default rewards record if storage cannot be read.
+  }
+
+  return {
+    totalPoints: 0,
+    awardedContributionIds: [],
+  };
+}
+
+const BADGE_MILESTONES = [
+  { name: "First Contributor", required: 1, emoji: "🌱" },
+  { name: "Route Explorer", required: 5, emoji: "🧭" },
+  { name: "Fare Guide", required: 10, emoji: "💡" },
+  { name: "Commuter Champion", required: 25, emoji: "🏆" },
+  { name: "QRoute Legend", required: 50, emoji: "⭐" },
+];
+
 function Profile({ currentUserId, onLogout }: ProfileProps) {
   const [accounts, setAccounts] = useState<Account[]>(getStoredAccounts);
   const [editingUsername, setEditingUsername] = useState(false);
@@ -38,6 +90,73 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error">("error");
+
+  const [rewards, setRewards] = useState<RewardRecord>(() =>
+  getStoredRewards(currentUserId),
+);
+
+useEffect(() => {
+  if (!currentUserId) return;
+
+  let submittedContributions: SubmittedContribution[] = [];
+
+  try {
+    const stored = localStorage.getItem(SUBMITTED_KEY);
+    submittedContributions = stored
+      ? (JSON.parse(stored) as SubmittedContribution[])
+      : [];
+  } catch {
+    return;
+  }
+
+  const approvedContributions = submittedContributions
+    .filter(
+      (post) =>
+        post.userId === currentUserId && post.status === "Approved",
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.submittedAt).getTime() -
+        new Date(b.submittedAt).getTime(),
+    );
+
+  const currentRewards = getStoredRewards(currentUserId);
+  const awardedIds = new Set(currentRewards.awardedContributionIds);
+
+  const newlyApproved = approvedContributions.filter(
+    (post) => !awardedIds.has(post.id),
+  );
+
+  if (newlyApproved.length === 0) {
+    setRewards(currentRewards);
+    return;
+  }
+
+  let totalPoints = currentRewards.totalPoints;
+  const updatedIds = [...currentRewards.awardedContributionIds];
+
+  newlyApproved.forEach((post) => {
+    totalPoints += updatedIds.length === 0 ? 75 : 50;
+    updatedIds.push(post.id);
+  });
+
+  const updatedRewards: RewardRecord = {
+    totalPoints,
+    awardedContributionIds: updatedIds,
+  };
+
+  try {
+    localStorage.setItem(
+      getRewardsStorageKey(currentUserId),
+      JSON.stringify(updatedRewards),
+    );
+
+    setRewards(updatedRewards);
+  } catch {
+    // Keep the current rewards if the browser cannot save the update.
+    setRewards(currentRewards);
+  }
+}, [currentUserId]);
 
   const currentAccount = accounts.find(
     (account) => account.id === currentUserId
@@ -247,6 +366,76 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
         <p className="mt-1 text-[13px] text-gray-500">
           {currentAccount.email}
         </p>
+
+        {/* POINTS AND BADGES */}
+<section className="mt-8 w-full rounded-xl border border-gray-200 bg-white p-5 shadow-[0_2px_8px_rgba(0,0,0,0.05)]">
+  <h2 className="text-base font-semibold text-gray-900">
+    Points and Badges
+  </h2>
+
+  <div className="mt-4 rounded-lg bg-[#f4f2ff] p-4">
+    <p className="text-sm font-medium text-gray-600">Total QPoints</p>
+
+    <p className="mt-1 text-3xl font-bold text-[#6355F5]">
+      {rewards.totalPoints.toLocaleString()}
+    </p>
+
+    <p className="mt-1 text-xs text-gray-500">
+      Earn points from approved contributions.
+    </p>
+  </div>
+
+  <div className="mt-5">
+    <div className="flex items-center justify-between gap-3">
+      <h3 className="text-sm font-semibold text-gray-900">
+        Earned Badges
+      </h3>
+
+      <span className="text-xs text-gray-500">
+        {
+          BADGE_MILESTONES.filter(
+            (badge) =>
+              rewards.awardedContributionIds.length >= badge.required,
+          ).length
+        } / {BADGE_MILESTONES.length}
+      </span>
+    </div>
+
+    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {BADGE_MILESTONES.map((badge) => {
+        const earned =
+          rewards.awardedContributionIds.length >= badge.required;
+
+        return (
+          <div
+            key={badge.name}
+            className={`flex items-center gap-3 rounded-lg border p-3 ${
+              earned
+                ? "border-[#d8d2ff] bg-[#faf9ff]"
+                : "border-gray-200 bg-gray-50 opacity-65"
+            }`}
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-xl">
+              {earned ? badge.emoji : "🔒"}
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-900">
+                {badge.name}
+              </p>
+
+              <p className="mt-0.5 text-xs text-gray-500">
+                {earned
+                  ? "Badge earned"
+                  : `${badge.required} approved contributions required`}
+              </p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+</section>
 
         {message && (
           <p

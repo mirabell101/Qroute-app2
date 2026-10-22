@@ -76,6 +76,7 @@ function getStoredAccounts(): Account[] {
 
 export default function Home({ currentUserId, onLogout }: HomeProps) {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showSignInPrompt, setShowSignInPrompt] = useState(false);
 
   const accounts = getStoredAccounts();
 
@@ -543,7 +544,21 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
     >
       Account
     </button>
+<button
+  type="button"
+  onClick={() => {
+    setShowProfileMenu(false);
 
+    if (currentUserId) {
+      window.location.href = "/points-badges";
+    } else {
+      setShowSignInPrompt(true);
+    }
+  }}
+  className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+>
+  Badges
+</button>
     <button
       type="button"
       onClick={() => {
@@ -559,6 +574,41 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
 )}
         </div>
       </header>
+
+      {showSignInPrompt && (
+  <div className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/40 p-4">
+    <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
+      <h2 className="text-lg font-semibold text-gray-900">
+        Sign in required
+      </h2>
+
+      <p className="mt-2 text-sm text-gray-600">
+        Please sign in to view your QPoints and badges.
+      </p>
+
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => setShowSignInPrompt(false)}
+          className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100"
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setShowSignInPrompt(false);
+            window.location.href = "/login";
+          }}
+          className="rounded-lg bg-[#0f2a47] px-4 py-2 text-sm font-medium text-white hover:bg-[#183b60]"
+        >
+          Sign In
+        </button>
+      </div>
+    </div>
+  </div>
+)}
     </main>
   );
 }
