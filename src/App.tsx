@@ -7,16 +7,16 @@ import {
   Navigate,
 } from "react-router-dom";
 
-import Landing from "./pages/visitor/landing/landing";
-import Home from "./pages/registered-user/home/home";
+import Landing from "./pages/visitor/landing/Landing";
+import Home from "./pages/registered-user/Home/Home";
 import Login from "./pages/visitor/login/login";
 import SignUp from "./pages/visitor/signup/signup";
-import OTP from "./pages/visitor/otp/otp";
-import Forgotpassword from "./pages/visitor/forgotpassword/forgotpassword";
-import Resetpassword from "./pages/visitor/resetpassword/resetpassword";
-import TermsAndConditions from "./pages/visitor/legal/termsandcondition";
-import PrivacyPolicy from "./pages/visitor/legal/privacypolicy";
-import Profile from "./pages/registered-user/profile/profile";
+import OTP from "./pages/visitor/OTP/OTP";
+import Forgotpassword from "./pages/visitor/Forgotpassword/Forgotpassword";
+import Resetpassword from "./pages/visitor/Resetpassword/Resetpassword";
+import TermsAndConditions from "./pages/visitor/Legal/TermsAndCondition";
+import PrivacyPolicy from "./pages/visitor/Legal/PrivacyPolicy";
+import Profile from "./pages/registered-user/Profile/Profile";
 import Contribution from "./pages/registered-user/contribution/contribution";
 import Community from "./pages/registered-user/community/community";
 import PointsBadges from "./pages/registered-user/points-badges/points-badges";
