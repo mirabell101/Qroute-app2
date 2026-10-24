@@ -7,7 +7,7 @@ import {
   Navigate,
 } from "react-router-dom";
 
-import Landing from "./pages/visitor/landing/Landing";
+import Landing from "./pages/visitor/landing/landing";
 import Home from "./pages/registered-user/Home/Home";
 import Login from "./pages/visitor/login/login";
 import SignUp from "./pages/visitor/signup/signup";
