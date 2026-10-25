@@ -1,11 +1,14 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import {
   BrowserRouter,
   Routes,
   Route,
   Navigate,
 } from "react-router-dom";
+
+import { supabase } from "./lib/supabase";
 
 import Landing from "./pages/visitor/Landing/Landing";
 import Home from "./pages/registered-user/Home/Home";
@@ -27,29 +30,75 @@ import PostManagement from "./pages/admin/post-management/post-management";
 import Reports from "./pages/admin/reports/reports";
 import UserManagement from "./pages/admin/user-management/user-management";
 
-const CURRENT_USER_KEY = "qroute_current_user";
-
-function getCurrentUserId(): string | null {
-  const persistentUser = localStorage.getItem(CURRENT_USER_KEY);
-
-  if (persistentUser) return persistentUser;
-
-  const sessionUser = sessionStorage.getItem(CURRENT_USER_KEY);
-
-  if (sessionUser) return sessionUser;
-
-  return null;
-}
-
 function App() {
-  const [currentUserId, setCurrentUserId] = useState<string | null>(
-    getCurrentUserId()
-  );
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  const handleLogout = () => {
-    localStorage.removeItem(CURRENT_USER_KEY);
-    sessionStorage.removeItem(CURRENT_USER_KEY);
+  useEffect(() => {
+    let active = true;
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+
+      setCurrentUserId(session?.user.id ?? null);
+      setAuthLoading(false);
+    });
+
+    const restoreSession = async () => {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (!active) return;
+
+      if (error) {
+        console.error(
+          "Could not restore Supabase session:",
+          error.message
+        );
+      }
+
+      setCurrentUserId(data.session?.user.id ?? null);
+      setAuthLoading(false);
+    };
+
+    void restoreSession();
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleLogout = async (): Promise<void> => {
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      console.error("Logout failed:", error.message);
+      throw error;
+    }
+
+    // Remove legacy local authentication values, if any remain.
+    localStorage.removeItem("qroute_current_user");
+    sessionStorage.removeItem("qroute_current_user");
+
     setCurrentUserId(null);
+  };
+
+  // Render a protected page only after authentication has been checked.
+  // The callback receives a string, so protected components don't receive null.
+  const protectedPage = (
+    renderPage: (userId: string) => ReactNode
+  ): ReactNode => {
+    if (authLoading) {
+      return null;
+    }
+
+    if (!currentUserId) {
+      return <Navigate to="/login" replace />;
+    }
+
+    return renderPage(currentUserId);
   };
 
   return (
@@ -65,6 +114,7 @@ function App() {
             />
           }
         />
+
         <Route
           path="/base"
           element={
@@ -78,87 +128,101 @@ function App() {
         {/* Registered-user routes */}
         <Route
           path="/home"
-          element={
-            currentUserId ? (
-              <Home
-                currentUserId={currentUserId}
-                onLogout={handleLogout}
-              />
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
+          element={protectedPage((userId) => (
+            <Home
+              currentUserId={userId}
+              onLogout={handleLogout}
+            />
+          ))}
         />
 
         <Route
           path="/contribution"
-          element={
-            currentUserId ? (
-              <Contribution
-                currentUserId={currentUserId}
-                onLogout={handleLogout}
-              />
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
+          element={protectedPage((userId) => (
+            <Contribution
+              currentUserId={userId}
+              onLogout={handleLogout}
+            />
+          ))}
         />
 
         <Route
           path="/profile"
-          element={
-            currentUserId ? (
-              <Profile
-                currentUserId={currentUserId}
-                onLogout={handleLogout}
-              />
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
-        />
-        <Route
-  path="/points-badges"
-  element={
-    currentUserId ? (
-      <PointsBadges
-        currentUserId={currentUserId}
-        onLogout={handleLogout}
-      />
-    ) : (
-      <Navigate to="/login" replace />
-    )
-  }
-/>
-        <Route
-          path="/community"
-          element={
-            <Community
-              currentUserId={currentUserId}
+          element={protectedPage((userId) => (
+            <Profile
+              currentUserId={userId}
               onLogout={handleLogout}
             />
-          }
+          ))}
+        />
+
+        <Route
+          path="/points-badges"
+          element={protectedPage((userId) => (
+            <PointsBadges
+              currentUserId={userId}
+              onLogout={handleLogout}
+            />
+          ))}
+        />
+
+        <Route
+          path="/community"
+          element={protectedPage((userId) => (
+            <Community
+              currentUserId={userId}
+              onLogout={handleLogout}
+            />
+          ))}
         />
 
         {/* Visitor routes */}
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<SignUp />} />
         <Route path="/otp" element={<OTP />} />
-        <Route path="/forgot-password" element={<Forgotpassword />} />
-        <Route path="/reset-password" element={<Resetpassword />} />
-        <Route path="/terms-and-condition" element={<TermsAndConditions />} />
-        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
 
-        {/* Admin routes */}
+        <Route
+          path="/forgot-password"
+          element={<Forgotpassword />}
+        />
+
+        <Route
+          path="/reset-password"
+          element={<Resetpassword />}
+        />
+
+        <Route
+          path="/terms-and-condition"
+          element={<TermsAndConditions />}
+        />
+
+        <Route
+          path="/privacy-policy"
+          element={<PrivacyPolicy />}
+        />
+
+        {/* Admin routes — role-based authorization is still needed */}
         <Route path="/admin" element={<AdminBase />} />
         <Route path="/admin/dashboard" element={<Dashboard />} />
-        <Route path="/admin/routes" element={<RouteManagement />} />
-        <Route path="/admin/post-management" element={<PostManagement />} />
+
+        <Route
+          path="/admin/routes"
+          element={<RouteManagement />}
+        />
+
+        <Route
+          path="/admin/post-management"
+          element={<PostManagement />}
+        />
+
         <Route path="/admin/reports" element={<Reports />} />
         <Route path="/admin/users" element={<UserManagement />} />
 
         {/* Unknown routes */}
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route
+          path="*"
+          element={<Navigate to="/" replace />}
+        />
       </Routes>
     </BrowserRouter>
   );

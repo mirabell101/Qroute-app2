@@ -1,6 +1,6 @@
 
 import "dotenv/config";
-
+import authRoutes from './routes/authRoutes.ts';
 import express, {
   type Request,
   type Response,
@@ -11,13 +11,14 @@ import {
   getSupabaseClient,
   getSupabaseUrlSafe,
   isSupabaseConfigured,
-} from "./supabaseClient.js";
+} from "./supabaseClient.ts";
 
 const app = express();
-const port = Number(process.env.PORT) || 3001;
+const port = Number(process.env.PORT) || 3000;
 const startedAt = Date.now();
 
 app.use(express.json());
+app.use("/api/auth", authRoutes);
 
 // Express server health check
 app.get("/api/health", (_req: Request, res: Response) => {
@@ -28,7 +29,7 @@ app.get("/api/health", (_req: Request, res: Response) => {
   });
 });
 
-// Supabase service connectivity check
+// Supabase Auth service connectivity check
 app.get(
   "/api/db/health",
   async (_req: Request, res: Response) => {
@@ -53,7 +54,7 @@ app.get(
       // Verify that the Supabase client can be initialized.
       getSupabaseClient();
 
-      // Check the Supabase Auth service.
+      // Check whether Supabase Auth is reachable.
       const response = await fetch(`${url}/auth/v1/health`, {
         method: "GET",
         headers: {
@@ -62,11 +63,8 @@ app.get(
       });
 
       if (!response.ok) {
-        const details = await response.text();
-
         console.error(
-          `[server] Supabase returned HTTP ${response.status}:`,
-          details
+          `[server] Supabase Auth returned HTTP ${response.status}`
         );
 
         res.status(503).json({
@@ -98,6 +96,74 @@ app.get(
         configured: true,
         connected: false,
         message: "Could not reach Supabase",
+      });
+    }
+  }
+);
+
+// Supabase roles table connectivity check
+app.get(
+  "/api/db/roles",
+  async (_req: Request, res: Response) => {
+    if (!isSupabaseConfigured()) {
+      res.status(503).json({
+        status: "error",
+        table: "roles",
+        configured: false,
+        connected: false,
+        message: "Supabase is not configured",
+      });
+      return;
+    }
+
+    const started = Date.now();
+
+    try {
+      const supabase = getSupabaseClient();
+
+      const { data, error } = await supabase
+        .from("roles")
+        .select("id, name, description, created_at")
+        .order("id", { ascending: true });
+
+      if (error) {
+        console.error("[server] Roles query failed:", {
+          code: error.code,
+          message: error.message,
+        });
+
+        res.status(500).json({
+          status: "error",
+          table: "roles",
+          configured: true,
+          connected: false,
+          message: error.message,
+          code: error.code,
+        });
+        return;
+      }
+
+      res.status(200).json({
+        status: "ok",
+        table: "roles",
+        configured: true,
+        connected: true,
+        count: data.length,
+        latencyMs: Date.now() - started,
+        roles: data,
+      });
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+
+      console.error("[server] Roles health check failed:", message);
+
+      res.status(503).json({
+        status: "error",
+        table: "roles",
+        configured: true,
+        connected: false,
+        message: "Could not query the roles table",
       });
     }
   }

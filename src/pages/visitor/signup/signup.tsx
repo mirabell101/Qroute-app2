@@ -1,105 +1,57 @@
-import { useEffect, useState } from "react";
+
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Eye, EyeOff, User, Mail, Lock } from "lucide-react";
+
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+
 import qrouteLogo from "@/assets/logoboi.png";
 import appLogo from "@/assets/APP VER (1).png";
 
-interface Account {
-  id: string;
-  username: string;
-  email: string;
-  password: string;
-  profilePicture: string | null;
-}
-
-const ACCOUNTS_KEY = "qroute_accounts";
-const SIGNUP_FORM_KEY = "qroute_signup_form";
-
-function getStoredAccounts(): Account[] {
-  try {
-    const stored = localStorage.getItem(ACCOUNTS_KEY);
-    return stored ? (JSON.parse(stored) as Account[]) : [];
-  } catch {
-    return [];
-  }
-}
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
 
 function SignUp() {
   const navigate = useNavigate();
 
+  // Password visibility
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
+  // Form values
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-
   const [termsAccepted, setTermsAccepted] = useState(false);
-  const [formRestored, setFormRestored] = useState(false);
-useEffect(() => {
-  try {
-    const savedForm = sessionStorage.getItem(SIGNUP_FORM_KEY);
 
-    if (savedForm) {
-      const form = JSON.parse(savedForm);
-
-      setUsername(form.username ?? "");
-      setEmail(form.email ?? "");
-      setPassword(form.password ?? "");
-      setConfirmPassword(form.confirmPassword ?? "");
-      setTermsAccepted(form.termsAccepted ?? false);
-    }
-  } catch {
-    sessionStorage.removeItem(SIGNUP_FORM_KEY);
-  } finally {
-    setFormRestored(true);
-  }
-}, []);
-
+  // Validation errors
   const [usernameError, setUsernameError] = useState("");
   const [emailError, setEmailError] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [confirmPasswordError, setConfirmPasswordError] = useState("");
   const [termsError, setTermsError] = useState("");
 
+  // Server request status
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [serverError, setServerError] = useState("");
+
+  // Validate username
   const validateUsername = (value: string) => {
     if (!value.trim()) {
       return "Username is required.";
     }
 
+    if (!/^[a-zA-Z0-9_]{3,30}$/.test(value.trim())) {
+      return "Username must be 3–30 characters and contain only letters, numbers, or underscores.";
+    }
+
     return "";
   };
 
-  useEffect(() => {
-  if (!formRestored) return;
-
-  try {
-    sessionStorage.setItem(
-      SIGNUP_FORM_KEY,
-      JSON.stringify({
-        username,
-        email,
-        password,
-        confirmPassword,
-        termsAccepted,
-      })
-    );
-  } catch {
-    // Ignore storage errors; the form remains usable.
-  }
-}, [
-  formRestored,
-  username,
-  email,
-  password,
-  confirmPassword,
-  termsAccepted,
-]);
-
+  // Validate email
   const validateEmail = (value: string) => {
     if (!value.trim()) {
       return "Email address is required.";
@@ -112,6 +64,7 @@ useEffect(() => {
     return "";
   };
 
+  // Validate password
   const validatePassword = (value: string) => {
     if (!value) {
       return "Password is required.";
@@ -140,6 +93,7 @@ useEffect(() => {
     return "";
   };
 
+  // Validate password confirmation
   const validateConfirmPassword = (value: string) => {
     if (!value) {
       return "Please confirm your password.";
@@ -152,94 +106,117 @@ useEffect(() => {
     return "";
   };
 
-  const handleSignUp = () => {
+  // Submit registration to Express
+  const handleSignUp = async () => {
+    if (isSubmitting) return;
+
     const normalizedUsername = username.trim();
     const normalizedEmail = email.trim().toLowerCase();
 
-    const usernameValidation = validateUsername(normalizedUsername);
-    const emailValidation = validateEmail(normalizedEmail);
-    const passwordValidation = validatePassword(password);
+    const usernameValidation =
+      validateUsername(normalizedUsername);
+    const emailValidation =
+      validateEmail(normalizedEmail);
+    const passwordValidation =
+      validatePassword(password);
     const confirmPasswordValidation =
       validateConfirmPassword(confirmPassword);
-
     const termsValidation = termsAccepted
       ? ""
-      : "You must accept the Terms and Conditions.";
-
-    const accounts = getStoredAccounts();
-
-    const existingAccount = accounts.some(
-      (account) =>
-        account.email.toLowerCase() === normalizedEmail
-    );
+      : "You must accept the Terms and Conditions and Privacy Policy.";
 
     setUsernameError(usernameValidation);
-
-    setEmailError(
-      emailValidation ||
-        (existingAccount
-          ? "An account with this Gmail already exists."
-          : "")
-    );
-
+    setEmailError(emailValidation);
     setPasswordError(passwordValidation);
     setConfirmPasswordError(confirmPasswordValidation);
     setTermsError(termsValidation);
+    setServerError("");
 
     if (
       usernameValidation ||
       emailValidation ||
       passwordValidation ||
       confirmPasswordValidation ||
-      termsValidation ||
-      existingAccount
+      termsValidation
     ) {
       return;
     }
 
-    const newAccount: Account = {
-      id: crypto.randomUUID(),
-      username: normalizedUsername,
-      email: normalizedEmail,
-      password,
-      profilePicture: null,
-    };
-
-    const updatedAccounts = [...accounts, newAccount];
-
     try {
-      localStorage.setItem(
-        ACCOUNTS_KEY,
-        JSON.stringify(updatedAccounts)
+      setIsSubmitting(true);
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/auth/register`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            username: normalizedUsername,
+            displayName: normalizedUsername,
+            email: normalizedEmail,
+            password,
+          }),
+        }
       );
 
-sessionStorage.removeItem(SIGNUP_FORM_KEY);
+      // Handle responses that may not contain valid JSON
+      const result = await response.json().catch(() => null);
 
-      navigate("/otp", {
-        state: {
-          userId: newAccount.id,
-          email: newAccount.email,
-          mode: "signup",
-        },
-      });
-    } catch {
-      setEmailError(
-        "Unable to save your account. Please try again."
+      if (!response.ok || !result?.success) {
+        setServerError(
+          result?.message ||
+            "Registration failed. Please try again."
+        );
+        return;
+      }
+
+      // Clear sensitive form values after successful registration
+      setPassword("");
+      setConfirmPassword("");
+
+      if (result.requiresEmailVerification && result.user) {
+        navigate("/otp", {
+          state: {
+            userId: result.user.id,
+            email: result.user.email || normalizedEmail,
+            mode: "signup",
+          },
+        });
+      } else {
+        // For configurations that do not require email confirmation
+        navigate("/login", {
+          state: {
+            message:
+              result.message ||
+              "Your account was created successfully.",
+            email: normalizedEmail,
+          },
+        });
+      }
+    } catch (error) {
+      console.error("Registration request failed:", error);
+
+      setServerError(
+        "Unable to connect to the server. Make sure the Express backend is running."
       );
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
-    <main className="relative flex h-screen w-screen items-center justify-center overflow-hidden bg-white px-4">
+    <main className="relative flex min-h-screen w-screen items-center justify-center overflow-x-hidden bg-white px-4 py-8">
       {/* TOP-LEFT LOGO */}
       <img
         src={qrouteLogo}
         alt="Qroute"
-        className="absolute left-15 top-10 h-auto w-[160px] object-contain"
+        className="absolute left-6 top-6 h-auto w-[130px] object-contain sm:left-15 sm:top-10 sm:w-[160px]"
       />
 
       {/* SIGN UP CARD */}
-      <div className="w-full max-w-[450px] rounded-[6px] border border-[#e1e1e1] bg-white px-10 py-6 shadow-[0_1px_6px_rgba(0,0,0,0.08)]">
+      <div className="w-full max-w-[450px] rounded-[6px] border border-[#e1e1e1] bg-white px-6 py-6 shadow-[0_1px_6px_rgba(0,0,0,0.08)] sm:px-10">
         {/* HEADER */}
         <div className="flex items-center justify-center">
           <img
@@ -277,14 +254,15 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
             <Input
               id="username"
               type="text"
+              autoComplete="username"
               placeholder="Enter your username"
               value={username}
+              maxLength={30}
+              disabled={isSubmitting}
               onChange={(e) => {
                 setUsername(e.target.value);
-
-                if (usernameError) {
-                  setUsernameError("");
-                }
+                setUsernameError("");
+                setServerError("");
               }}
               className={`h-9 rounded-[5px] border pl-9 pr-3 text-[12px] shadow-none ${
                 usernameError
@@ -295,7 +273,7 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
           </div>
 
           {usernameError && (
-            <p className="mt-1 px-1 text-[10px] leading-none text-red-500">
+            <p className="mt-1 px-1 text-[10px] leading-tight text-red-500">
               {usernameError}
             </p>
           )}
@@ -319,14 +297,14 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
             <Input
               id="email"
               type="email"
+              autoComplete="email"
               placeholder="Enter your email"
               value={email}
+              disabled={isSubmitting}
               onChange={(e) => {
                 setEmail(e.target.value);
-
-                if (emailError) {
-                  setEmailError("");
-                }
+                setEmailError("");
+                setServerError("");
               }}
               className={`h-9 rounded-[5px] border pl-9 pr-3 text-[12px] shadow-none ${
                 emailError
@@ -337,7 +315,7 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
           </div>
 
           {emailError && (
-            <p className="mt-1 px-1 text-[10px] leading-none text-red-500">
+            <p className="mt-1 px-1 text-[10px] leading-tight text-red-500">
               {emailError}
             </p>
           )}
@@ -361,18 +339,15 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
             <Input
               id="password"
               type={showPassword ? "text" : "password"}
+              autoComplete="new-password"
               placeholder="Enter your password"
               value={password}
+              disabled={isSubmitting}
               onChange={(e) => {
                 setPassword(e.target.value);
-
-                if (passwordError) {
-                  setPasswordError("");
-                }
-
-                if (confirmPasswordError) {
-                  setConfirmPasswordError("");
-                }
+                setPasswordError("");
+                setConfirmPasswordError("");
+                setServerError("");
               }}
               className={`h-9 rounded-[5px] border pl-9 pr-10 text-[12px] shadow-none ${
                 passwordError
@@ -383,12 +358,11 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
 
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() => setShowPassword(!showPassword)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black"
               aria-label={
-                showPassword
-                  ? "Hide password"
-                  : "Show password"
+                showPassword ? "Hide password" : "Show password"
               }
             >
               {showPassword ? (
@@ -412,7 +386,8 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
             htmlFor="confirmPassword"
             className="text-[12px] font-medium text-black"
           >
-            Confirm Password <span className="text-red-500">*</span>
+            Confirm Password{" "}
+            <span className="text-red-500">*</span>
           </label>
 
           <div className="relative mt-1.5">
@@ -424,14 +399,14 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
             <Input
               id="confirmPassword"
               type={showConfirmPassword ? "text" : "password"}
+              autoComplete="new-password"
               placeholder="Enter your password again"
               value={confirmPassword}
+              disabled={isSubmitting}
               onChange={(e) => {
                 setConfirmPassword(e.target.value);
-
-                if (confirmPasswordError) {
-                  setConfirmPasswordError("");
-                }
+                setConfirmPasswordError("");
+                setServerError("");
               }}
               className={`h-9 rounded-[5px] border pl-9 pr-10 text-[12px] shadow-none ${
                 confirmPasswordError
@@ -442,6 +417,7 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
 
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() =>
                 setShowConfirmPassword(!showConfirmPassword)
               }
@@ -461,7 +437,7 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
           </div>
 
           {confirmPasswordError && (
-            <p className="mt-1 px-1 text-[10px] leading-none text-red-500">
+            <p className="mt-1 px-1 text-[10px] leading-tight text-red-500">
               {confirmPasswordError}
             </p>
           )}
@@ -473,12 +449,15 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
             <Checkbox
               id="terms"
               checked={termsAccepted}
+              disabled={isSubmitting}
               onCheckedChange={(checked) => {
                 setTermsAccepted(checked === true);
 
                 if (checked === true) {
                   setTermsError("");
                 }
+
+                setServerError("");
               }}
               className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-[2px]"
             />
@@ -491,10 +470,10 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
               <button
                 type="button"
                 onClick={() =>
-  navigate("/terms-and-condition", {
-    state: { from: "/signup" },
-  })
-}
+                  navigate("/terms-and-condition", {
+                    state: { from: "/signup" },
+                  })
+                }
                 className="font-medium text-[#6C3FF5] hover:underline"
               >
                 Terms and Conditions
@@ -503,32 +482,43 @@ sessionStorage.removeItem(SIGNUP_FORM_KEY);
               <button
                 type="button"
                 onClick={() =>
-  navigate("/privacy-policy", {
-    state: { from: "/signup" },
-  })
-}
+                  navigate("/privacy-policy", {
+                    state: { from: "/signup" },
+                  })
+                }
                 className="font-medium text-[#6C3FF5] hover:underline"
               >
                 Privacy Policy
-              </button>{" "}
+              </button>
               . <span className="text-red-500">*</span>
             </label>
           </div>
 
           {termsError && (
-            <p className="mt-1 px-1 text-[10px] leading-none text-red-500">
+            <p className="mt-1 px-1 text-[10px] leading-tight text-red-500">
               {termsError}
             </p>
           )}
         </div>
 
+        {/* SERVER ERROR */}
+        {serverError && (
+          <p
+            role="alert"
+            className="mt-3 text-center text-[11px] leading-relaxed text-red-500"
+          >
+            {serverError}
+          </p>
+        )}
+
         {/* SIGN UP */}
         <Button
           type="button"
           onClick={handleSignUp}
-          className="mt-4 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8]"
+          disabled={isSubmitting}
+          className="mt-4 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8] disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Sign Up
+          {isSubmitting ? "Creating Account..." : "Sign Up"}
         </Button>
 
         {/* SIGN IN */}
