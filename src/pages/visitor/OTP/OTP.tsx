@@ -8,7 +8,7 @@ import qrouteLogo from "@/assets/logoboi.png";
 import appLogo from "@/assets/APP VER (1).png";
 
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
 
 interface OTPRouteState {
   userId?: string;
@@ -28,13 +28,13 @@ function OTP() {
     "", "", "", "", "", "",
   ]);
 
-  const [timeLeft, setTimeLeft] = useState(180);
   const [resendCooldown, setResendCooldown] = useState(30);
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [isResending, setIsResending] = useState(false);
+  const [isVerified, setIsVerified] = useState(false);
 
   // Require navigation state from the signup page.
   useEffect(() => {
@@ -43,24 +43,14 @@ function OTP() {
     }
   }, [email, mode, navigate]);
 
-  // Countdown for the current code.
-  // Supabase remains responsible for actual OTP expiration.
-  useEffect(() => {
-    if (timeLeft <= 0) return;
-
-    const timer = window.setInterval(() => {
-      setTimeLeft((previous) => Math.max(0, previous - 1));
-    }, 1000);
-
-    return () => window.clearInterval(timer);
-  }, [timeLeft]);
-
   // Resend cooldown.
   useEffect(() => {
     if (resendCooldown <= 0) return;
 
     const timer = window.setInterval(() => {
-      setResendCooldown((previous) => Math.max(0, previous - 1));
+      setResendCooldown((previous) =>
+        Math.max(0, previous - 1)
+      );
     }, 1000);
 
     return () => window.clearInterval(timer);
@@ -129,7 +119,7 @@ function OTP() {
   };
 
   const handleVerify = async () => {
-    if (isVerifying || isResending) return;
+    if (isVerifying || isResending || isVerified) return;
 
     const enteredOTP = otpInputs.join("");
 
@@ -168,7 +158,10 @@ function OTP() {
         return;
       }
 
-      setSuccess("Email verified successfully! Redirecting to sign in...");
+      setIsVerified(true);
+      setSuccess(
+        "Email verified successfully! Redirecting to sign in..."
+      );
 
       window.setTimeout(() => {
         navigate("/login", {
@@ -184,19 +177,30 @@ function OTP() {
     } catch (requestError) {
       console.error("OTP verification request failed:", requestError);
 
-      setError(
-        "Unable to connect to the server. Please try again."
-      );
+      setError("Unable to connect to the server. Please try again.");
     } finally {
       setIsVerifying(false);
     }
   };
 
   const handleResend = async () => {
-    if (isResending || isVerifying || resendCooldown > 0) return;
+    if (
+      isResending ||
+      isVerifying ||
+      isVerified ||
+      resendCooldown > 0
+    ) {
+      return;
+    }
 
     setError("");
     setSuccess("");
+
+    const controller = new AbortController();
+
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, 15000);
 
     try {
       setIsResending(true);
@@ -209,6 +213,7 @@ function OTP() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ email }),
+          signal: controller.signal,
         }
       );
 
@@ -223,27 +228,31 @@ function OTP() {
       }
 
       setOtpInputs(["", "", "", "", "", ""]);
-      setTimeLeft(180);
       setResendCooldown(30);
-      setSuccess("If your account can receive a new code, an email will be sent.");
-
-      document.getElementById("otp-0")?.focus();
-    } catch (requestError) {
-      console.error("OTP resend request failed:", requestError);
-
-      setError(
-        "Unable to connect to the server. Please try again."
+      setSuccess(
+        "If your account can receive a new code, an email will be sent."
       );
+
+      // Focus after React has rendered the cleared inputs.
+      window.setTimeout(() => {
+        document.getElementById("otp-0")?.focus();
+      }, 0);
+    } catch (requestError) {
+      if (
+        requestError instanceof Error &&
+        requestError.name === "AbortError"
+      ) {
+        setError(
+          "The request took too long. Check your connection and try again."
+        );
+      } else {
+        console.error("OTP resend request failed:", requestError);
+        setError("Unable to connect to the server. Please try again.");
+      }
     } finally {
+      window.clearTimeout(timeoutId);
       setIsResending(false);
     }
-  };
-
-  const formatTime = () => {
-    const minutes = Math.floor(timeLeft / 60);
-    const seconds = timeLeft % 60;
-
-    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   };
 
   if (!email || mode !== "signup") {
@@ -303,7 +312,7 @@ function OTP() {
               maxLength={1}
               aria-label={`Verification digit ${index + 1}`}
               value={value}
-              disabled={isVerifying || isResending || !!success}
+              disabled={isVerifying || isResending || isVerified}
               onChange={(event) =>
                 handleOTPChange(index, event.target.value)
               }
@@ -316,22 +325,6 @@ function OTP() {
               }`}
             />
           ))}
-        </div>
-
-        {/* TIMER */}
-        <div className="mt-4 text-center">
-          {timeLeft > 0 ? (
-            <p className="text-[11px] text-gray-500">
-              Local countdown{" "}
-              <span className="font-semibold text-[#6355F5]">
-                {formatTime()}
-              </span>
-            </p>
-          ) : (
-            <p className="text-[11px] font-medium text-red-500">
-              Countdown ended. Request a new code if necessary.
-            </p>
-          )}
         </div>
 
         {/* ERROR */}
@@ -361,7 +354,7 @@ function OTP() {
           disabled={
             isVerifying ||
             isResending ||
-            !!success ||
+            isVerified ||
             otpInputs.join("").length !== 6
           }
           className="mt-5 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8] disabled:cursor-not-allowed disabled:opacity-50"
@@ -382,7 +375,7 @@ function OTP() {
               resendCooldown > 0 ||
               isResending ||
               isVerifying ||
-              !!success
+              isVerified
             }
             className="font-semibold text-[#6C3FF5] hover:underline disabled:cursor-not-allowed disabled:text-gray-400 disabled:no-underline"
           >

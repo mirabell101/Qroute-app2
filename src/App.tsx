@@ -1,6 +1,6 @@
-
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+
 import {
   BrowserRouter,
   Routes,
@@ -34,59 +34,138 @@ function App() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
+  // Restore the existing session and listen for authentication changes.
+
+  // Restore and validate the existing Supabase session.
   useEffect(() => {
     let active = true;
+    let validationInProgress = false;
+
+    const validateSession = async () => {
+      if (validationInProgress) return;
+      validationInProgress = true;
+
+      try {
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
+
+        if (!active) return;
+
+        if (sessionError) {
+          console.error(
+            "Could not restore Supabase session:",
+            sessionError.message
+          );
+        }
+
+        if (sessionError || !session) {
+          setCurrentUserId(null);
+          setAuthLoading(false);
+          return;
+        }
+
+        // Ask Supabase Auth to verify the current user.
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser(session.access_token);
+
+        if (!active) return;
+
+        if (userError || !user) {
+          console.warn(
+            "Session is invalid or the account no longer exists.",
+            userError?.message
+          );
+
+          await supabase.auth.signOut({ scope: "local" });
+
+          if (!active) return;
+
+          setCurrentUserId(null);
+        } else {
+          setCurrentUserId(user.id);
+        }
+
+        setAuthLoading(false);
+      } catch (error) {
+        if (!active) return;
+
+        console.error("Session validation failed:", error);
+        setCurrentUserId(null);
+        setAuthLoading(false);
+      } finally {
+        validationInProgress = false;
+      }
+    };
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (!active) return;
+
+      if (event === "SIGNED_OUT") {
+        setCurrentUserId(null);
+        setAuthLoading(false);
+        return;
+      }
+
+      // Initial sessions are verified by validateSession().
+      if (event === "INITIAL_SESSION") return;
 
       setCurrentUserId(session?.user.id ?? null);
       setAuthLoading(false);
     });
 
-    const restoreSession = async () => {
-      const { data, error } = await supabase.auth.getSession();
-
-      if (!active) return;
-
-      if (error) {
-        console.error(
-          "Could not restore Supabase session:",
-          error.message
-        );
+    // Validate on startup and when the user returns to this tab.
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void validateSession();
       }
-
-      setCurrentUserId(data.session?.user.id ?? null);
-      setAuthLoading(false);
     };
 
-    void restoreSession();
+    void validateSession();
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange
+    );
 
     return () => {
       active = false;
       subscription.unsubscribe();
+
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange
+      );
     };
   }, []);
 
+
+  // Sign out on this device/browser only.
   const handleLogout = async (): Promise<void> => {
-    const { error } = await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut({
+      scope: "local",
+    });
 
     if (error) {
       console.error("Logout failed:", error.message);
       throw error;
     }
 
-    // Remove legacy local authentication values, if any remain.
+    // Clean up values left by the old local-storage login system.
     localStorage.removeItem("qroute_current_user");
     sessionStorage.removeItem("qroute_current_user");
 
+    // The auth listener also updates this state.
     setCurrentUserId(null);
   };
 
-  // Render a protected page only after authentication has been checked.
-  // The callback receives a string, so protected components don't receive null.
+  // Render protected pages only after checking the session.
+  // The callback receives a non-null user ID.
   const protectedPage = (
     renderPage: (userId: string) => ReactNode
   ): ReactNode => {
@@ -201,9 +280,13 @@ function App() {
           element={<PrivacyPolicy />}
         />
 
-        {/* Admin routes — role-based authorization is still needed */}
+        {/* Admin routes: authorization still needs to be enforced */}
         <Route path="/admin" element={<AdminBase />} />
-        <Route path="/admin/dashboard" element={<Dashboard />} />
+
+        <Route
+          path="/admin/dashboard"
+          element={<Dashboard />}
+        />
 
         <Route
           path="/admin/routes"
@@ -215,8 +298,15 @@ function App() {
           element={<PostManagement />}
         />
 
-        <Route path="/admin/reports" element={<Reports />} />
-        <Route path="/admin/users" element={<UserManagement />} />
+        <Route
+          path="/admin/reports"
+          element={<Reports />}
+        />
+
+        <Route
+          path="/admin/users"
+          element={<UserManagement />}
+        />
 
         {/* Unknown routes */}
         <Route

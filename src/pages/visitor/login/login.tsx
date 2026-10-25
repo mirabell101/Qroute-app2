@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+
+import { supabase } from "@/lib/supabase";
 
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,39 +13,28 @@ import qrouteLogo from "@/assets/logoboi.png";
 import appLogo from "@/assets/APP VER (1).png";
 
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_PUBLISHABLE_KEY =
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
-// Use the same Supabase project as the Express backend.
-const supabase =
-  SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
-    : null;
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
 
 function Login() {
   const navigate = useNavigate();
 
   const [showPassword, setShowPassword] = useState(false);
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
 
-  const [emailError, setEmailError] = useState("");
+  const [identifierError, setIdentifierError] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [loginError, setLoginError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const validateEmail = (value: string) => {
+  const validateIdentifier = (value: string) => {
     if (!value.trim()) {
-      return "Email address is required.";
+      return "Email address or username is required.";
     }
 
-    // Match the backend's email validation.
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) {
-      return "Please enter a valid email address.";
+    if (value.trim().length > 254) {
+      return "Email address or username is too long.";
     }
 
     return "";
@@ -61,22 +51,16 @@ function Login() {
   const handleLogin = async () => {
     if (isSubmitting) return;
 
-    const normalizedEmail = email.trim().toLowerCase();
-    const emailValidation = validateEmail(normalizedEmail);
+    const normalizedIdentifier = identifier.trim();
+    const identifierValidation =
+      validateIdentifier(normalizedIdentifier);
     const passwordValidation = validatePassword(password);
 
-    setEmailError(emailValidation);
+    setIdentifierError(identifierValidation);
     setPasswordError(passwordValidation);
     setLoginError("");
 
-    if (emailValidation || passwordValidation) return;
-
-    if (!supabase) {
-      setLoginError(
-        "Supabase is not configured. Check your frontend environment variables."
-      );
-      return;
-    }
+    if (identifierValidation || passwordValidation) return;
 
     setIsSubmitting(true);
 
@@ -87,16 +71,33 @@ function Login() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          email: normalizedEmail,
+          identifier: normalizedIdentifier,
           password,
         }),
       });
 
       const result = await response.json();
 
+      // Redirect accounts that require email verification.
+      if (
+        response.status === 403 &&
+        result.code === "EMAIL_NOT_VERIFIED" &&
+        result.requiresEmailVerification === true
+      ) {
+        navigate("/otp", {
+          state: {
+            email: result.email,
+          },
+        });
+
+        return;
+      }
+
+      // Handle other unsuccessful login responses.
       if (!response.ok || !result.success) {
         setLoginError(
-          result.message || "Unable to sign in. Please check your credentials."
+          result.message ||
+            "Unable to sign in. Please check your credentials."
         );
         return;
       }
@@ -111,8 +112,7 @@ function Login() {
         return;
       }
 
-      // Establish the Supabase session in the frontend SDK.
-      // Supabase SDK manages session persistence and token refresh.
+      // Establish the session in the shared frontend Supabase client.
       const { error: sessionError } = await supabase.auth.setSession({
         access_token: result.session.access_token,
         refresh_token: result.session.refresh_token,
@@ -125,7 +125,7 @@ function Login() {
         return;
       }
 
-      // Navigate only after the frontend session has been established.
+      // Continue the existing successful-login flow.
       navigate("/home", {
         replace: true,
         state: {
@@ -173,36 +173,41 @@ function Login() {
           </div>
         </div>
 
-        {/* EMAIL */}
+        {/* EMAIL OR USERNAME */}
         <div className="mt-6">
           <label
-            htmlFor="email"
+            htmlFor="identifier"
             className="text-[12px] font-medium text-black"
           >
-            Email
+            Email or Username
           </label>
 
           <Input
-            id="email"
-            type="email"
-            autoComplete="email"
-            placeholder="Enter your email"
-            value={email}
+            id="identifier"
+            type="text"
+            autoComplete="username"
+            placeholder="Enter your email or username"
+            value={identifier}
             onChange={(event) => {
-              setEmail(event.target.value);
-              setEmailError("");
+              setIdentifier(event.target.value);
+              setIdentifierError("");
               setLoginError("");
             }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                void handleLogin();
+              }
+            }}
             className={`mt-1.5 h-9 rounded-[5px] border px-3 text-[12px] shadow-none ${
-              emailError
+              identifierError
                 ? "border-red-500 focus-visible:ring-red-500"
                 : "border-[#b8b8b8]"
             }`}
           />
 
-          {emailError && (
+          {identifierError && (
             <p className="mt-1 px-1 text-[10px] leading-none text-red-500">
-              {emailError}
+              {identifierError}
             </p>
           )}
         </div>
@@ -246,7 +251,11 @@ function Login() {
               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black"
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
-              {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+              {showPassword ? (
+                <EyeOff size={15} />
+              ) : (
+                <Eye size={15} />
+              )}
             </button>
           </div>
 
