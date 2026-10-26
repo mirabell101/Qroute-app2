@@ -1,21 +1,19 @@
 import { useState } from "react";
-
 import { useNavigate } from "react-router-dom";
 
 import { Input } from "@/components/ui/input";
-
 import { Button } from "@/components/ui/button";
-
 import qrouteLogo from "@/assets/logoboi.png";
 
-
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
 
 function Forgotpassword() {
   const navigate = useNavigate();
 
   const [email, setEmail] = useState("");
-
   const [emailError, setEmailError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
   const validateEmail = (value: string) => {
     if (!value.trim()) {
@@ -29,69 +27,70 @@ function Forgotpassword() {
     return "";
   };
 
-  const handleContinue = () => {
-  const emailValidation = validateEmail(email);
+  const handleContinue = async () => {
+    const emailValidation = validateEmail(email);
 
-  setEmailError(emailValidation);
+    setEmailError(emailValidation);
 
-  if (emailValidation) {
-    return;
-  }
-
-  const normalizedEmail = email.trim().toLowerCase();
-
-  const storedAccounts = localStorage.getItem("qroute_accounts");
-
-  if (!storedAccounts) {
-    setEmailError("No account found with this Gmail address.");
-    return;
-  }
-
-  try {
-    const accounts = JSON.parse(storedAccounts);
-
-    const account = accounts.find(
-      (storedAccount: {
-        id: string;
-        email: string;
-        password: string;
-      }) => storedAccount.email.toLowerCase() === normalizedEmail
-    );
-
-    if (!account) {
-      setEmailError("No account found with this Gmail address.");
+    if (emailValidation || isLoading) {
       return;
     }
 
-    navigate("/otp", {
-      state: {
-        userId: account.id,
-        email: normalizedEmail,
-        mode: "forgot-password",
-      },
-    });
-  } catch {
-    setEmailError("Unable to process your request. Please try again.");
-  }
-};
+    const normalizedEmail = email.trim().toLowerCase();
+
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/auth/forgot-password`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: normalizedEmail,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setEmailError(
+          data.message ||
+            "Unable to process your request. Please try again."
+        );
+        return;
+      }
+
+      navigate("/reset-otp", {
+        state: {
+          email: normalizedEmail,
+        },
+      });
+    } catch {
+      setEmailError(
+        "Unable to connect to the server. Please try again."
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <main className="relative flex h-screen w-screen items-center justify-center overflow-hidden bg-white px-4">
       {/* TOP-LEFT LOGO */}
-
       <img
         src={qrouteLogo}
-        alt="Qroute"
+        alt="QRoute"
         className="absolute left-15 top-10 h-auto w-[160px] object-contain"
       />
 
       {/* FORGOT PASSWORD CARD */}
-
       <div className="w-full max-w-[450px] rounded-[6px] border border-[#e1e1e1] bg-white px-10 py-7 shadow-[0_1px_6px_rgba(0,0,0,0.08)]">
         {/* HEADER */}
-
         <div className="flex items-center justify-center">
-
           <div className="flex flex-col justify-center">
             <h1 className="text-[30px] font-bold leading-[1] tracking-[-0.5px] text-black">
               Forgot Password
@@ -104,7 +103,6 @@ function Forgotpassword() {
         </div>
 
         {/* EMAIL */}
-
         <div className="mt-6">
           <label
             htmlFor="email"
@@ -119,11 +117,17 @@ function Forgotpassword() {
               type="email"
               placeholder="Enter your Gmail address"
               value={email}
+              disabled={isLoading}
               onChange={(event) => {
                 setEmail(event.target.value);
 
                 if (emailError) {
                   setEmailError("");
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void handleContinue();
                 }
               }}
               className={`h-9 rounded-[5px] border px-3 text-[12px] shadow-none ${
@@ -142,17 +146,16 @@ function Forgotpassword() {
         </div>
 
         {/* CONTINUE */}
-
         <Button
           type="button"
-          onClick={handleContinue}
+          disabled={isLoading}
+          onClick={() => void handleContinue()}
           className="mt-5 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8]"
         >
-          Continue
+          {isLoading ? "Sending code..." : "Continue"}
         </Button>
 
         {/* BACK TO LOGIN */}
-
         <div className="mt-4 text-center text-[10px]">
           <span className="text-gray-600">
             Remember your password?{" "}

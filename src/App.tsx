@@ -17,6 +17,7 @@ import SignUp from "./pages/visitor/signup/signup";
 import OTP from "./pages/visitor/OTP/OTP";
 import Forgotpassword from "./pages/visitor/Forgotpassword/Forgotpassword";
 import Resetpassword from "./pages/visitor/Resetpassword/Resetpassword";
+import ResetOTP from "./pages/visitor/ResetOTP/ResetOTP";
 import TermsAndConditions from "./pages/visitor/Legal/TermsAndCondition";
 import PrivacyPolicy from "./pages/visitor/Legal/PrivacyPolicy";
 import Profile from "./pages/registered-user/Profile/Profile";
@@ -269,7 +270,7 @@ function App() {
           path="/reset-password"
           element={<Resetpassword />}
         />
-
+        <Route path="/reset-otp" element={<ResetOTP />} />
         <Route
           path="/terms-and-condition"
           element={<TermsAndConditions />}

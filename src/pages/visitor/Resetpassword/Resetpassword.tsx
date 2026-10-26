@@ -7,9 +7,20 @@ import { Button } from "@/components/ui/button";
 
 import qrouteLogo from "@/assets/logoboi.png";
 
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+
+interface ResetPasswordState {
+  email?: string;
+  access_token?: string;
+  refresh_token?: string;
+}
+
 function Resetpassword() {
   const navigate = useNavigate();
   const location = useLocation();
+
+  const resetData = location.state as ResetPasswordState | null;
 
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -19,6 +30,7 @@ function Resetpassword() {
 
   const [passwordError, setPasswordError] = useState("");
   const [confirmPasswordError, setConfirmPasswordError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
   const validatePassword = (value: string) => {
     if (!value) {
@@ -41,7 +53,7 @@ function Resetpassword() {
       return "Password must contain at least one number.";
     }
 
-    if (!/[!@#$%^&*(),.?":{}|<>_\-]/.test(value)) {
+    if (!/[!@#$%^&*(),.?":{}|<>_\-\\]/.test(value)) {
       return "Password must contain at least one special character.";
     }
 
@@ -60,91 +72,86 @@ function Resetpassword() {
     return "";
   };
 
-  const handleResetPassword = () => {
-  const passwordValidation = validatePassword(password);
-  const confirmPasswordValidation =
-    validateConfirmPassword(confirmPassword);
+  const handleResetPassword = async () => {
+    const passwordValidation = validatePassword(password);
+    const confirmPasswordValidation =
+      validateConfirmPassword(confirmPassword);
 
-  setPasswordError(passwordValidation);
-  setConfirmPasswordError(confirmPasswordValidation);
+    setPasswordError(passwordValidation);
+    setConfirmPasswordError(confirmPasswordValidation);
 
-  if (passwordValidation || confirmPasswordValidation) {
-    return;
-  }
+    if (passwordValidation || confirmPasswordValidation || isLoading) {
+      return;
+    }
 
-  const resetData = location.state as
-    | {
-        userId?: string;
-        email?: string;
+    // A verified recovery session is required.
+    if (!resetData?.access_token || !resetData?.refresh_token) {
+      navigate("/forgot-password", { replace: true });
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/auth/reset-password`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            access_token: resetData.access_token,
+            refresh_token: resetData.refresh_token,
+            password,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setPasswordError(
+          data.message || "Unable to reset your password. Please try again."
+        );
+        return;
       }
-    | null;
 
-  if (!resetData?.userId) {
-    navigate("/forgot-password", { replace: true });
-    return;
-  }
-
-  const storedAccounts = localStorage.getItem("qroute_accounts");
-
-  if (!storedAccounts) {
-    setPasswordError("Unable to reset password. Please try again.");
-    return;
-  }
-
-  try {
-    const accounts = JSON.parse(storedAccounts);
-
-    const updatedAccounts = accounts.map(
-      (account: {
-        id: string;
-        email: string;
-        password: string;
-      }) =>
-        account.id === resetData.userId
-          ? {
-              ...account,
-              password,
-            }
-          : account
-    );
-
-    localStorage.setItem(
-      "qroute_accounts",
-      JSON.stringify(updatedAccounts)
-    );
-
-    navigate("/login", {
-      replace: true,
-      state: {
-        passwordReset: true,
-      },
-    });
-  } catch {
-    setPasswordError("Unable to reset password. Please try again.");
-  }
-};
+      navigate("/login", {
+        replace: true,
+        state: {
+          passwordReset: true,
+        },
+      });
+    } catch {
+      setPasswordError(
+        "Unable to connect to the server. Please try again."
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <main className="relative flex h-screen w-screen items-center justify-center overflow-hidden bg-white px-4">
       {/* TOP-LEFT LOGO */}
       <img
         src={qrouteLogo}
-        alt="Qroute"
+        alt="QRoute"
         className="absolute left-15 top-10 h-auto w-[160px] object-contain"
       />
 
-      {/* FORGOT PASSWORD CARD */}
+      {/* RESET PASSWORD CARD */}
       <div className="w-full max-w-[450px] rounded-[6px] border border-[#e1e1e1] bg-white px-10 py-7 shadow-[0_1px_6px_rgba(0,0,0,0.08)]">
         {/* HEADER */}
         <div className="flex items-center justify-center">
-
           <div className="flex flex-col justify-center">
-            <h1 className="text-[30px] font-bold leading-[1] tracking-[-0.5px] text-black ">
+            <h1 className="text-[30px] font-bold leading-[1] tracking-[-0.5px] text-black">
               Set a New Password
             </h1>
 
-            <p className="mt-1  translate-x-10 text-[12px] leading-none text-black">
-               Must meet all password requirements.
+            <p className="mt-1 translate-x-10 text-[12px] leading-none text-black">
+              Must meet all password requirements.
             </p>
           </div>
         </div>
@@ -164,14 +171,17 @@ function Resetpassword() {
               type={showPassword ? "text" : "password"}
               placeholder="Enter your password"
               value={password}
+              disabled={isLoading}
               onChange={(event) => {
-                setPassword(event.target.value);
+                const value = event.target.value;
+
+                setPassword(value);
 
                 if (passwordError) {
                   setPasswordError("");
                 }
 
-                if (confirmPassword && event.target.value === confirmPassword) {
+                if (confirmPassword && value === confirmPassword) {
                   setConfirmPasswordError("");
                 }
               }}
@@ -184,17 +194,12 @@ function Resetpassword() {
 
             <button
               type="button"
+              disabled={isLoading}
               onClick={() => setShowPassword(!showPassword)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black"
-              aria-label={
-                showPassword ? "Hide password" : "Show password"
-              }
+              aria-label={showPassword ? "Hide password" : "Show password"}
             >
-              {showPassword ? (
-                <EyeOff size={15} />
-              ) : (
-                <Eye size={15} />
-              )}
+              {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
             </button>
           </div>
 
@@ -220,6 +225,7 @@ function Resetpassword() {
               type={showConfirmPassword ? "text" : "password"}
               placeholder="Enter your password again"
               value={confirmPassword}
+              disabled={isLoading}
               onChange={(event) => {
                 setConfirmPassword(event.target.value);
 
@@ -236,14 +242,13 @@ function Resetpassword() {
 
             <button
               type="button"
+              disabled={isLoading}
               onClick={() =>
                 setShowConfirmPassword(!showConfirmPassword)
               }
               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black"
               aria-label={
-                showConfirmPassword
-                  ? "Hide password"
-                  : "Show password"
+                showConfirmPassword ? "Hide password" : "Show password"
               }
             >
               {showConfirmPassword ? (
@@ -264,10 +269,11 @@ function Resetpassword() {
         {/* RESET PASSWORD */}
         <Button
           type="button"
-          onClick={handleResetPassword}
+          disabled={isLoading}
+          onClick={() => void handleResetPassword()}
           className="mt-5 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8]"
         >
-          Reset Password
+          {isLoading ? "Resetting password..." : "Reset Password"}
         </Button>
 
         {/* BACK TO LOGIN */}
