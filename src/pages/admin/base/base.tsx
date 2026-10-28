@@ -11,33 +11,13 @@ import {
   UserCircle,
 } from "lucide-react";
 
-import { MapContainer, Marker, TileLayer } from "react-leaflet";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-import markerIcon from "leaflet/dist/images/marker-icon.png";
-import markerShadow from "leaflet/dist/images/marker-shadow.png";
-
-import { Input } from "@/components/ui/input";
-
-// ==================================================
-// LEAFLET MARKER FIX
-// ==================================================
-
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x,
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-});
-
-// ==================================================
-// MAP
-// ==================================================
-
-const defaultPosition: [number, number] = [14.7167, 121.05];
+import {
+  TransitMapCanvas,
+  TransitMapPanel,
+  TransitMapSearch,
+  TransitMapStatus,
+  useTransitMap,
+} from "@/components/transit-map";
 
 // ==================================================
 // NAVIGATION
@@ -69,6 +49,9 @@ const navItems = [
 export default function Base() {
   const navigate = useNavigate();
 
+  // Shared map state (search, routes, trip selection, fares).
+  const map = useTransitMap();
+
   const handleClick = (name: string) => {
     console.log(`${name} clicked`);
   };
@@ -83,27 +66,13 @@ export default function Base() {
           MAP
           ================================================== */}
 
-      <section className="absolute inset-0 z-0 h-full w-full">
-        <MapContainer
-          center={defaultPosition}
-          zoom={14}
-          scrollWheelZoom={true}
-          zoomControl={false}
-          dragging={true}
-          touchZoom={true}
-          doubleClickZoom={true}
-          boxZoom={true}
-          keyboard={true}
-          className="h-full w-full"
-        >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+      <TransitMapCanvas map={map} />
 
-          <Marker position={defaultPosition} />
-        </MapContainer>
-      </section>
+      {/* LOCATION + TERMINAL STATUS */}
+      <TransitMapStatus
+        map={map}
+        terminalStatusClassName="absolute bottom-5 left-[230px] z-[3000] max-w-sm rounded-xl bg-white px-4 py-3 text-sm shadow-lg sm:left-[240px] md:left-[250px]"
+      />
 
       {/* ==================================================
           SIDEBAR
@@ -307,56 +276,10 @@ export default function Base() {
         }}
       >
         {/* ==================================================
-            SEARCH
+            SEARCH (shared)
             ================================================== */}
 
-        <div
-          className="
-            relative
-            h-[50px]
-            w-[260px]
-            shrink-0
-            sm:w-[320px]
-            md:w-[360px]
-            lg:w-[400px]
-          "
-        >
-          <MapPin
-            size={19}
-            strokeWidth={2}
-            className="
-              absolute
-              left-4
-              top-1/2
-              -translate-y-1/2
-              text-gray-600
-            "
-          />
-
-          <Input
-            type="text"
-            placeholder="Search your location here...."
-            className="
-              h-full
-              w-full
-              rounded-full
-              border
-              border-gray-300
-              bg-white
-              pl-12
-              pr-5
-              text-[16px]
-              shadow-[0_2px_8px_rgba(0,0,0,0.15)]
-              outline-none
-              placeholder:text-gray-500
-              focus-visible:ring-1
-              focus-visible:ring-gray-300
-            "
-            onChange={(event) => {
-              console.log("Search:", event.target.value);
-            }}
-          />
-        </div>
+        <TransitMapSearch map={map} />
 
         {/* ==================================================
             VEHICLE FILTERS
@@ -595,6 +518,15 @@ export default function Base() {
           </button>
         </div>
       </header>
+
+      {/* ==================================================
+          PLACE DETAILS + ACTIVE ROUTE + FARES (shared)
+          ================================================== */}
+
+      <TransitMapPanel
+        map={map}
+        className="absolute left-[230px] top-[110px] z-[1500] max-h-[calc(100vh-130px)] w-[min(360px,calc(100vw-245px))] overflow-y-auto rounded-xl bg-white p-4 shadow-lg sm:left-[240px] md:left-[250px] lg:left-[300px]"
+      />
     </main>
   );
 }

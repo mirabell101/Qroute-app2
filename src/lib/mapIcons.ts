@@ -80,11 +80,11 @@ const ICONS: Record<MapIconKind, IconSpec> = {
 
   // 3/6 — TRAIN STATION (LRT-1 / LRT-2 / MRT-3 stations)
   train_station: {
-    src: null, // ◄◄◄ INSERT TRAIN STATION IMAGE PATH HERE (e.g. trainStationImg)
+    src: '../assets/train.png', // ◄◄◄ INSERT TRAIN STATION IMAGE PATH HERE (e.g. trainStationImg)
     size: [32, 32],
     anchor: "center",
     fallbackColor: "#e0a526",
-    fallbackLabel: "R",
+    fallbackLabel: "TR",
   },
 
   // 4/6 — CURRENT LOCATION (the user's position)

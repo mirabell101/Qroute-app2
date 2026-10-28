@@ -1,7 +1,12 @@
 import { supabase } from "@/lib/supabase";
 import type { FareDistanceBand } from "./fareCalculations";
 
-export type VerificationStatus = "verified" | "secondary" | "unverified";
+// Explicit column lists: anon only has column-level SELECT grants,
+// so select("*") would fail with "permission denied for table".
+const FARE_RULE_COLUMNS =
+  "id, variant_id, fare_area_id, base_fare, base_distance_km, per_km_rate, rounding_step, effective_from, effective_to, is_deleted";
+const RAIL_FARE_COLUMNS =
+  "id, route_id, from_stop_id, to_stop_id, stored_value_fare, single_journey_fare, effective_from, effective_to, is_deleted";
 
 export interface FareRule {
   id: number;
@@ -13,10 +18,6 @@ export interface FareRule {
   rounding_step: number;
   effective_from: string;
   effective_to: string | null;
-  source_name: string;
-  source_url: string | null;
-  verification_status: VerificationStatus;
-  notes: string | null;
 }
 
 export type PassengerCategory = "student" | "senior_citizen" | "pwd";
@@ -28,9 +29,6 @@ export interface FareDiscountRule {
   discount_percent: number;
   effective_from: string;
   effective_to: string | null;
-  source_name: string;
-  source_url: string;
-  verification_status: VerificationStatus;
 }
 
 export interface TransportVariant {
@@ -56,9 +54,6 @@ export interface RailFare {
   single_journey_fare: number | null;
   effective_from: string;
   effective_to: string | null;
-  source_name: string;
-  source_url: string | null;
-  verification_status: VerificationStatus;
 }
 
 interface RawFareDistanceBand {
@@ -95,24 +90,13 @@ function isEffective(
   );
 }
 
-export function verificationLabel(status: VerificationStatus): string {
-  switch (status) {
-    case "verified":
-      return "Verified against official source";
-    case "secondary":
-      return "From news reports, not yet checked against the official guide";
-    default:
-      return "Unverified";
-  }
-}
-
 // Currently effective rule for a vehicle variant (latest effective_from wins).
 export async function getActiveFareRule(
   variantId: number
 ): Promise<FareRule | null> {
   const { data, error } = await supabase
     .from("fare_rules")
-    .select("*")
+    .select(FARE_RULE_COLUMNS)
     .eq("variant_id", variantId)
     .eq("is_deleted", false);
 
@@ -120,7 +104,7 @@ export async function getActiveFareRule(
 
   const day = todayIso();
 
-  const rule = ((data ?? []) as FareRule[])
+  const rule = ((data ?? []) as unknown as FareRule[])
     .filter((row) => isEffective(row, day))
     .sort((a, b) => b.effective_from.localeCompare(a.effective_from))[0];
 
@@ -158,14 +142,14 @@ export async function getTransportFareOptions(
   if (fareAreaId !== null) {
     const { data: ruleData, error: ruleError } = await supabase
       .from("fare_rules")
-      .select("*")
+      .select(FARE_RULE_COLUMNS)
       .in("variant_id", variantIds)
       .eq("fare_area_id", fareAreaId)
       .eq("is_deleted", false);
 
     if (ruleError) throw new Error(ruleError.message);
 
-    rules = ((ruleData ?? []) as FareRule[])
+    rules = ((ruleData ?? []) as unknown as FareRule[])
       .filter((rule) => isEffective(rule, day))
       .sort((a, b) => b.effective_from.localeCompare(a.effective_from))
       .map((rule) => ({
@@ -211,7 +195,7 @@ export async function getTransportFareOptions(
   const { data: discountData, error: discountError } = await supabase
     .from("fare_discount_rules")
     .select(
-      "id, variant_id, passenger_category, discount_percent, effective_from, effective_to, source_name, source_url, verification_status, is_deleted"
+      "id, variant_id, passenger_category, discount_percent, effective_from, effective_to, is_deleted"
     )
     .in("variant_id", variantIds)
     .eq("is_deleted", false);
@@ -283,7 +267,7 @@ export async function getRailFare(
 ): Promise<RailFare | null> {
   const { data, error } = await supabase
     .from("rail_fares")
-    .select("*")
+    .select(RAIL_FARE_COLUMNS)
     .eq("route_id", routeId)
     .eq("is_deleted", false)
     .or(
@@ -295,7 +279,7 @@ export async function getRailFare(
 
   const day = todayIso();
 
-  const row = ((data ?? []) as RailFare[])
+  const row = ((data ?? []) as unknown as RailFare[])
     .filter((item) => isEffective(item, day))
     .sort((a, b) => b.effective_from.localeCompare(a.effective_from))[0];
 

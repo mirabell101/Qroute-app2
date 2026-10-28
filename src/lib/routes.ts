@@ -80,8 +80,26 @@ interface RawRouteStop {
   stops: RawPoint | null;
 }
 
-interface RawRoute extends Omit<RouteDetails, "route_stops"> {
+interface RawRoute extends Omit<RouteDetails, "route_stops" | "created_by"> {
   route_stops: RawRouteStop[];
+}
+
+// created_by is not readable by logged-out visitors (anon has no grant on it),
+// so it is fetched separately and only when someone is signed in. Visitors get
+// null, which simply hides owner-only actions like "Edit route".
+async function getRouteOwnerId(routeId: number): Promise<string | null> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (!sessionData.session) return null;
+
+  const { data, error } = await supabase
+    .from("routes")
+    .select("created_by")
+    .eq("id", routeId)
+    .maybeSingle();
+
+  if (error) return null;
+
+  return (data as { created_by: string | null } | null)?.created_by ?? null;
 }
 
 export async function getRouteDetails(
@@ -95,7 +113,6 @@ export async function getRouteDetails(
       name,
       transport_type_id,
       fare_area_id,
-      created_by,
       is_approved,
       moderation_status,
       transport_types ( name, color ),
@@ -155,7 +172,9 @@ export async function getRouteDetails(
     })
     .sort((a, b) => a.stop_order - b.stop_order);
 
-  return { ...raw, route_stops: points };
+  const createdBy = await getRouteOwnerId(routeId);
+
+  return { ...raw, created_by: createdBy, route_stops: points };
 }
 
 // Kept so any other file importing it still works.

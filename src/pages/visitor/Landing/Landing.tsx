@@ -11,34 +11,15 @@ import {
   UserCircle,
 } from "lucide-react";
 
-import { MapContainer, Marker, TileLayer } from "react-leaflet";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-import markerIcon from "leaflet/dist/images/marker-icon.png";
-import markerShadow from "leaflet/dist/images/marker-shadow.png";
-
-import { Input } from "@/components/ui/input";
-
-// ==================================================
-// LEAFLET MARKER FIX
-// ==================================================
-
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x,
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-});
-
-// ==================================================
-// MAP
-// ==================================================
-
-const defaultPosition: [number, number] = [14.7167, 121.05];
+import {
+  TransitMapCanvas,
+  TransitMapPanel,
+  TransitMapSearch,
+  TransitMapStatus,
+  useTransitMap,
+} from "@/components/transit-map";
 
 // ==================================================
 // NAVIGATION
@@ -79,34 +60,37 @@ export default function Landing({
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
+  // Shared map state (search, routes, trip selection, fares).
+  const map = useTransitMap();
+
   const refreshPage = () => {
     window.location.reload();
   };
 
-const navigate = useNavigate();
+  const navigate = useNavigate();
 
-const handleClick = (name: string) => {
-  // Community is accessible to both guests and logged-in users.
-  if (name === "Community") {
-    navigate("/community");
-    return;
-  }
+  const handleClick = (name: string) => {
+    // Community is accessible to both guests and logged-in users.
+    if (name === "Community") {
+      navigate("/community");
+      return;
+    }
 
-  // These features require login for guests.
-  if (
-    !currentUserId &&
-    (name === "Saved" ||
-      name === "Your Contribution" ||
-      name === "Notifications")
-  ) {
-    setShowLoginPrompt(true);
-    return;
-  }
+    // These features require login for guests.
+    if (
+      !currentUserId &&
+      (name === "Saved" ||
+        name === "Your Contribution" ||
+        name === "Notifications")
+    ) {
+      setShowLoginPrompt(true);
+      return;
+    }
 
-  console.log(`${name} clicked`, {
-    currentUserId,
-  });
-};  
+    console.log(`${name} clicked`, {
+      currentUserId,
+    });
+  };
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-white">
@@ -115,53 +99,37 @@ const handleClick = (name: string) => {
           MAP
           ================================================== */}
 
-      <section className="absolute inset-0 z-0 h-full w-full">
+      <TransitMapCanvas map={map} />
 
-        <MapContainer
-          center={defaultPosition}
-          zoom={14}
-          scrollWheelZoom={true}
-          zoomControl={false}
-          dragging={true}
-          touchZoom={true}
-          doubleClickZoom={true}
-          boxZoom={true}
-          keyboard={true}
-          className="h-full w-full"
-        >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-
-          <Marker position={defaultPosition} />
-        </MapContainer>
-
-      </section>
+      {/* LOCATION + TERMINAL STATUS */}
+      <TransitMapStatus
+        map={map}
+        terminalStatusClassName="absolute bottom-5 left-[230px] z-[3000] max-w-sm rounded-xl bg-white px-4 py-3 text-sm shadow-lg sm:left-[240px] md:left-[250px]"
+      />
 
       {/* ==================================================
           SIDEBAR
           ================================================== */}
 
       <aside
-  className="
-    absolute
-    left-0
-    top-0
-    z-[2000]
-    flex
-    h-screen
-    w-[220px]
-    flex-col
-    border-r
-    border-white/10
-    bg-[#0f2a47]
-    text-white
-    sm:w-[230px]
-    md:w-[240px]
-    lg:w-[250px]
-  "
->
+        className="
+          absolute
+          left-0
+          top-0
+          z-[2000]
+          flex
+          h-screen
+          w-[220px]
+          flex-col
+          border-r
+          border-white/10
+          bg-[#0f2a47]
+          text-white
+          sm:w-[230px]
+          md:w-[240px]
+          lg:w-[250px]
+        "
+      >
 
         {/* ==================================================
             LOGO
@@ -188,10 +156,10 @@ const handleClick = (name: string) => {
           }}
         >
           <img
-  src={qrouteWhiteLogo}
-  alt="Qroute"
-  className="max-h-full max-w-full object-contain"
-/>
+            src={qrouteWhiteLogo}
+            alt="Qroute"
+            className="max-h-full max-w-full object-contain"
+          />
         </button>
 
         {/* ==================================================
@@ -199,17 +167,17 @@ const handleClick = (name: string) => {
             ================================================== */}
 
         <nav
-  className="
-    absolute
-    left-0
-    top-[145px]
-    flex
-    w-full
-    flex-col
-    gap-1.5
-    px-3
-  "
->
+          className="
+            absolute
+            left-0
+            top-[145px]
+            flex
+            w-full
+            flex-col
+            gap-1.5
+            px-3
+          "
+        >
           {navItems.map((item) => {
             const Icon = item.icon;
 
@@ -219,21 +187,21 @@ const handleClick = (name: string) => {
                 type="button"
                 onClick={() => handleClick(item.label)}
                 className="
-  group
-  flex
-  h-[46px]
-  w-full
-  items-center
-  rounded-xl
-  px-3
-  text-left
-  font-medium
-  text-white
-  transition-colors
-  duration-200
-  hover:bg-[#d0d5db]
-  hover:text-[#0f2a47]
-"
+                  group
+                  flex
+                  h-[46px]
+                  w-full
+                  items-center
+                  rounded-xl
+                  px-3
+                  text-left
+                  font-medium
+                  text-white
+                  transition-colors
+                  duration-200
+                  hover:bg-[#d0d5db]
+                  hover:text-[#0f2a47]
+                "
               >
                 <span
                   className="
@@ -308,92 +276,46 @@ const handleClick = (name: string) => {
           ================================================== */}
 
       <header
-  className="
-    absolute
-    left-[270px]
-    top-[45px]
-    z-[3000]
-    flex
-    items-center
-    sm:left-[280px]
-    md:left-[290px]
-    lg:left-[300px]
-  "
-  style={{
-    height: "45px",
-  }}
->
+        className="
+          absolute
+          left-[270px]
+          top-[45px]
+          z-[3000]
+          flex
+          items-center
+          sm:left-[280px]
+          md:left-[290px]
+          lg:left-[300px]
+        "
+        style={{
+          height: "45px",
+        }}
+      >
 
         {/* ==================================================
-            SEARCH
+            SEARCH (shared)
             =================================================== */}
 
-        <div
-  className="
-    relative
-    h-[50px]
-    w-[260px]
-    shrink-0
-    sm:w-[320px]
-    md:w-[360px]
-    lg:w-[400px]
-  "
->
-          <MapPin
-            size={19}
-            strokeWidth={2}
-            className="
-              absolute
-              left-4
-              top-1/2
-              -translate-y-1/2
-              text-gray-600
-            "
-          />
-
-          <Input
-            type="text"
-            placeholder="Search your location here...."
-            className="
-              h-full
-              w-full
-              rounded-full
-              border
-              border-gray-300
-              bg-white
-              pl-12
-              pr-5
-              text-[16px]
-              shadow-[0_2px_8px_rgba(0,0,0,0.15)]
-              outline-none
-              placeholder:text-gray-500
-              focus-visible:ring-1
-              focus-visible:ring-gray-300
-            "
-            onChange={(event) => {
-              console.log("Search:", event.target.value);
-            }}
-          />
-        </div>
+        <TransitMapSearch map={map} />
 
         {/* ==================================================
             VEHICLE FILTERS
             ================================================== */}
 
         <div
-  className="
-  ml-[8px]
-  flex
-  h-[52px]
-  flex-nowrap
-  items-center
-  gap-[5px]
-  sm:ml-[12px]
-  sm:gap-[7px]
-  lg:ml-[35px]
-  lg:gap-[10px]
-"
->
+          className="
+            ml-[8px]
+            flex
+            h-[52px]
+            flex-nowrap
+            items-center
+            gap-[5px]
+            sm:ml-[12px]
+            sm:gap-[7px]
+            lg:ml-[35px]
+            lg:gap-[10px]
+          "
+        >
 
           {/* JEEP */}
 
@@ -404,10 +326,10 @@ const handleClick = (name: string) => {
               group
               flex
               h-[52px]
-w-[52px]
-sm:w-[70px]
-md:w-[90px]
-lg:w-[105px]
+              w-[52px]
+              sm:w-[70px]
+              md:w-[90px]
+              lg:w-[105px]
               items-center
               justify-center
               gap-[6px]
@@ -449,10 +371,10 @@ lg:w-[105px]
               group
               flex
               h-[52px]
-w-[52px]
-sm:w-[70px]
-md:w-[90px]
-lg:w-[105px]
+              w-[52px]
+              sm:w-[70px]
+              md:w-[90px]
+              lg:w-[105px]
               items-center
               justify-center
               gap-[6px]
@@ -493,11 +415,11 @@ lg:w-[105px]
             className="
               group
               flex
-             h-[52px]
-w-[52px]
-sm:w-[70px]
-md:w-[90px]
-lg:w-[105px]
+              h-[52px]
+              w-[52px]
+              sm:w-[70px]
+              md:w-[90px]
+              lg:w-[105px]
               items-center
               justify-center
               gap-[6px]
@@ -538,7 +460,7 @@ lg:w-[105px]
 
         <div
           className="
-          relative
+            relative
             ml-[300px]
             flex
             h-[55px]
@@ -586,8 +508,8 @@ lg:w-[105px]
           <button
             type="button"
             onClick={() => {
-  setShowProfileMenu((previous) => !previous);
-}}
+              setShowProfileMenu((previous) => !previous);
+            }}
             title="Profile"
             className="
               group
@@ -615,37 +537,46 @@ lg:w-[105px]
                 group-hover:scale-105
               "
             />
-                    </button>
+          </button>
 
           {showProfileMenu && (
-  <div className="absolute right-0 top-[58px] z-[4000] w-[150px] rounded-xl bg-white p-2 shadow-[0_4px_15px_rgba(0,0,0,0.18)]">
-    {!currentUserId ? (
-      <button
-        type="button"
-        onClick={() => {
-          setShowProfileMenu(false);
-          window.location.href = "/login";
-        }}
-        className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-      >
-        Sign In
-      </button>
-    ) : (
-      <button
-        type="button"
-        onClick={() => {
-          setShowProfileMenu(false);
-          onLogout();
-        }}
-        className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-      >
-        Log Out
-      </button>
-    )}
-  </div>
-)}
+            <div className="absolute right-0 top-[58px] z-[4000] w-[150px] rounded-xl bg-white p-2 shadow-[0_4px_15px_rgba(0,0,0,0.18)]">
+              {!currentUserId ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    window.location.href = "/login";
+                  }}
+                  className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                >
+                  Sign In
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    onLogout();
+                  }}
+                  className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                >
+                  Log Out
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </header>
+
+      {/* ==================================================
+          PLACE DETAILS + ACTIVE ROUTE + FARES (shared)
+          ================================================== */}
+
+      <TransitMapPanel
+        map={map}
+        className="absolute left-[230px] top-[110px] z-[1500] max-h-[calc(100vh-130px)] w-[min(360px,calc(100vw-245px))] overflow-y-auto rounded-xl bg-white p-4 shadow-lg sm:left-[240px] md:left-[250px] lg:left-[300px]"
+      />
 
       {showLoginPrompt && (
         <div className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/30">

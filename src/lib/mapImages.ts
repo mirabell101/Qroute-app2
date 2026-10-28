@@ -57,6 +57,11 @@ export async function getPointImages(
 
   if (filters.length === 0) return {};
 
+  // Photos live in a private bucket and map_images isn't open to visitors,
+  // so skip the request entirely when logged out.
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (!sessionData.session) return {};
+
   const { data, error } = await supabase
     .from("map_images")
     .select(

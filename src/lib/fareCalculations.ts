@@ -1,5 +1,4 @@
 import type {
-  FareDiscountRule,
   FareRule,
   PassengerCategory,
   RailFare,
@@ -34,18 +33,10 @@ export interface FareOptionEstimate {
 
 export type FareCardCategory = "regular" | "student" | "pwd";
 
-export interface FareCardSource {
-  name: string;
-  url: string | null;
-  effectiveFrom: string;
-  status: FareRule["verification_status"];
-}
-
 export interface FareCardOption {
   variantId: number;
   variantName: string;
   amounts: { label: string; amount: number | null }[];
-  sources: FareCardSource[];
   unavailableReason: string | null;
 }
 
@@ -63,33 +54,6 @@ const fareCardCategories: {
   { category: "student", label: "Student" },
   { category: "pwd", label: "PWD" },
 ];
-
-function fareRuleSource(rule: FareRule): FareCardSource {
-  return {
-    name: rule.source_name,
-    url: rule.source_url,
-    effectiveFrom: rule.effective_from,
-    status: rule.verification_status,
-  };
-}
-
-function discountRuleSource(rule: FareDiscountRule): FareCardSource {
-  return {
-    name: rule.source_name,
-    url: rule.source_url,
-    effectiveFrom: rule.effective_from,
-    status: rule.verification_status,
-  };
-}
-
-function railFareSource(fare: RailFare): FareCardSource {
-  return {
-    name: fare.source_name,
-    url: fare.source_url,
-    effectiveFrom: fare.effective_from,
-    status: fare.verification_status,
-  };
-}
 
 function getRailAmounts(fare: RailFare): {
   label: string;
@@ -143,10 +107,6 @@ export function buildFareCards(
             variantId: option.variant.id,
             variantName: option.variant.name,
             amounts,
-            sources:
-              isSelectedRailVariant && railFare
-                ? [railFareSource(railFare)]
-                : [],
             unavailableReason: amounts.length > 0 ? null : "Fare unavailable",
           };
         }
@@ -155,7 +115,6 @@ export function buildFareCards(
           variantId: option.variant.id,
           variantName: option.variant.name,
           amounts: [{ label: "", amount: fare?.displayFare ?? null }],
-          sources: option.fareRule ? [fareRuleSource(option.fareRule)] : [],
           unavailableReason: fare ? null : "Fare unavailable",
         };
       }
@@ -165,7 +124,6 @@ export function buildFareCards(
           variantId: option.variant.id,
           variantName: option.variant.name,
           amounts: isRail ? [] : [{ label: "", amount: null }],
-          sources: [],
           unavailableReason: "Discount unavailable — no configured rule",
         };
       }
@@ -179,7 +137,6 @@ export function buildFareCards(
           variantId: option.variant.id,
           variantName: option.variant.name,
           amounts: [],
-          sources: [discountRuleSource(discountRule)],
           unavailableReason: "Discount unavailable — configured rule is invalid",
         };
       }
@@ -190,7 +147,6 @@ export function buildFareCards(
             variantId: option.variant.id,
             variantName: option.variant.name,
             amounts: [],
-            sources: [discountRuleSource(discountRule)],
             unavailableReason: "Fare unavailable",
           };
         }
@@ -206,7 +162,6 @@ export function buildFareCards(
           variantId: option.variant.id,
           variantName: option.variant.name,
           amounts,
-          sources: [railFareSource(railFare), discountRuleSource(discountRule)],
           unavailableReason:
             amounts.length > 0 ? null : "Fare unavailable",
         };
@@ -217,7 +172,6 @@ export function buildFareCards(
         variantId: option.variant.id,
         variantName: option.variant.name,
         amounts: [{ label: "", amount: discount?.displayFare ?? null }],
-        sources: [discountRuleSource(discountRule)],
         unavailableReason: discount
           ? null
           : "Discount unavailable — fare estimate unavailable",
