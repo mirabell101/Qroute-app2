@@ -1,0 +1,66 @@
+<h2>Map-first route selection</h2>
+<p class="subtitle">The route list is gone. Which behavior should happen after clicking a route, stop, or terminal?</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">A · Place panel with route choices</div>
+    <div class="mockup-body" style="position:relative;min-height:310px;overflow:hidden;background:#e8eef1">
+      <div style="position:absolute;inset:0;background:linear-gradient(28deg,transparent 46%,#c9d6dd 47%,#c9d6dd 49%,transparent 50%),linear-gradient(145deg,transparent 40%,#d1dce1 41%,#d1dce1 43%,transparent 44%),linear-gradient(75deg,transparent 70%,#d1dce1 71%,#d1dce1 73%,transparent 74%)"></div>
+      <div style="position:absolute;left:8%;top:10%;width:210px;padding:13px;border-radius:12px;background:white;box-shadow:0 3px 14px #0002">
+        <strong>Demo North Terminal</strong>
+        <div style="margin-top:3px;color:#667085;font-size:12px">Terminal · 3 routes</div>
+        <div style="margin-top:12px;padding:8px;border-radius:8px;background:#eff6ff">
+          <strong style="font-size:12px">Demo QC Jeepney Route</strong>
+          <div style="margin-top:3px;color:#667085;font-size:11px">6 stops · 4.2 km · ₱15 est.</div>
+        </div>
+        <div style="margin-top:6px;padding:8px;border:1px solid #e5e7eb;border-radius:8px">
+          <strong style="font-size:12px">Route 2</strong>
+          <div style="margin-top:3px;color:#667085;font-size:11px">8 stops · 5.1 km</div>
+        </div>
+      </div>
+      <svg viewBox="0 0 500 310" style="position:absolute;inset:0;width:100%;height:100%">
+        <path d="M75 248 C145 223 122 173 230 170 S325 97 430 74" fill="none" stroke="#1b76d1" stroke-width="8" opacity=".8"/>
+        <circle cx="75" cy="248" r="11" fill="#087e8b" stroke="white" stroke-width="4"/>
+        <circle cx="230" cy="170" r="9" fill="#fff" stroke="#1b76d1" stroke-width="5"/>
+        <circle cx="330" cy="116" r="9" fill="#fff" stroke="#1b76d1" stroke-width="5"/>
+        <circle cx="430" cy="74" r="11" fill="#087e8b" stroke="white" stroke-width="4"/>
+      </svg>
+      <div style="position:absolute;right:9px;bottom:9px;padding:5px 8px;border-radius:6px;background:white;font-size:11px">Entire route + stops highlighted</div>
+    </div>
+    <div class="card-body">
+      <h3>Pick a route when a place serves more than one</h3>
+      <p>Clicking a stop/terminal opens a Google-style place card with the routes serving it. Choosing a route draws its full path and all stops.</p>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">B · Automatically show every route</div>
+    <div class="mockup-body" style="position:relative;min-height:310px;overflow:hidden;background:#e8eef1">
+      <div style="position:absolute;inset:0;background:linear-gradient(28deg,transparent 46%,#c9d6dd 47%,#c9d6dd 49%,transparent 50%),linear-gradient(145deg,transparent 40%,#d1dce1 41%,#d1dce1 43%,transparent 44%),linear-gradient(75deg,transparent 70%,#d1dce1 71%,#d1dce1 73%,transparent 74%)"></div>
+      <div style="position:absolute;left:8%;top:10%;width:210px;padding:13px;border-radius:12px;background:white;box-shadow:0 3px 14px #0002">
+        <strong>Demo North Terminal</strong>
+        <div style="margin-top:3px;color:#667085;font-size:12px">Terminal · 3 routes</div>
+        <div style="margin-top:10px;font-size:12px">Showing all routes that serve this place.</div>
+        <div style="margin-top:8px;color:#1b76d1;font-size:11px">Blue · Jeepney route</div>
+        <div style="margin-top:4px;color:#e18b28;font-size:11px">Orange · Bus route</div>
+        <div style="margin-top:4px;color:#8b5cf6;font-size:11px">Purple · E-jeepney route</div>
+      </div>
+      <svg viewBox="0 0 500 310" style="position:absolute;inset:0;width:100%;height:100%">
+        <path d="M75 248 C145 223 122 173 230 170 S325 97 430 74" fill="none" stroke="#1b76d1" stroke-width="7"/>
+        <path d="M75 248 C132 193 204 225 270 172 S354 113 430 74" fill="none" stroke="#e18b28" stroke-width="6"/>
+        <path d="M75 248 C170 267 198 139 284 149 S350 57 430 74" fill="none" stroke="#8b5cf6" stroke-width="6"/>
+        <circle cx="75" cy="248" r="11" fill="#087e8b" stroke="white" stroke-width="4"/>
+        <circle cx="430" cy="74" r="11" fill="#087e8b" stroke="white" stroke-width="4"/>
+      </svg>
+      <div style="position:absolute;right:9px;bottom:9px;padding:5px 8px;border-radius:6px;background:white;font-size:11px">Multiple paths visible together</div>
+    </div>
+    <div class="card-body">
+      <h3>Show all routes at once</h3>
+      <p>Clicking a stop/terminal immediately draws every route serving it. This avoids another choice, but overlapping lines and stops can clutter the map.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <p><strong>Recommendation:</strong> A keeps the map readable when locations have multiple routes, while still showing every stop automatically once a route is chosen. Either way, clicking a route itself can immediately show that route end-to-end.</p>
+</div>
