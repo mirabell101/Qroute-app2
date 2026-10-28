@@ -10,6 +10,10 @@ export type MapIconKind =
   | "boarding"
   | "destination";
 
+export type MapVehicleType = "train" | "bus" | "jeepney" | "other";
+
+type EndpointRole = "boarding" | "destination";
+
 interface IconSpec {
   src: string | null;
   size: [number, number];
@@ -98,7 +102,7 @@ const ICONS: Record<MapIconKind, IconSpec> = {
     size: [38, 38],
     anchor: "bottom",
     fallbackColor: "#16a34a",
-    fallbackLabel: "A",
+    fallbackLabel: "•",
   },
 
   // 6/6 — SELECTED DESTINATION POINT
@@ -107,11 +111,115 @@ const ICONS: Record<MapIconKind, IconSpec> = {
     size: [38, 38],
     anchor: "bottom",
     fallbackColor: "#dc2626",
-    fallbackLabel: "B",
+    fallbackLabel: "•",
   },
 };
 
 const cache = new Map<string, L.Icon | L.DivIcon>();
+const endpointIconCache = new Map<string, L.DivIcon>();
+const vehicleIconCache = new Map<string, L.DivIcon>();
+
+const ENDPOINT_GLYPHS: Record<MapVehicleType, string> = {
+  train: `
+    <rect x="4" y="3" width="16" height="15" rx="3"/>
+    <path d="M4 11h16M8 21l2-3m6 3-2-3M8 7h.01M16 7h.01"/>
+  `,
+  bus: `
+    <path d="M5 17V6a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v11"/>
+    <path d="M5 11h14M5 16h14M8 21l2-4m6 4-2-4"/>
+    <circle cx="8" cy="7.5" r=".75" fill="currentColor" stroke="none"/>
+    <circle cx="16" cy="7.5" r=".75" fill="currentColor" stroke="none"/>
+  `,
+  jeepney: `
+    <path d="M3 16V9a2 2 0 0 1 2-2h10l4 4h2v5H3Z"/>
+    <path d="M6 7V4h9v3M4 12h16"/>
+    <circle cx="7" cy="17" r="2"/>
+    <circle cx="17" cy="17" r="2"/>
+    <path d="M8 21h8"/>
+  `,
+  other: `
+    <path d="M5 15l1-5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2l1 5"/>
+    <path d="M4 15h16v4H4zM7 19v2m10-2v2"/>
+    <circle cx="8" cy="12" r=".75" fill="currentColor" stroke="none"/>
+    <circle cx="16" cy="12" r=".75" fill="currentColor" stroke="none"/>
+  `,
+};
+
+export function getMapVehicleType(transportTypeName: string): MapVehicleType {
+  const normalizedName = transportTypeName.toLowerCase();
+  if (normalizedName.includes("train")) return "train";
+  if (normalizedName.includes("bus")) return "bus";
+  if (normalizedName.includes("jeep")) return "jeepney";
+  return "other";
+}
+
+export function getEndpointMapIcon(
+  role: EndpointRole,
+  vehicleType: MapVehicleType
+): L.DivIcon {
+  const key = `${role}:${vehicleType}`;
+  const cached = endpointIconCache.get(key);
+  if (cached) return cached;
+
+  const color = role === "boarding" ? "#16a34a" : "#dc2626";
+  const icon = L.divIcon({
+    className: "",
+    iconSize: [38, 38],
+    iconAnchor: [19, 38],
+    popupAnchor: [0, -38],
+    html: `
+      <div style="
+        width:38px;height:38px;border-radius:9999px;
+        background:${color};color:#fff;border:3px solid #fff;
+        display:flex;align-items:center;justify-content:center;
+        box-shadow:0 1px 5px rgba(0,0,0,0.45);
+      ">
+        <svg data-vehicle="${vehicleType}" viewBox="0 0 24 24" width="25" height="25"
+          fill="none" stroke="currentColor" stroke-width="1.8"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          ${ENDPOINT_GLYPHS[vehicleType]}
+        </svg>
+      </div>
+    `,
+  });
+
+  endpointIconCache.set(key, icon);
+  return icon;
+}
+
+export function getVehicleMapIcon(
+  vehicleType: MapVehicleType,
+  color: string,
+  displayOffsetX = 0
+): L.DivIcon {
+  const key = `${vehicleType}:${color}:${displayOffsetX}`;
+  const cached = vehicleIconCache.get(key);
+  if (cached) return cached;
+
+  const icon = L.divIcon({
+    className: "",
+    iconSize: [34, 34],
+    iconAnchor: [17 - displayOffsetX, 17],
+    popupAnchor: [0, -17],
+    html: `
+      <div style="
+        width:34px;height:34px;border-radius:9999px;
+        background:${color};color:#fff;border:2px solid #fff;
+        display:flex;align-items:center;justify-content:center;
+        box-shadow:0 1px 4px rgba(0,0,0,0.4);
+      ">
+        <svg data-vehicle="${vehicleType}" viewBox="0 0 24 24" width="23" height="23"
+          fill="none" stroke="currentColor" stroke-width="1.8"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          ${ENDPOINT_GLYPHS[vehicleType]}
+        </svg>
+      </div>
+    `,
+  });
+
+  vehicleIconCache.set(key, icon);
+  return icon;
+}
 
 // `color` only tints the fallback icon (used for stops so they match the route).
 export function getMapIcon(

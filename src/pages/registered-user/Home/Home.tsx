@@ -52,8 +52,11 @@ import {
 import type { RouteGeometry } from "@/lib/routeGeometry";
 import {
   findRouteStopIndex,
+  getDisplayedRouteIds,
   getNextOverlappingRouteId,
+  getTripDistanceMeters,
   getUniqueServingRoute,
+  isRepeatedBoardingPoint,
   mergeMapTerminals,
   searchRouteMapItems,
   selectTripStop,
@@ -77,7 +80,13 @@ import type {
   TransportFareOption,
   VerificationStatus,
 } from "@/lib/fares";
-import { getMapIcon } from "@/lib/mapIcons";
+import {
+  getEndpointMapIcon,
+  getMapIcon,
+  getMapVehicleType,
+  getVehicleMapIcon,
+} from "@/lib/mapIcons";
+import type { MapVehicleType } from "@/lib/mapIcons";
 import { getPointImages } from "@/lib/mapImages";
 import type { PointImage } from "@/lib/mapImages";
 
@@ -300,6 +309,7 @@ export default function Home({
     Record<number, RouteLayerState>
   >({});
   const [visibleRouteIds, setVisibleRouteIds] = useState<number[]>([]);
+  const [routeLinesVisible, setRouteLinesVisible] = useState(true);
   const [selectedPlacePoint, setSelectedPlacePoint] =
     useState<RouteMapPoint | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -345,11 +355,12 @@ export default function Home({
   const roadRouteLoading = selectedRouteLayer?.status === "loading";
   const displayedRouteIds = useMemo(
     () =>
-      [...new Set([
-        ...visibleRouteIds,
-        ...(selectedRouteId ? [Number(selectedRouteId)] : []),
-      ])],
-    [selectedRouteId, visibleRouteIds]
+      getDisplayedRouteIds(
+        visibleRouteIds,
+        selectedRouteId,
+        routeLinesVisible
+      ),
+    [routeLinesVisible, selectedRouteId, visibleRouteIds]
   );
   const displayedRouteLayers = useMemo(
     () => {
@@ -608,6 +619,7 @@ export default function Home({
     (routeIds: number[]) => {
       const uniqueIds = [...new Set(routeIds)];
       setVisibleRouteIds(uniqueIds);
+      setRouteLinesVisible(uniqueIds.length > 0);
       uniqueIds.forEach((routeId) => {
         void loadRouteLayer(routeId).catch(() => undefined);
       });
@@ -837,17 +849,13 @@ export default function Home({
     !!selectedRoute &&
     boardingIndex !== null &&
     destinationIndex !== null &&
-    destinationIndex > boardingIndex &&
+    destinationIndex !== boardingIndex &&
     boardingStop?.route_id === selectedRoute.id &&
     destinationStop?.route_id === selectedRoute.id;
 
   const tripDistanceMeters =
-    hasTripSegment &&
-    stopDistances.length === selectedRouteStops.length
-      ? Number.isFinite(stopDistances[boardingIndex]) &&
-        Number.isFinite(stopDistances[destinationIndex])
-        ? stopDistances[destinationIndex] - stopDistances[boardingIndex]
-        : null
+    hasTripSegment
+      ? getTripDistanceMeters(stopDistances, boardingIndex, destinationIndex)
       : null;
 
   const fareOptionEstimates =
@@ -869,6 +877,13 @@ export default function Home({
     setDestinationIndex(selection.destinationIndex);
   };
 
+  const clearTrip = () => {
+    pendingBoardingPoint.current = null;
+    setBoardingIndex(null);
+    setDestinationIndex(null);
+    setRouteLinesVisible(false);
+  };
+
   const handlePlaceSelect = (point: RouteMapPoint) => {
     setSelectedPlacePoint(point);
     loadVisibleRouteLayers(point.routes.map(({ route }) => route.id));
@@ -878,7 +893,19 @@ export default function Home({
 
     if (selectedRoute) {
       const routeStopIndex = findRouteStopIndex(selectedRouteStops, point);
-      if (routeStopIndex !== null) handleTripStop(routeStopIndex);
+      if (routeStopIndex !== null) {
+        if (
+          isRepeatedBoardingPoint(
+            { boardingIndex, destinationIndex },
+            routeStopIndex
+          )
+        ) {
+          clearTrip();
+          return;
+        }
+
+        handleTripStop(routeStopIndex);
+      }
       return;
     }
 
@@ -904,6 +931,7 @@ export default function Home({
   };
 
   const handleRouteLineSelect = (routeId: number) => {
+    setRouteLinesVisible(true);
     const nextRouteId = String(routeId);
     if (selectedRouteId === nextRouteId) return;
     pendingBoardingPoint.current = null;
@@ -954,19 +982,20 @@ export default function Home({
     }
   };
 
-  const clearTrip = () => {
-    pendingBoardingPoint.current = null;
-    setBoardingIndex(null);
-    setDestinationIndex(null);
-  };
-
   const handleListPick = (index: number) => {
     handleTripStop(index);
   };
 
   const pointIcon = (index: number, stop: RouteStop) => {
-    if (index === boardingIndex) return getMapIcon("boarding");
-    if (index === destinationIndex) return getMapIcon("destination");
+    const vehicleType = getMapVehicleType(
+      selectedRoute?.transport_types.name ?? ""
+    );
+    if (index === boardingIndex) {
+      return getEndpointMapIcon("boarding", vehicleType);
+    }
+    if (index === destinationIndex) {
+      return getEndpointMapIcon("destination", vehicleType);
+    }
     if (stop.kind === "terminal") return getMapIcon("terminal");
 
     return stop.stop_type === "train_station"
@@ -1097,31 +1126,21 @@ export default function Home({
             const routeModes = new Map<
               number,
               {
-                kind: "bus_stop" | "jeepney_stop" | "train_station" | "stop";
+                vehicleType: MapVehicleType;
                 color: string;
               }
             >();
             point.routes.forEach(({ route }) => {
-              const name = route.transport_types.name.toLowerCase();
-              const kind = point.stop_type === "train_station"
-                ? "train_station"
-                : name.includes("jeep")
-                  ? "jeepney_stop"
-                  : name.includes("bus")
-                    ? "bus_stop"
-                    : "stop";
               routeModes.set(route.transport_type_id, {
-                kind,
+                vehicleType: getMapVehicleType(route.transport_types.name),
                 color: route.transport_types.color,
               });
             });
             const modes = [...routeModes.values()];
             if (modes.length === 0 && point.kind === "stop") {
               modes.push({
-                kind:
-                  point.stop_type === "train_station"
-                    ? "train_station"
-                    : "stop",
+                vehicleType:
+                point.stop_type === "train_station" ? "train" : "other",
                 color: "#2563eb",
               });
             }
@@ -1131,37 +1150,49 @@ export default function Home({
             const markerModes =
               isBoardingMarker || isDestinationMarker
                 ? [
+                  {
+                    kind: isBoardingMarker
+                      ? ("boarding" as const)
+                      : ("destination" as const),
+                    color: routeColor,
+                    vehicleType: getMapVehicleType(
+                      selectedRoute?.transport_types.name ?? ""
+                    ),
+                  },
+                ]
+                : point.kind === "terminal"
+                ? [
                     {
-                      kind: isBoardingMarker
-                        ? ("boarding" as const)
-                        : ("destination" as const),
-                      color: routeColor,
+                      kind: "terminal" as const,
+                      color: "#0f2a47",
+                      vehicleType: "other" as const,
                     },
                   ]
-                : point.kind === "terminal"
-                  ? [{ kind: "terminal" as const, color: "#0f2a47" }]
-                  : modes;
+                : modes.map((mode) => ({ ...mode, kind: "vehicle" as const }));
             const offsetStart = -((markerModes.length - 1) * 9) / 2;
 
             return markerModes.map((mode, modeIndex) => {
               const icon =
-                (isBoardingMarker || isDestinationMarker) &&
+                mode.kind !== "vehicle" &&
+                mode.kind !== "terminal" &&
                 routeStopIndex !== null &&
                 routeStop
                   ? pointIcon(routeStopIndex, routeStop)
-                  : getMapIcon(
-                      mode.kind,
+                : mode.kind === "terminal"
+                  ? getMapIcon("terminal")
+                  : getVehicleMapIcon(
+                      mode.vehicleType,
                       mode.color,
                       offsetStart + modeIndex * 9
                     );
 
               return (
                 <Marker
-                  key={`${point.kind}-${point.ref_id}-${mode.kind}`}
-                  position={position}
-                  icon={icon}
-                  alt={`${point.name} ${mode.kind.replace("_stop", "")}`}
-                  title={`${point.name} — ${mode.kind.replace("_stop", "")}`}
+                key={`${point.kind}-${point.ref_id}-${mode.kind}-${mode.vehicleType}-${modeIndex}`}
+                position={position}
+                icon={icon}
+                alt={`${point.name} ${mode.kind === "vehicle" ? mode.vehicleType : mode.kind}`}
+                title={`${point.name} — ${mode.kind === "vehicle" ? mode.vehicleType : mode.kind}`}
                   zIndexOffset={isOnSelectedRoute ? 1000 : 500}
                   eventHandlers={{
                     click: () => handlePlaceSelect(point),
@@ -1767,8 +1798,8 @@ export default function Home({
 
               {!hasTripSegment && (
                 <p className="mt-2 text-gray-600">
-                  Click a start point on this route, then a later stop to
-                  compare fares.
+                  Select any stop on this route to board, then any other stop
+                  as your destination to compare fares.
                 </p>
               )}
 

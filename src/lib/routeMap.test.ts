@@ -4,8 +4,11 @@ import type { RouteStop } from "./routes";
 import {
   buildRouteMapIndex,
   findRouteStopIndex,
+  getDisplayedRouteIds,
   getNextOverlappingRouteId,
+  getTripDistanceMeters,
   getUniqueServingRoute,
+  isRepeatedBoardingPoint,
   mergeMapTerminals,
   searchRouteMapItems,
   selectTripStop,
@@ -261,7 +264,7 @@ describe("getNextOverlappingRouteId", () => {
 });
 
 describe("selectTripStop", () => {
-  it("sets a boarding point, then only accepts a later destination", () => {
+  it("sets a boarding point, then accepts a destination in either direction", () => {
     const emptySelection: TripSelection = {
       boardingIndex: null,
       destinationIndex: null,
@@ -276,7 +279,7 @@ describe("selectTripStop", () => {
     ).toEqual({ boardingIndex: 2, destinationIndex: 4 });
     expect(
       selectTripStop({ boardingIndex: 2, destinationIndex: null }, 1)
-    ).toEqual({ boardingIndex: 1, destinationIndex: null });
+    ).toEqual({ boardingIndex: 2, destinationIndex: 1 });
   });
 
   it("updates the destination when another later stop is clicked", () => {
@@ -285,12 +288,78 @@ describe("selectTripStop", () => {
     ).toEqual({ boardingIndex: 2, destinationIndex: 5 });
   });
 
-  it("starts a new boarding selection when the clicked stop is not later", () => {
+  it("restarts boarding when the current boarding stop is selected again", () => {
     expect(
       selectTripStop({ boardingIndex: 2, destinationIndex: 4 }, 1)
-    ).toEqual({ boardingIndex: 1, destinationIndex: null });
+    ).toEqual({ boardingIndex: 2, destinationIndex: 1 });
     expect(
       selectTripStop({ boardingIndex: 2, destinationIndex: 4 }, 2)
     ).toEqual({ boardingIndex: 2, destinationIndex: null });
+    expect(
+      selectTripStop({ boardingIndex: 3, destinationIndex: 1 }, 0)
+    ).toEqual({ boardingIndex: 3, destinationIndex: 0 });
+    expect(
+      selectTripStop({ boardingIndex: 3, destinationIndex: 0 }, 1)
+    ).toEqual({ boardingIndex: 3, destinationIndex: 1 });
+    expect(
+      selectTripStop({ boardingIndex: 3, destinationIndex: 0 }, -1)
+    ).toEqual({ boardingIndex: 3, destinationIndex: 0 });
+  });
+});
+
+describe("getTripDistanceMeters", () => {
+  it("calculates a positive route distance for either endpoint order", () => {
+    const distances = [0, 100, 300, 600];
+
+    expect(getTripDistanceMeters(distances, 3, 0)).toBe(600);
+    expect(getTripDistanceMeters(distances, 0, 3)).toBe(600);
+    expect(getTripDistanceMeters(distances, 1, 2)).toBe(200);
+  });
+
+  it("returns null for missing, identical, invalid, or non-finite endpoints", () => {
+    expect(getTripDistanceMeters([0, 100], null, 1)).toBeNull();
+    expect(getTripDistanceMeters([0, 100], 1, null)).toBeNull();
+    expect(getTripDistanceMeters([0, 100], 1, 1)).toBeNull();
+    expect(getTripDistanceMeters([0, 100], -1, 1)).toBeNull();
+    expect(getTripDistanceMeters([0, 100], 0, 2)).toBeNull();
+    expect(getTripDistanceMeters([0, Number.NaN], 0, 1)).toBeNull();
+  });
+});
+
+describe("route line visibility", () => {
+  it("hides visible and selected routes when route lines are hidden", () => {
+    expect(getDisplayedRouteIds([10, 11], "10", false)).toEqual([]);
+  });
+
+  it("displays unique visible routes and the selected route", () => {
+    expect(getDisplayedRouteIds([10, 11], "10", true)).toEqual([10, 11]);
+    expect(getDisplayedRouteIds([], "12", true)).toEqual([12]);
+  });
+
+  it("detects tapping the current boarding point again", () => {
+    expect(
+      isRepeatedBoardingPoint(
+        { boardingIndex: 2, destinationIndex: null },
+        2
+      )
+    ).toBe(true);
+    expect(
+      isRepeatedBoardingPoint(
+        { boardingIndex: 2, destinationIndex: 4 },
+        2
+      )
+    ).toBe(true);
+    expect(
+      isRepeatedBoardingPoint(
+        { boardingIndex: 2, destinationIndex: null },
+        1
+      )
+    ).toBe(false);
+    expect(
+      isRepeatedBoardingPoint(
+        { boardingIndex: null, destinationIndex: null },
+        2
+      )
+    ).toBe(false);
   });
 });

@@ -52,6 +52,31 @@ export interface TripSelection {
   destinationIndex: number | null;
 }
 
+export function isRepeatedBoardingPoint(
+  selection: TripSelection,
+  clickedIndex: number
+): boolean {
+  return (
+    selection.boardingIndex !== null &&
+    clickedIndex === selection.boardingIndex
+  );
+}
+
+export function getDisplayedRouteIds(
+  visibleRouteIds: number[],
+  selectedRouteId: string,
+  routeLinesVisible: boolean
+): number[] {
+  if (!routeLinesVisible) return [];
+
+  return [
+    ...new Set([
+      ...visibleRouteIds,
+      ...(selectedRouteId ? [Number(selectedRouteId)] : []),
+    ]),
+  ];
+}
+
 export function getUniqueServingRoute(
   point: RouteMapPoint
 ): RouteMapRoute | null {
@@ -217,10 +242,41 @@ export function selectTripStop(
 
   if (
     selection.boardingIndex === null ||
-    clickedIndex <= selection.boardingIndex
+    clickedIndex === selection.boardingIndex
   ) {
     return { boardingIndex: clickedIndex, destinationIndex: null };
   }
 
   return { ...selection, destinationIndex: clickedIndex };
+}
+
+export function getTripDistanceMeters(
+  stopDistances: number[],
+  boardingIndex: number | null,
+  destinationIndex: number | null
+): number | null {
+  if (
+    boardingIndex === null ||
+    destinationIndex === null ||
+    boardingIndex === destinationIndex ||
+    !Number.isInteger(boardingIndex) ||
+    !Number.isInteger(destinationIndex) ||
+    boardingIndex < 0 ||
+    destinationIndex < 0 ||
+    boardingIndex >= stopDistances.length ||
+    destinationIndex >= stopDistances.length
+  ) {
+    return null;
+  }
+
+  const boardingDistance = stopDistances[boardingIndex];
+  const destinationDistance = stopDistances[destinationIndex];
+  if (
+    !Number.isFinite(boardingDistance) ||
+    !Number.isFinite(destinationDistance)
+  ) {
+    return null;
+  }
+
+  return Math.abs(destinationDistance - boardingDistance);
 }
