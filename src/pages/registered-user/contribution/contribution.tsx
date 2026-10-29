@@ -15,6 +15,7 @@ import {
   CircleMarker,
   MapContainer,
   Marker,
+  Pane,
   Polyline,
   TileLayer,
   Tooltip,
@@ -89,6 +90,7 @@ interface RoutePoint {
 interface PreviewLine {
   id: number;
   positions: Coordinates[];
+  color: string;
 }
 
 const defaultPosition: Coordinates = [14.7167, 121.05];
@@ -142,6 +144,11 @@ function existingLabel(point: ExistingPoint) {
     : point.name;
 }
 
+function existingPointTypeLabel(point: ExistingPoint) {
+  if (point.kind === "terminal") return "Terminal";
+  return point.stopType === "train_station" ? "Station" : "Stop";
+}
+
 function toRoutePoint(point: ExistingPoint): RoutePoint {
   return {
     key: crypto.randomUUID(),
@@ -190,6 +197,30 @@ function InvalidateOnMount() {
   return null;
 }
 
+function FitRouteLines({
+  lines,
+  selectedRouteId,
+}: {
+  lines: PreviewLine[];
+  selectedRouteId: number | null;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    const visibleLines = selectedRouteId
+      ? lines.filter((line) => line.id === selectedRouteId)
+      : lines;
+    const positions = visibleLines.flatMap((line) => line.positions);
+    if (positions.length === 0) return;
+
+    const bounds = L.latLngBounds(positions);
+    if (!bounds.isValid()) return;
+    map.fitBounds(bounds, { padding: [32, 32], maxZoom: 15, animate: true });
+  }, [map, lines, selectedRouteId]);
+
+  return null;
+}
+
 interface PinMapProps {
   currentPosition: Coordinates | null;
   focus: Coordinates | null;
@@ -198,10 +229,14 @@ interface PinMapProps {
   routePoints: RoutePoint[];
   routeColor: string;
   candidates: ExistingPoint[];
+  stopCandidates: ExistingPoint[];
+  selectedStopReferenceKey: string | null;
+  selectedPreviewRouteId: number | null;
   connectedKeys: Set<string>;
   previewLines: PreviewLine[];
   onPick: (position: Coordinates) => void;
   onPickExisting: (point: ExistingPoint) => void;
+  onPickStopReference: (point: ExistingPoint) => void;
   onMovePin: (position: Coordinates) => void;
   onMoveRoutePoint: (index: number, position: Coordinates) => void;
 }
@@ -214,10 +249,14 @@ function PinMap({
   routePoints,
   routeColor,
   candidates,
+  stopCandidates,
+  selectedStopReferenceKey,
+  selectedPreviewRouteId,
   connectedKeys,
   previewLines,
   onPick,
   onPickExisting,
+  onPickStopReference,
   onMovePin,
   onMoveRoutePoint,
 }: PinMapProps) {
@@ -234,6 +273,10 @@ function PinMap({
       />
       <InvalidateOnMount />
       <FlyTo position={focus ?? currentPosition} />
+      <FitRouteLines
+        lines={previewLines}
+        selectedRouteId={selectedPreviewRouteId}
+      />
       <ClickToPin onPick={onPick} />
 
       {currentPosition && (
@@ -244,10 +287,34 @@ function PinMap({
         />
       )}
 
+      <Pane name="routePreviewPane" style={{ zIndex: 650, pointerEvents: "none" }}>
+        {(mode === "route" || mode === "stop") &&
+          previewLines.map((line) => {
+            const selected = line.id === selectedPreviewRouteId;
+            return (
+              <Polyline
+                key={line.id}
+                positions={line.positions}
+                interactive={false}
+                pathOptions={{
+                  color: line.color,
+                  weight: selected ? 8 : 5,
+                  opacity: selected ? 0.98 : 0.72,
+                  dashArray: selected ? undefined : "8 6",
+                }}
+              />
+            );
+          })}
+      </Pane>
+
+      <Pane name="contributionPinPane" style={{ zIndex: 670 }} />
+      <Pane name="selectedPointPane" style={{ zIndex: 680 }} />
+      <Pane name="contributionMarkerPane" style={{ zIndex: 625 }}>
       {mode !== "route" && pin && (
         <Marker
           position={pin}
           draggable
+          pane="contributionPinPane"
           eventHandlers={{
             dragend: (event) => {
               const { lat, lng } = (event.target as L.Marker).getLatLng();
@@ -257,21 +324,31 @@ function PinMap({
         />
       )}
 
-      {/* Paths of the existing routes through the selected point (approximate). */}
-      {mode === "route" &&
-        previewLines.map((line) => (
-          <Polyline
-            key={line.id}
-            positions={line.positions}
-            interactive={false}
-            pathOptions={{
-              color: routeColor,
-              weight: 4,
-              opacity: 0.55,
-              dashArray: "8 6",
-            }}
-          />
-        ))}
+      {mode === "stop" &&
+        stopCandidates.map((point) => {
+          const key = pointKey(point.kind, point.id);
+          const selected = key === selectedStopReferenceKey;
+          return (
+            <CircleMarker
+              key={key}
+              pane={selected ? "selectedPointPane" : "contributionMarkerPane"}
+              center={[point.latitude, point.longitude]}
+              radius={selected ? 10 : 7}
+              bubblingMouseEvents={false}
+              pathOptions={{
+                color: "#ffffff",
+                weight: selected ? 3 : 2,
+                fillColor: selected ? "#f97316" : "#12395A",
+                fillOpacity: 0.9,
+              }}
+              eventHandlers={{ click: () => onPickStopReference(point) }}
+            >
+              <Tooltip>
+                {existingPointTypeLabel(point)}: {point.name}
+              </Tooltip>
+            </CircleMarker>
+          );
+        })}
 
       {/* Existing approved points: tap one to add it to the route. */}
       {mode === "route" &&
@@ -304,6 +381,7 @@ function PinMap({
             position={[point.latitude, point.longitude]}
             icon={numberedIcon(index + 1, routeColor)}
             draggable={point.existingId === null}
+            pane="contributionPinPane"
             eventHandlers={{
               dragend: (event) => {
                 const { lat, lng } = (event.target as L.Marker).getLatLng();
@@ -312,6 +390,7 @@ function PinMap({
             }}
           />
         ))}
+      </Pane>
     </MapContainer>
   );
 }
@@ -342,6 +421,8 @@ export default function Contribution({
   const [variantId, setVariantId] = useState("");
   const [existingQuery, setExistingQuery] = useState("");
   const [inspectKey, setInspectKey] = useState<string | null>(null);
+  const [selectedStopReferenceKey, setSelectedStopReferenceKey] = useState<string | null>(null);
+  const [selectedPreviewRouteId, setSelectedPreviewRouteId] = useState<number | null>(null);
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const pointPhotoInputRef = useRef<HTMLInputElement>(null);
@@ -354,6 +435,7 @@ export default function Contribution({
   const [existingPoints, setExistingPoints] = useState<ExistingPoint[]>([]);
   const [existingRoutes, setExistingRoutes] = useState<ExistingRoute[]>([]);
   const [existingError, setExistingError] = useState("");
+  const [catalogLoading, setCatalogLoading] = useState(true);
 
   // Location
   const [currentPosition, setCurrentPosition] = useState<Coordinates | null>(
@@ -411,6 +493,20 @@ export default function Contribution({
     [existingPoints, usedKeys, isRail, vehicleTypeId]
   );
 
+  const stopCandidates = useMemo(() => {
+    if (!vehicleTypeId) return [];
+    const isRailType = typeVariants.some(
+      (variant) => variant.fare_model === "matrix"
+    );
+    return existingPoints.filter(
+      (point) =>
+        String(point.transportTypeId) === vehicleTypeId &&
+        (!isRailType ||
+          point.kind === "terminal" ||
+          point.stopType === "train_station")
+    );
+  }, [existingPoints, typeVariants, vehicleTypeId]);
+
   const lastPoint = routePoints[routePoints.length - 1];
   const lastExisting =
     lastPoint && lastPoint.existingId !== null
@@ -442,6 +538,10 @@ export default function Contribution({
   const otherStops = candidates.filter(
     (p) => p.kind === "stop" && !isConnected(p) && matches(p)
   );
+  const matchingStopCandidates = stopCandidates.filter(matches);
+  const selectedStopReference = selectedStopReferenceKey
+    ? existingByKey.get(selectedStopReferenceKey)
+    : undefined;
 
   // ---------- details of the selected point: routes through it ----------
 
@@ -463,12 +563,38 @@ export default function Contribution({
     () =>
       inspectRoutes.map((route) => ({
         id: route.id,
+        color: routeColor,
         positions: route.keys.flatMap((key): Coordinates[] => {
           const point = existingByKey.get(key);
           return point ? [[point.latitude, point.longitude]] : [];
         }),
       })),
-    [inspectRoutes, existingByKey]
+    [inspectRoutes, existingByKey, routeColor]
+  );
+
+  const stopReferenceRoutes = useMemo(() => {
+    if (!selectedStopReferenceKey) return [];
+    const routeIds = new Set(
+      existingByKey.get(selectedStopReferenceKey)?.routeIds ?? []
+    );
+    return existingRoutes.filter(
+      (route) => routeIds.has(route.id) && route.keys.includes(selectedStopReferenceKey)
+    );
+  }, [existingByKey, existingRoutes, selectedStopReferenceKey]);
+
+  const stopReferencePreviewLines = useMemo<PreviewLine[]>(
+    () =>
+      stopReferenceRoutes.map((route) => ({
+        id: route.id,
+        color: safeColor(
+          types.find((type) => type.id === route.transportTypeId)?.color
+        ),
+        positions: route.keys.flatMap((key): Coordinates[] => {
+          const point = existingByKey.get(key);
+          return point ? [[point.latitude, point.longitude]] : [];
+        }),
+      })),
+    [stopReferenceRoutes, types, existingByKey]
   );
 
   const variantName = (variantIdValue: number) =>
@@ -508,6 +634,7 @@ export default function Contribution({
   }, [currentUserId]);
 
   const loadCatalog = useCallback(async () => {
+    setCatalogLoading(true);
     try {
       const catalog = await getTransitCatalog();
       setExistingPoints(catalog.points);
@@ -519,6 +646,8 @@ export default function Contribution({
           ? error.message
           : "Unable to load existing terminals and stops."
       );
+    } finally {
+      setCatalogLoading(false);
     }
   }, []);
 
@@ -621,6 +750,8 @@ export default function Contribution({
     setVariantId("");
     setExistingQuery("");
     setInspectKey(null);
+    setSelectedStopReferenceKey(null);
+    setSelectedPreviewRouteId(null);
     setFocus(null);
     setShowValidation(false);
     setFormError("");
@@ -647,6 +778,8 @@ export default function Contribution({
     setVariantId("");
     setInspectKey(null);
     setExistingQuery("");
+    setSelectedStopReferenceKey(null);
+    setSelectedPreviewRouteId(null);
 
     setRoutePoints((previous) => {
       const kept = previous.filter(
@@ -727,6 +860,18 @@ export default function Contribution({
     const key = pointKey(point.kind, point.id);
     addExistingKeys([key]);
     setInspectKey(key);
+    setSelectedPreviewRouteId(null);
+  };
+
+  const focusStopReference = (point: ExistingPoint) => {
+    setSelectedStopReferenceKey(pointKey(point.kind, point.id));
+    setSelectedPreviewRouteId(null);
+    setFocus([point.latitude, point.longitude]);
+  };
+
+  const inspectExistingPoint = (key: string) => {
+    setInspectKey(key);
+    setSelectedPreviewRouteId(null);
   };
 
   const updateRoutePoint = (index: number, updates: Partial<RoutePoint>) => {
@@ -1446,6 +1591,74 @@ export default function Contribution({
                 </div>
               )}
 
+              {kind === "stop" && (
+                <div>
+                  <label
+                    htmlFor="existing-stop-reference"
+                    className="mb-1.5 block text-sm font-medium text-gray-700"
+                  >
+                    Start from an existing terminal or stop
+                  </label>
+                  <input
+                    id="existing-stop-reference"
+                    aria-label="Search existing terminals and stops"
+                    value={existingQuery}
+                    disabled={!vehicleTypeId}
+                    onChange={(event) => setExistingQuery(event.target.value)}
+                    placeholder="Search by name..."
+                    className={`${fieldClass(false)} disabled:bg-gray-100`}
+                  />
+                  <div className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-lg border border-gray-200 bg-white p-1">
+                    {!vehicleTypeId ? (
+                      <p className="px-3 py-2 text-xs text-gray-500">
+                        Choose a vehicle type to find approved points.
+                      </p>
+                    ) : catalogLoading ? (
+                      <p role="status" className="px-3 py-2 text-xs text-gray-500">
+                        Loading approved terminals and stops...
+                      </p>
+                    ) : existingError ? (
+                      <p role="alert" className="px-3 py-2 text-xs text-red-600">
+                        {existingError}
+                      </p>
+                    ) : stopCandidates.length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-gray-500">
+                        No approved terminals or stops for this vehicle type.
+                      </p>
+                    ) : matchingStopCandidates.length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-gray-500">
+                        No approved points match “{existingQuery.trim()}”.
+                      </p>
+                    ) : (
+                      matchingStopCandidates.map((point) => {
+                        const key = pointKey(point.kind, point.id);
+                        const selected = key === selectedStopReferenceKey;
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            onClick={() => focusStopReference(point)}
+                            className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                              selected
+                                ? "bg-blue-50 text-[#12395A]"
+                                : "text-gray-700 hover:bg-gray-50"
+                            }`}
+                          >
+                            <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                              {existingPointTypeLabel(point)}
+                            </span>
+                            <span className="truncate">{point.name}</span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Selecting a point shows its routes for reference. It will not move the new-stop pin.
+                  </p>
+                </div>
+              )}
+
               {/* Route: pick existing terminals / stops */}
               {kind === "route" && (
                 <div>
@@ -1573,10 +1786,16 @@ export default function Contribution({
                     routePoints={routePoints}
                     routeColor={routeColor}
                     candidates={candidates}
+                    stopCandidates={stopCandidates}
+                    selectedStopReferenceKey={selectedStopReferenceKey}
+                    selectedPreviewRouteId={selectedPreviewRouteId}
                     connectedKeys={connectedKeys}
-                    previewLines={previewLines}
+                    previewLines={
+                      kind === "stop" ? stopReferencePreviewLines : previewLines
+                    }
                     onPick={handleMapPick}
                     onPickExisting={addExistingPoint}
+                    onPickStopReference={focusStopReference}
                     onMovePin={setPin}
                     onMoveRoutePoint={(index, position) =>
                       updateRoutePoint(index, {
@@ -1601,6 +1820,102 @@ export default function Contribution({
                 )}
               </div>
 
+              {kind === "stop" && selectedStopReference && (
+                <div className="rounded-xl border border-orange-200 bg-orange-50/70 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">
+                        {existingPointTypeLabel(selectedStopReference)}: {selectedStopReference.name}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-600">
+                        {selectedType?.name ?? "Transport type unavailable"} · {selectedStopReference.latitude.toFixed(5)}, {selectedStopReference.longitude.toFixed(5)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="Clear selected reference point"
+                      onClick={() => {
+                        setSelectedStopReferenceKey(null);
+                        setSelectedPreviewRouteId(null);
+                      }}
+                      className="rounded-full px-2 text-lg leading-none text-gray-500 hover:bg-white"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {stopReferenceRoutes.length === 0 ? (
+                    <p className="mt-2 text-xs text-gray-600">
+                      No approved routes currently serve this point.
+                    </p>
+                  ) : (
+                    <div className="mt-3 max-h-[280px] space-y-2 overflow-y-auto pr-1">
+                      {stopReferenceRoutes.map((route) => {
+                        const routeType = types.find(
+                          (type) => type.id === route.transportTypeId
+                        );
+                        return (
+                          <div
+                            key={route.id}
+                            className="rounded-lg border border-gray-200 bg-white p-2.5"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span
+                                aria-hidden="true"
+                                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                style={{
+                                  backgroundColor: safeColor(routeType?.color),
+                                }}
+                              />
+                              <button
+                                type="button"
+                                aria-pressed={selectedPreviewRouteId === route.id}
+                                onClick={() =>
+                                  setSelectedPreviewRouteId(route.id)
+                                }
+                                className={`min-w-0 flex-1 truncate text-left text-sm font-semibold ${
+                                  selectedPreviewRouteId === route.id
+                                    ? "text-[#12395A] underline"
+                                    : "text-gray-900 hover:underline"
+                                }`}
+                              >
+                                {route.name}
+                              </button>
+                            </div>
+                            <p className="ml-[18px] mt-0.5 text-xs text-gray-500">
+                              {routeType?.name ?? "Transport type unavailable"} · {variantName(route.variantId)} · {route.keys.length} points
+                            </p>
+                            <ol className="ml-[18px] mt-2 space-y-1">
+                              {route.keys.map((key, index) => {
+                                const point = existingByKey.get(key);
+                                if (!point) return null;
+                                return (
+                                  <li
+                                    key={key}
+                                    className={`flex items-center gap-2 rounded px-2 py-1 text-xs ${
+                                      key === selectedStopReferenceKey
+                                        ? "bg-orange-100 font-semibold text-orange-900"
+                                        : "text-gray-700"
+                                    }`}
+                                  >
+                                    <span className="w-5 shrink-0 text-right text-gray-400">
+                                      {index + 1}
+                                    </span>
+                                    <span className="truncate">
+                                      {existingPointTypeLabel(point)}: {point.name}
+                                    </span>
+                                  </li>
+                                );
+                              })}
+                            </ol>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Route: details of the selected point */}
               {kind === "route" && inspectPoint && (
                 <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-3">
@@ -1617,7 +1932,10 @@ export default function Contribution({
                     <button
                       type="button"
                       aria-label="Close route details"
-                      onClick={() => setInspectKey(null)}
+                      onClick={() => {
+                        setInspectKey(null);
+                        setSelectedPreviewRouteId(null);
+                      }}
                       className="rounded-full px-2 text-lg leading-none text-gray-500 hover:bg-white"
                     >
                       ×
@@ -1649,13 +1967,24 @@ export default function Contribution({
                             className="rounded-lg border border-gray-200 bg-white p-2.5"
                           >
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className="text-sm font-semibold text-gray-900">
+                              <button
+                                type="button"
+                                aria-pressed={selectedPreviewRouteId === route.id}
+                                onClick={() =>
+                                  setSelectedPreviewRouteId(route.id)
+                                }
+                                className={`text-left text-sm font-semibold ${
+                                  selectedPreviewRouteId === route.id
+                                    ? "text-[#12395A] underline"
+                                    : "text-gray-900 hover:underline"
+                                }`}
+                              >
                                 {route.name}
                                 <span className="ml-2 text-xs font-normal text-gray-500">
                                   {variantName(route.variantId)} ·{" "}
                                   {route.keys.length} stops
                                 </span>
-                              </p>
+                              </button>
 
                               <div className="flex flex-wrap gap-1.5">
                                 {anchorIndex < route.keys.length - 1 && inspectKey && (
@@ -1783,7 +2112,7 @@ export default function Contribution({
                                 type="button"
                                 title="Show the routes through this point"
                                 onClick={() =>
-                                  setInspectKey(
+                                  inspectExistingPoint(
                                     pointKey(
                                       point.kind,
                                       point.existingId as number
