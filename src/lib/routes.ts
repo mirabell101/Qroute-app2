@@ -37,6 +37,22 @@ export interface RouteDetails {
   route_stops: RouteStop[];
 }
 
+interface ApprovalFlag {
+  is_approved?: boolean;
+}
+
+// A route stop is usable only if its terminal or stop is visible AND approved.
+// Unapproved points come back null (hidden by RLS) or with is_approved = false.
+function hasApprovedPoint(row: {
+  terminals: ApprovalFlag | null;
+  stops: ApprovalFlag | null;
+}): boolean {
+  return (
+    (row.terminals !== null && row.terminals.is_approved !== false) ||
+    (row.stops !== null && row.stops.is_approved !== false)
+  );
+}
+
 export async function getRouteMapIndex(): Promise<RouteMapIndex> {
   const { data, error } = await supabase
     .from("routes")
@@ -49,19 +65,26 @@ export async function getRouteMapIndex(): Promise<RouteMapIndex> {
       route_stops (
         route_id,
         stop_order,
-        terminals ( id, name, latitude, longitude, is_active ),
-        stops ( id, name, description, stop_type, latitude, longitude )
+        terminals ( id, name, latitude, longitude, is_active, is_approved ),
+        stops ( id, name, description, stop_type, latitude, longitude, is_approved )
       )
     `
     )
     .eq("is_active", true)
     .eq("is_deleted", false)
     .eq("is_banned", false)
+    .eq("is_approved", true)
     .order("name", { ascending: true });
 
   if (error) throw new Error(error.message);
 
-  return buildRouteMapIndex((data ?? []) as unknown as RouteMapRouteRecord[]);
+  // Only routes whose every point is approved appear on the map.
+  const records = ((data ?? []) as unknown as RouteMapRouteRecord[]).filter(
+    (record) =>
+      record.route_stops.length > 0 && record.route_stops.every(hasApprovedPoint)
+  );
+
+  return buildRouteMapIndex(records);
 }
 
 interface RawPoint {
@@ -71,6 +94,7 @@ interface RawPoint {
   longitude: number;
   stop_type?: "road_stop" | "train_station";
   description?: string | null;
+  is_approved?: boolean;
 }
 
 interface RawRouteStop {
@@ -120,18 +144,26 @@ export async function getRouteDetails(
       route_stops (
         route_id,
         stop_order,
-        terminals ( id, name, latitude, longitude ),
-        stops ( id, name, description, stop_type, latitude, longitude )
+        terminals ( id, name, latitude, longitude, is_approved ),
+        stops ( id, name, description, stop_type, latitude, longitude, is_approved )
       )
     `
     )
     .eq("id", routeId)
     .eq("is_deleted", false)
+    .eq("is_banned", false)
+    .eq("is_approved", true)
     .single();
 
   if (error) throw new Error(error.message);
 
   const raw = data as unknown as RawRoute;
+
+  // Never show a route with an unapproved or hidden point; it could mislead
+  // riders about where it goes and what it costs.
+  if (raw.route_stops.length === 0 || !raw.route_stops.every(hasApprovedPoint)) {
+    throw new Error("This route isn't available yet.");
+  }
 
   const points: RouteStop[] = raw.route_stops
     .flatMap((row): RouteStop[] => {
@@ -151,7 +183,6 @@ export async function getRouteDetails(
         ];
       }
 
-      // A point hidden by moderation (RLS) comes back null and is skipped.
       if (row.stops) {
         return [
           {

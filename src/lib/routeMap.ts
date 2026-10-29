@@ -16,6 +16,7 @@ export interface RouteMapRawPoint {
   stop_type?: "road_stop" | "train_station";
   description?: string | null;
   is_active?: boolean;
+    is_approved?: boolean;
 }
 
 export interface RouteMapRouteRecord extends RouteMapRoute {

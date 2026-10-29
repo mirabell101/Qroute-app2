@@ -68,6 +68,7 @@ export async function getPointImages(
       "id, terminal_id, stop_id, storage_path, caption, is_approved, moderation_status, created_at"
     )
     .eq("is_deleted", false)
+    .eq("is_approved", true)
     .or(filters.join(","))
     .order("created_at", { ascending: false });
 
