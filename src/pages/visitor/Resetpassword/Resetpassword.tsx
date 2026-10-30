@@ -6,9 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
 import qrouteLogo from "@/assets/logoboi.png";
-
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+import { API_BASE_URL } from "@/lib/api";
 
 interface ResetPasswordState {
   email?: string;

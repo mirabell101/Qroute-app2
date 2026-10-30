@@ -14,8 +14,78 @@ import {
 } from "./supabaseClient.ts";
 
 const app = express();
-const port = Number(process.env.PORT) || 3000;
+const port = Number(process.env.PORT) || 3001;
 const startedAt = Date.now();
+
+const allowedOrigins = new Set([
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+  ...(process.env.CORS_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/$/, ""))
+    .filter(Boolean),
+]);
+
+const allowedMethods = new Set([
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "OPTIONS",
+]);
+const allowedHeaders = new Set(["content-type", "authorization"]);
+
+// CORS must run before JSON parsing and routes so browser preflights can finish.
+app.use((req, res, next) => {
+  const origin = req.get("Origin");
+
+  if (origin) {
+    const normalizedOrigin = origin.replace(/\/$/, "");
+    if (!allowedOrigins.has(normalizedOrigin)) {
+      res.status(403).json({
+        status: "error",
+        message: "Origin is not allowed.",
+      });
+      return;
+    }
+
+    res.setHeader("Access-Control-Allow-Origin", normalizedOrigin);
+    res.vary("Origin");
+  }
+
+  if (req.method === "OPTIONS") {
+    const requestedMethod = req.get("Access-Control-Request-Method")?.toUpperCase();
+    const requestedHeaders = (req.get("Access-Control-Request-Headers") ?? "")
+      .split(",")
+      .map((header) => header.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (
+      !requestedMethod ||
+      !allowedMethods.has(requestedMethod) ||
+      requestedHeaders.some((header) => !allowedHeaders.has(header))
+    ) {
+      res.status(400).json({
+        status: "error",
+        message: "CORS preflight request is not allowed.",
+      });
+      return;
+    }
+
+    res.setHeader("Access-Control-Allow-Methods", [...allowedMethods].join(", "));
+    if (requestedHeaders.length) {
+      res.setHeader("Access-Control-Allow-Headers", requestedHeaders.join(", "));
+    }
+    res.setHeader("Access-Control-Max-Age", "600");
+    res.status(204).end();
+    return;
+  }
+
+  next();
+});
 
 app.use(express.json());
 app.use("/api/auth", authRoutes);
@@ -195,6 +265,6 @@ app.use(
   }
 );
 
-app.listen(port, () => {
-  console.log(`[server] listening on http://localhost:${port}`);
+app.listen(port, "0.0.0.0", () => {
+  console.log(`[server] listening on 0.0.0.0:${port}`);
 });

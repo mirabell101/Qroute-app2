@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
+import { API_BASE_URL } from "@/lib/api";
 
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -11,9 +12,6 @@ import { Button } from "@/components/ui/button";
 
 import qrouteLogo from "@/assets/logoboi.png";
 import appLogo from "@/assets/APP VER (1).png";
-
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
 
 function Login() {
   const navigate = useNavigate();

@@ -6,9 +6,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import qrouteLogo from "@/assets/logoboi.png";
 import appLogo from "@/assets/APP VER (1).png";
-
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+import { API_BASE_URL } from "@/lib/api";
 
 interface OTPRouteState {
   userId?: string;

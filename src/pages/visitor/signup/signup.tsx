@@ -6,12 +6,10 @@ import { Eye, EyeOff, User, Mail, Lock } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { API_BASE_URL } from "@/lib/api";
 
 import qrouteLogo from "@/assets/logoboi.png";
 import appLogo from "@/assets/APP VER (1).png";
-
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
 
 function SignUp() {
   const navigate = useNavigate();
