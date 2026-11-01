@@ -30,6 +30,7 @@ import RouteManagement from "./pages/admin/route-management/route-management";
 import PostManagement from "./pages/admin/post-management/post-management";
 import Reports from "./pages/admin/reports/reports";
 import UserManagement from "./pages/admin/user-management/user-management";
+import Settings from "./pages/admin/settings/settings";
 
 function App() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -281,39 +282,45 @@ function App() {
           element={<PrivacyPolicy />}
         />
 
-        {/* Admin routes: authorization still needs to be enforced */}
-        <Route path="/admin" element={<AdminBase />} />
+      {/* Admin routes */}
+<Route path="/admin" element={<AdminBase />} />
 
-        <Route
-          path="/admin/dashboard"
-          element={<Dashboard />}
-        />
+<Route
+  path="/admin/dashboard"
+  element={<Dashboard />}
+/>
 
-        <Route
-          path="/admin/routes"
-          element={<RouteManagement />}
-        />
+<Route
+  path="/admin/routes"
+  element={<RouteManagement />}
+/>
 
-        <Route
-          path="/admin/post-management"
-          element={<PostManagement />}
-        />
+<Route
+  path="/admin/post-management"
+  element={<PostManagement />}
+/>
 
-        <Route
-          path="/admin/reports"
-          element={<Reports />}
-        />
+<Route
+  path="/admin/reports"
+  element={<Reports />}
+/>
 
-        <Route
-          path="/admin/users"
-          element={<UserManagement />}
-        />
+<Route
+  path="/admin/users"
+  element={<UserManagement />}
+/>
 
-        {/* Unknown routes */}
-        <Route
-          path="*"
-          element={<Navigate to="/" replace />}
-        />
+<Route
+  path="/admin/settings"
+  element={<Settings />}
+/>
+
+{/* Unknown routes */}
+<Route
+  path="*"
+  element={<Navigate to="/" replace />}
+/>
+        <Route path="/admin/settings" element={<Settings />} />
       </Routes>
     </BrowserRouter>
   );
