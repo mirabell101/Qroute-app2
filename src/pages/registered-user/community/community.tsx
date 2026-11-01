@@ -1,99 +1,68 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ChevronLeft,
-ChevronRight,
+  ArrowRight,
   Bell,
   Car,
-  Heart,
   Home as HomeIcon,
+  ImagePlus,
   MapPin,
   MessageSquare,
-  ThumbsDown,
-  UserCircle,
-  Flag,
-  Send,
-  X,
   Plus,
-  Trash2,
+  Send,
+  ThumbsDown,
+  ThumbsUp,
+  UserCircle,
+  X,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
+import { CommunityPostMap } from "@/components/map/CommunityPostMap";
+import {
+  createCommunityComment,
+  createCommunityPost,
+  getCommunityAccess,
+  getCommunityComments,
+  getCommunityPost,
+  getCommunityPosts,
+  getMyCommunityVotes,
+  getCommunityVoteStates,
+  removeCommunityVote,
+  removeCommunityPostPhotos,
+  setCommunityVote,
+  uploadCommunityPostPhotos,
+} from "@/lib/community";
+import { supabase } from "@/lib/supabase";
+import { createCommunityVoteMutationQueue } from "@/lib/communityVoteQueue";
+import {
+  mergeCommunityCommentRows,
+  selectCurrentCommunityVoteStates,
+} from "@/lib/communityRealtimeState";
+import type {
+  CommunityComment,
+  CommunityPoint,
+  CommunityPost,
+  CommunityVoteType,
+} from "@/lib/community";
+import {
+  getTransitCatalog,
+  getTransportOptions,
+} from "@/lib/contributions";
+import { validateImage } from "@/lib/mapImages";
+import type {
+  ExistingPoint,
+  TransportTypeOption,
+} from "@/lib/contributions";
 
 interface CommunityProps {
   currentUserId: string | null;
   onLogout: () => void;
 }
 
-interface Account {
-  id: string;
-  username: string;
-  email: string;
-  password: string;
-  profilePicture?: string | null;
-}
-
-interface Photo {
-  name: string;
-  dataUrl: string;
-}
-
-interface ReportRecord {
-  id: string;
-  userId: string;
-  reason: string;
-  createdAt: string;
-}
-
-interface CommentData {
-  id: string;
-  userId: string;
-  text: string;
-  createdAt: string;
-  reports?: ReportRecord[];
-}
-
-interface CommunityPost {
-  id: string;
-  userId: string;
-  caption: string;
-  terminal: string;
-  origin: string;
-  destination: string;
-  vehicle: string;
-  commuterType: string;
-  fare: string;
-  photos: Photo[];
-  updatedAt: string;
-  status: "Pending" | "Approved" | "Needs Revision";
-  submittedAt: string;
-  batchId: string;
-  adminFeedback?: string;
-  likedBy?: string[];
-  dislikedBy?: string[];
-  reportedBy?: string[];
-  reports?: ReportRecord[];
-  comments?: CommentData[];
-}
-
-interface ContributionDraft {
-  id: string;
-  caption: string;
-  terminal: string;
-  origin: string;
-  destination: string;
-  vehicle: string;
-  commuterType: string;
-  fare: string;
-  photos: Photo[];
-  updatedAt: string;
-}
-
 type FeedFilter = "Public Feed" | "My Posts";
+type Target = "start" | "destination";
+type PendingPhoto = { file: File; name: string; dataUrl: string };
 
-const ACCOUNTS_KEY = "qroute_accounts";
-const SUBMITTED_KEY = "qroute_submitted_contributions";
 const MAX_PHOTOS = 5;
-const MAX_DRAFTS = 5;
 
 const navItems = [
   { label: "Recents", icon: HomeIcon, path: "/home" },
@@ -102,2072 +71,882 @@ const navItems = [
   { label: "Community", icon: MessageSquare, path: "/community" },
 ];
 
-function readStorage<T>(key: string, fallback: T): T {
-  try {
-    const value = localStorage.getItem(key);
-    return value ? (JSON.parse(value) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function displayName(userId: string, accounts: Account[]) {
-  return (
-    accounts.find((account) => account.id === userId)?.username ??
-    "QRoute user"
-  );
-}
-
-function dateLabel(value: string) {
-  const date = new Date(value);
-
-  return Number.isNaN(date.getTime())
-    ? ""
-    : date.toLocaleDateString("en-PH", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      });
-}
-
-function createDraft(): ContributionDraft {
-  return {
-    id: crypto.randomUUID(),
-    caption: "",
-    terminal: "",
-    origin: "",
-    destination: "",
-    vehicle: "",
-    commuterType: "",
-    fare: "",
-    photos: [],
-    updatedAt: new Date().toISOString(),
-  };
-}
+const formatDate = (value: string) =>
+  new Date(value).toLocaleString("en-PH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 
 export default function Community({
   currentUserId,
   onLogout,
 }: CommunityProps) {
   const navigate = useNavigate();
-
   const [posts, setPosts] = useState<CommunityPost[]>([]);
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [profileMenu, setProfileMenu] = useState(false);
-  const [commentOpen, setCommentOpen] = useState<string[]>([]);
-  const [commentText, setCommentText] = useState<Record<string, string>>({});
-  const [reportTarget, setReportTarget] = useState<{
-    postId: string;
-    commentId?: string;
-  } | null>(null);
-
-  const [reportReason, setReportReason] = useState("");
-  const [loginPrompt, setLoginPrompt] = useState("");
-  const [notice, setNotice] = useState("");
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
-
+  const postsRef = useRef(posts);
+  const [votes, setVotes] = useState<Record<string, CommunityVoteType>>({});
+  const [votesUserId, setVotesUserId] = useState<string | null>(null);
+  const [communityAccessUserId, setCommunityAccessUserId] = useState<string | null>(null);
+  const [hasRegisteredRole, setHasRegisteredRole] = useState(false);
+  const [canReceiveRealtime, setCanReceiveRealtime] = useState(false);
+  const [locations, setLocations] = useState<ExistingPoint[]>([]);
+  const [transportTypes, setTransportTypes] = useState<TransportTypeOption[]>([]);
+  const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [feedFilter, setFeedFilter] = useState<FeedFilter>("Public Feed");
-  const [showAddPostModal, setShowAddPostModal] = useState(false);
-  const [drafts, setDrafts] = useState<ContributionDraft[]>([]);
-  const [activeDraftIndex, setActiveDraftIndex] = useState(0);
-  const [showValidation, setShowValidation] = useState(false);
-  const [draftNotice, setDraftNotice] = useState("");
-  const [showSubmitConfirmation, setShowSubmitConfirmation] =
-    useState(false);
-  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
+  const [comments, setComments] = useState<Record<string, CommunityComment[]>>({});
+  const commentsRef = useRef(comments);
+  const [commentsOpen, setCommentsOpen] = useState<Record<string, boolean>>({});
+  const commentsOpenRef = useRef(commentsOpen);
+  const [commentsLoading, setCommentsLoading] = useState<Record<string, boolean>>({});
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [hasLoadedInitialPosts, setHasLoadedInitialPosts] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [loginPrompt, setLoginPrompt] = useState("");
+  const [profileMenu, setProfileMenu] = useState(false);
+  const [showCreatePost, setShowCreatePost] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-const [selectedImage, setSelectedImage] = useState<string | null>(null);
-const [selectedImageIndex, setSelectedImageIndex] = useState(0);
-const [selectedImagePhotos, setSelectedImagePhotos] = useState<Photo[]>([]);
-
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [transportTypeId, setTransportTypeId] = useState<number | null>(null);
+  const [start, setStart] = useState<CommunityPoint | null>(null);
+  const [destination, setDestination] = useState<CommunityPoint | null>(null);
+  const [activeTarget, setActiveTarget] = useState<Target | null>("start");
+  const [startSearch, setStartSearch] = useState("");
+  const [destinationSearch, setDestinationSearch] = useState("");
+  const [selectedPhotos, setSelectedPhotos] = useState<PendingPhoto[]>([]);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const voteMutationQueueRef = useRef(createCommunityVoteMutationQueue());
+  const voteRevisionRef = useRef(new Map<string, number>());
+  const requestedVotesRef = useRef<Record<string, CommunityVoteType | null>>({});
+  const seenCommentIdsRef = useRef(new Map<string, Set<string>>());
+  const pendingCommentsRef = useRef(new Map<string, CommunityComment[]>());
+  const commentRevisionRef = useRef(new Map<string, number>());
+  const isRegisteredUser = Boolean(
+    currentUserId && currentUserId === communityAccessUserId && hasRegisteredRole,
+  );
 
-  // ==================================================
-  // LOAD APPROVED POSTS
-  // ==================================================
+  const getVoteRevision = useCallback((postId: string) => voteRevisionRef.current.get(postId) ?? 0, []);
+  const advanceVoteRevision = useCallback((postId: string) => {
+    const next = getVoteRevision(postId) + 1;
+    voteRevisionRef.current.set(postId, next);
+    return next;
+  }, [getVoteRevision]);
 
-  const reload = () => {
-    setAccounts(readStorage<Account[]>(ACCOUNTS_KEY, []));
+  useEffect(() => { postsRef.current = posts; }, [posts]);
+  useEffect(() => { commentsRef.current = comments; }, [comments]);
+  useEffect(() => { commentsOpenRef.current = commentsOpen; }, [commentsOpen]);
 
-    const all = readStorage<CommunityPost[]>(SUBMITTED_KEY, []);
+  const applyVoteStates = useCallback((
+    states: Awaited<ReturnType<typeof getCommunityVoteStates>>,
+    expectedRevisions?: Map<string, number>,
+  ) => {
+    const accepted = expectedRevisions === undefined
+      ? states
+      : selectCurrentCommunityVoteStates(states, expectedRevisions, voteRevisionRef.current);
+    if (!accepted.length) return;
 
-    setPosts(
-      all
-        .filter((post) => post.status === "Approved")
-        .map((post) => ({
-          ...post,
-          photos: post.photos ?? [],
-          likedBy: post.likedBy ?? [],
-          dislikedBy: post.dislikedBy ?? [],
-          reportedBy: post.reportedBy ?? [],
-          reports: post.reports ?? [],
-          comments: (post.comments ?? []).map((comment) => ({
-            ...comment,
-            reports: comment.reports ?? [],
-          })),
-        }))
-        .sort(
-          (a, b) =>
-            new Date(b.submittedAt).getTime() -
-            new Date(a.submittedAt).getTime(),
-        ),
+    for (const state of accepted) {
+      if (state.vote_type) requestedVotesRef.current[state.post_id] = state.vote_type;
+      else delete requestedVotesRef.current[state.post_id];
+    }
+    setPosts((previous) => previous.map((post) => {
+      const state = accepted.find((item) => item.post_id === post.id);
+      return state
+        ? { ...post, upvotes: state.upvotes, downvotes: state.downvotes }
+        : post;
+    }));
+    setVotes((previous) => {
+      const next = { ...previous };
+      for (const state of accepted) {
+        if (state.vote_type) next[state.post_id] = state.vote_type;
+        else delete next[state.post_id];
+      }
+      return next;
+    });
+    if (currentUserId) setVotesUserId(currentUserId);
+  }, [currentUserId]);
+
+  const mergeCommunityComments = useCallback((postId: string, incoming: CommunityComment[]) => {
+    const seen = seenCommentIdsRef.current.get(postId) ?? new Set<string>();
+    const pending = pendingCommentsRef.current.get(postId) ?? [];
+    const existing = commentsRef.current[postId] ?? [];
+    for (const comment of [...existing, ...pending, ...incoming]) {
+      seen.add(comment.id);
+    }
+    seenCommentIdsRef.current.set(postId, seen);
+    pendingCommentsRef.current.delete(postId);
+    const merged = mergeCommunityCommentRows(existing, pending, incoming);
+    commentsRef.current = { ...commentsRef.current, [postId]: merged };
+    setComments((previous) => ({ ...previous, [postId]: merged }));
+  }, []);
+
+  const addCommunityCommentOnce = useCallback((comment: CommunityComment) => {
+    const seen = seenCommentIdsRef.current.get(comment.post_id) ?? new Set<string>();
+    if (seen.has(comment.id)) return;
+    seen.add(comment.id);
+    seenCommentIdsRef.current.set(comment.post_id, seen);
+    commentRevisionRef.current.set(
+      comment.post_id,
+      (commentRevisionRef.current.get(comment.post_id) ?? 0) + 1,
     );
+
+    if (Object.prototype.hasOwnProperty.call(commentsRef.current, comment.post_id)) {
+      commentsRef.current = {
+        ...commentsRef.current,
+        [comment.post_id]: mergeCommunityCommentRows(
+          commentsRef.current[comment.post_id] ?? [],
+          [comment],
+        ),
+      };
+      setComments((previous) => {
+        const current = previous[comment.post_id] ?? [];
+        if (current.some((item) => item.id === comment.id)) return previous;
+        return {
+          ...previous,
+          [comment.post_id]: [...current, comment].sort((left, right) =>
+            left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id),
+          ),
+        };
+      });
+    } else {
+      const pending = pendingCommentsRef.current.get(comment.post_id) ?? [];
+      pendingCommentsRef.current.set(comment.post_id, [...pending, comment]);
+    }
+    setPosts((previous) => previous.map((post) =>
+      post.id === comment.post_id
+        ? { ...post, comment_count: post.comment_count + 1 }
+        : post,
+    ));
+  }, []);
+
+  const reloadPosts = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const nextPosts = await getCommunityPosts();
+      setPosts(nextPosts);
+      setSelectedPostId((current) =>
+        current && nextPosts.some((post) => post.id === current)
+          ? current
+          : nextPosts[0]?.id ?? null,
+      );
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Unable to load community posts.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
-    reload();
-
-    const onStorage = () => reload();
-
-    window.addEventListener("storage", onStorage);
-
-    return () => window.removeEventListener("storage", onStorage);
+    let active = true;
+    void getCommunityPosts()
+      .then((nextPosts) => {
+        if (!active) return;
+        setPosts(nextPosts);
+        setSelectedPostId(nextPosts[0]?.id ?? null);
+      })
+      .catch((loadError: unknown) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : "Unable to load community posts.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+          setHasLoadedInitialPosts(true);
+        }
+      });
+    void getTransitCatalog()
+      .then((catalog) => { if (active) setLocations(catalog.points); })
+      .catch(() => { if (active) setNotice("Transit point search is unavailable. You can still select locations on the map."); });
+    void getTransportOptions()
+      .then((options) => { if (active) setTransportTypes(options.types); })
+      .catch(() => { if (active) setNotice("Transportation types could not be loaded; you can leave that field empty."); });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
-    if (!notice) return;
-
-    const timeoutId = window.setTimeout(() => {
-      setNotice("");
-    }, 3500);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [notice]);
-
-  // ==================================================
-  // SAVE POST CHANGES
-  // ==================================================
-
-  const saveChanges = (updated: CommunityPost[]) => {
-    const all = readStorage<CommunityPost[]>(SUBMITTED_KEY, []);
-    const changed = new Map(updated.map((post) => [post.id, post]));
-
-    localStorage.setItem(
-      SUBMITTED_KEY,
-      JSON.stringify(all.map((post) => changed.get(post.id) ?? post)),
-    );
-
-    setPosts(
-      updated
-        .filter((post) => post.status === "Approved")
-        .sort(
-          (a, b) =>
-            new Date(b.submittedAt).getTime() -
-            new Date(a.submittedAt).getTime(),
-        ),
-    );
-  };
-
-  // ==================================================
-  // LOGIN GUARD
-  // ==================================================
-
-  const needsLogin = (message: string) => {
-    if (currentUserId) return false;
-
-    setLoginPrompt(message);
-    return true;
-  };
-
-  // ==================================================
-  // LIKE / DISLIKE
-  // ==================================================
-
-  const react = (postId: string, type: "like" | "dislike") => {
-    if (needsLogin("Please log in or sign in to your QRoute account to access this feature.")) {
-      return;
-    }
-
+    let active = true;
     if (!currentUserId) return;
-
-    saveChanges(
-      posts.map((post) => {
-        if (post.id !== postId) return post;
-
-        const liked = post.likedBy ?? [];
-        const disliked = post.dislikedBy ?? [];
-
-        if (type === "like") {
-          return {
-            ...post,
-            likedBy: liked.includes(currentUserId)
-              ? liked.filter((id) => id !== currentUserId)
-              : [
-                  ...liked.filter((id) => id !== currentUserId),
-                  currentUserId,
-                ],
-            dislikedBy: disliked.filter((id) => id !== currentUserId),
-          };
+    void getCommunityAccess(currentUserId)
+      .then((access) => {
+        if (active) {
+          setCommunityAccessUserId(currentUserId);
+          setHasRegisteredRole(access.canPublishAndVote);
+          setCanReceiveRealtime(access.canReceiveRealtime);
         }
+      })
+      .catch(() => {
+        if (active) {
+          setCommunityAccessUserId(currentUserId);
+          setHasRegisteredRole(false);
+          setCanReceiveRealtime(false);
+        }
+      });
+    return () => { active = false; };
+  }, [currentUserId]);
 
-        return {
-          ...post,
-          dislikedBy: disliked.includes(currentUserId)
-            ? disliked.filter((id) => id !== currentUserId)
-            : [
-                ...disliked.filter((id) => id !== currentUserId),
-                currentUserId,
-              ],
-          likedBy: liked.filter((id) => id !== currentUserId),
-        };
-      }),
-    );
-  };
-
-  // ==================================================
-  // COMMENTS
-  // ==================================================
-
-  const comment = (postId: string) => {
-    if (needsLogin("Please log in or sign in to your QRoute account to access this feature.")) {
+  useEffect(() => {
+    let active = true;
+    if (!currentUserId) {
       return;
     }
-
-    if (!currentUserId) return;
-
-    const text = (commentText[postId] ?? "").trim();
-
-    if (!text) return;
-
-    saveChanges(
-      posts.map((post) =>
-        post.id !== postId
-          ? post
-          : {
-              ...post,
-              comments: [
-                ...(post.comments ?? []),
-                {
-                  id: crypto.randomUUID(),
-                  userId: currentUserId,
-                  text,
-                  createdAt: new Date().toISOString(),
-                },
-              ],
-            },
-      ),
+    const voteRevisions = new Map(
+      postsRef.current.map((post) => [post.id, getVoteRevision(post.id)]),
     );
+    void getMyCommunityVotes()
+      .then((rows) => {
+        if (active) {
+          const votesByPost = new Map(rows.map((row) => [row.post_id, row.vote_type]));
+          const unchangedPostIds = [...new Set([
+            ...postsRef.current.map((post) => post.id),
+            ...rows.map((row) => row.post_id),
+          ])].filter((postId) =>
+            getVoteRevision(postId) === (voteRevisions.get(postId) ?? 0),
+          );
+          for (const postId of unchangedPostIds) {
+            const vote = votesByPost.get(postId);
+            if (vote) requestedVotesRef.current[postId] = vote;
+            else delete requestedVotesRef.current[postId];
+          }
+          setVotes((previous) => {
+            const next = { ...previous };
+            for (const postId of unchangedPostIds) {
+              const vote = votesByPost.get(postId);
+              if (vote) next[postId] = vote;
+              else delete next[postId];
+            }
+            return next;
+          });
+          setVotesUserId(currentUserId);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setVotesUserId(currentUserId);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentUserId, getVoteRevision]);
 
-    setCommentText((previous) => ({ ...previous, [postId]: "" }));
-
-    setCommentOpen((previous) =>
-      previous.includes(postId) ? previous : [...previous, postId],
-    );
-  };
-
-  // ==================================================
-  // REPORT POST / COMMENT
-  // ==================================================
-
-  const submitReport = () => {
-    if (!reportTarget || !reportReason) return;
-
+  useEffect(() => {
     if (
-      needsLogin(
-        "Please log in or sign in to your QRoute account to access this feature.",
-      )
-    ) {
-      setReportTarget(null);
-      setReportReason("");
-      return;
-    }
+      !currentUserId ||
+      !canReceiveRealtime ||
+      communityAccessUserId !== currentUserId ||
+      !hasLoadedInitialPosts
+    ) return;
+    let active = true;
+    let hasSubscribed = false;
+    let voteRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const pendingVotePostIds = new Set<string>();
 
-    if (!currentUserId) return;
+    const reconcileAfterConnection = async () => {
+      const startingPosts = postsRef.current;
+      const voteRevisions = new Map(startingPosts.map((post) => [post.id, getVoteRevision(post.id)]));
+      const commentRevisions = new Map(startingPosts.map((post) => [
+        post.id,
+        commentRevisionRef.current.get(post.id) ?? 0,
+      ]));
+      const openPostIds = Object.keys(commentsOpenRef.current)
+        .filter((postId) => commentsOpenRef.current[postId]);
+      const [freshPosts, ownVotes, freshComments] = await Promise.all([
+        getCommunityPosts(),
+        getMyCommunityVotes(),
+        getCommunityComments(openPostIds),
+      ]);
+      if (!active) return;
 
-    const report: ReportRecord = {
-      id: crypto.randomUUID(),
-      userId: currentUserId,
-      reason: reportReason,
-      createdAt: new Date().toISOString(),
+      setPosts((previous) => freshPosts.map((freshPost) => {
+        const previousPost = previous.find((post) => post.id === freshPost.id);
+        const voteUnchanged = getVoteRevision(freshPost.id) === (voteRevisions.get(freshPost.id) ?? 0);
+        const commentUnchanged = (commentRevisionRef.current.get(freshPost.id) ?? 0) ===
+          (commentRevisions.get(freshPost.id) ?? 0);
+        return {
+          ...freshPost,
+          upvotes: voteUnchanged ? freshPost.upvotes : previousPost?.upvotes ?? freshPost.upvotes,
+          downvotes: voteUnchanged ? freshPost.downvotes : previousPost?.downvotes ?? freshPost.downvotes,
+          comment_count: commentUnchanged
+            ? freshPost.comment_count
+            : previousPost?.comment_count ?? freshPost.comment_count,
+        };
+      }));
+      setSelectedPostId((current) =>
+        current && freshPosts.some((post) => post.id === current)
+          ? current
+          : freshPosts[0]?.id ?? null,
+      );
+
+      const votesByPost = new Map(ownVotes.map((vote) => [vote.post_id, vote.vote_type]));
+      const unchangedPostIds = freshPosts
+        .filter((post) => getVoteRevision(post.id) === (voteRevisions.get(post.id) ?? 0))
+        .map((post) => post.id);
+      for (const postId of unchangedPostIds) {
+        const vote = votesByPost.get(postId);
+        if (vote) requestedVotesRef.current[postId] = vote;
+        else delete requestedVotesRef.current[postId];
+      }
+      setVotes((previous) => {
+        const next = { ...previous };
+        for (const postId of unchangedPostIds) {
+          const vote = votesByPost.get(postId);
+          if (vote) next[postId] = vote;
+          else delete next[postId];
+        }
+        return next;
+      });
+      setVotesUserId(currentUserId);
+      for (const postId of openPostIds) {
+        mergeCommunityComments(postId, freshComments.filter((comment) => comment.post_id === postId));
+      }
     };
 
-    const updatedPosts = posts.map((post) => {
-      if (post.id !== reportTarget.postId) return post;
-
-      if (reportTarget.commentId) {
-        return {
-          ...post,
-          comments: (post.comments ?? []).map((item) =>
-            item.id !== reportTarget.commentId
-              ? item
-              : {
-                  ...item,
-                  reports: [...(item.reports ?? []), report],
-                },
-          ),
-        };
+    const flushVoteRefresh = async () => {
+      voteRefreshTimer = null;
+      const postIds = [...pendingVotePostIds];
+      pendingVotePostIds.clear();
+      if (!postIds.length) return;
+      await voteMutationQueueRef.current.waitFor(postIds);
+      if (!active) return;
+      const revisions = new Map(postIds.map((postId) => [postId, getVoteRevision(postId)]));
+      try {
+        const states = await getCommunityVoteStates(postIds);
+        if (active) applyVoteStates(states, revisions);
+      } catch (refreshError) {
+        console.warn("Could not refresh Community vote totals:", refreshError);
       }
+    };
 
-      return {
-        ...post,
-        reports: [...(post.reports ?? []), report],
-      };
-    });
-
-    saveChanges(updatedPosts);
-
-    setReportTarget(null);
-    setReportReason("");
-    setNotice(
-      "Report received. Together we keep QRoute updated and accurate!",
-    );
-  };
-
-  // ==================================================
-  // CURRENT ACCOUNT / NOTIFICATIONS
-  // ==================================================
-
-  const currentAccount = accounts.find(
-    (account) => account.id === currentUserId,
-  );
-
-  const notifications = currentUserId
-    ? posts
-        .filter((post) => post.userId === currentUserId)
-        .flatMap((post) => [
-          ...(post.likedBy ?? [])
-            .filter((id) => id !== currentUserId)
-            .map((id) => ({
-              id: `${post.id}-like-${id}`,
-              postId: post.id,
-              text: `${displayName(id, accounts)} liked your post`,
-            })),
-          ...(post.dislikedBy ?? [])
-            .filter((id) => id !== currentUserId)
-            .map((id) => ({
-              id: `${post.id}-dislike-${id}`,
-              postId: post.id,
-              text: `${displayName(id, accounts)} disliked your post`,
-            })),
-          ...(post.comments ?? [])
-            .filter((item) => item.userId !== currentUserId)
-            .map((item) => ({
-              id: `${post.id}-comment-${item.id}`,
-              postId: post.id,
-              text: `${displayName(item.userId, accounts)} commented on your post`,
-            })),
-          ...(post.reports ?? []).map((item) => ({
-            id: `${post.id}-report-${item.id}`,
-            postId: post.id,
-            text: "Someone reported your post",
-          })),
-        ])
-    : [];
-
-  const openPost = (postId: string) => {
-    setNotificationsOpen(false);
-    setFeedFilter("Public Feed");
-
-    setCommentOpen((previous) =>
-      previous.includes(postId) ? previous : [...previous, postId],
-    );
-
-    window.setTimeout(() => {
-      document
-        .getElementById(`community-post-${postId}`)
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 100);
-  };
-
-  // ==================================================
-  // DRAFTS
-  // ==================================================
-
-  const getDraftsKey = () =>
-    `qroute_contribution_drafts_${currentUserId}`;
-
-  const loadDrafts = () => {
-    if (!currentUserId) return [];
-
-    const saved = readStorage<ContributionDraft[]>(getDraftsKey(), []);
-    return saved.slice(0, MAX_DRAFTS);
-  };
-
-  const saveDrafts = (nextDrafts: ContributionDraft[]) => {
-    if (!currentUserId) return false;
-
-    try {
-      localStorage.setItem(getDraftsKey(), JSON.stringify(nextDrafts));
-      setDrafts(nextDrafts);
-      return true;
-    } catch {
-      setDraftNotice(
-        "Unable to save drafts. Browser storage may be full. Try removing some photos.",
-      );
-      return false;
-    }
-  };
-
-  const activeDraft = drafts[activeDraftIndex] ?? null;
-
-  const updateActiveDraft = (updates: Partial<ContributionDraft>) => {
-    if (!activeDraft) return;
-
-    const nextDrafts = drafts.map((draft, index) =>
-      index === activeDraftIndex
-        ? {
-            ...draft,
-            ...updates,
-            updatedAt: new Date().toISOString(),
-          }
-        : draft,
-    );
-
-    saveDrafts(nextDrafts);
-  };
-
-  const openAddPostModal = () => {
-    if (
-      needsLogin(
-        "Please log in or sign in to your QRoute account to access this feature.",
-      )
-    ) {
-      return;
-    }
-
-    if (!currentUserId) return;
-
-    const savedDrafts = loadDrafts();
-    const startingDrafts =
-      savedDrafts.length > 0 ? savedDrafts : [createDraft()];
-
-    if (!saveDrafts(startingDrafts)) return;
-
-    setActiveDraftIndex(0);
-    setShowValidation(false);
-    setDraftNotice("");
-    setShowSubmitConfirmation(false);
-    setShowDeleteConfirmation(false);
-    setShowAddPostModal(true);
-  };
-
-  const closeAddPostModal = () => {
-    setShowAddPostModal(false);
-    setShowSubmitConfirmation(false);
-    setShowDeleteConfirmation(false);
-    setShowValidation(false);
-    setDraftNotice("");
-  };
-
-  const addAnotherDraft = () => {
-    if (!currentUserId) return;
-
-    if (drafts.length >= MAX_DRAFTS) {
-      setDraftNotice(`You can create up to ${MAX_DRAFTS} drafts at a time.`);
-      return;
-    }
-
-    const nextDrafts = [...drafts, createDraft()];
-
-    if (saveDrafts(nextDrafts)) {
-      setActiveDraftIndex(nextDrafts.length - 1);
-      setShowValidation(false);
-      setDraftNotice("");
-    }
-  };
-
-  const deleteActiveDraft = () => {
-    if (!activeDraft || !currentUserId) return;
-
-    const nextDrafts = drafts.filter(
-      (_, index) => index !== activeDraftIndex,
-    );
-
-    if (nextDrafts.length === 0) {
-      const replacement = [createDraft()];
-
-      if (saveDrafts(replacement)) {
-        setActiveDraftIndex(0);
-        setShowDeleteConfirmation(false);
-        setShowValidation(false);
-        setDraftNotice("");
-      }
-
-      return;
-    }
-
-    if (saveDrafts(nextDrafts)) {
-      setActiveDraftIndex(Math.min(activeDraftIndex, nextDrafts.length - 1));
-      setShowDeleteConfirmation(false);
-      setShowValidation(false);
-      setDraftNotice("");
-    }
-  };
-
-  const handlePhotoChange = async (
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    if (!activeDraft) return;
-
-    const selectedFiles = Array.from(event.target.files ?? []);
-    const remainingSlots = MAX_PHOTOS - activeDraft.photos.length;
-
-    const imageFiles = selectedFiles
-      .filter(
-        (file) => file.type === "image/png" || file.type === "image/jpeg",
-      )
-      .slice(0, remainingSlots);
-
-    if (imageFiles.length === 0 && selectedFiles.length > 0) {
-      setDraftNotice("Please choose PNG, JPG, or JPEG photos.");
-      event.target.value = "";
-      return;
-    }
-
-    try {
-      const newPhotos = await Promise.all(
-        imageFiles.map(
-          (file) =>
-            new Promise<Photo>((resolve, reject) => {
-              const reader = new FileReader();
-
-              reader.onload = () => {
-                if (typeof reader.result !== "string") {
-                  reject(new Error("Unable to read image."));
-                  return;
-                }
-
-                resolve({ name: file.name, dataUrl: reader.result });
-              };
-
-              reader.onerror = () =>
-                reject(new Error("Unable to read image."));
-
-              reader.readAsDataURL(file);
-            }),
-        ),
-      );
-
-      updateActiveDraft({
-        photos: [...activeDraft.photos, ...newPhotos],
+    const channel = supabase.channel("community:feed", { config: { private: true } });
+    channel
+      .on("broadcast", { event: "vote_changed" }, ({ payload }) => {
+        const postId = typeof payload?.post_id === "string" ? payload.post_id : "";
+        if (!postId || !postsRef.current.some((post) => post.id === postId)) return;
+        advanceVoteRevision(postId);
+        pendingVotePostIds.add(postId);
+        if (voteRefreshTimer) clearTimeout(voteRefreshTimer);
+        voteRefreshTimer = setTimeout(() => { void flushVoteRefresh(); }, 120);
+      })
+      .on("broadcast", { event: "comment_created" }, ({ payload }) => {
+        if (
+          typeof payload?.id !== "string" ||
+          typeof payload?.post_id !== "string" ||
+          typeof payload?.author_display_name !== "string" ||
+          typeof payload?.content !== "string" ||
+          typeof payload?.created_at !== "string"
+        ) return;
+        addCommunityCommentOnce({
+          id: payload.id,
+          post_id: payload.post_id,
+          author_display_name: payload.author_display_name,
+          content: payload.content,
+          created_at: payload.created_at,
+        });
       });
 
-      if (selectedFiles.length > remainingSlots) {
-        setDraftNotice(`You can upload up to ${MAX_PHOTOS} photos per post.`);
-      } else {
-        setDraftNotice("");
+    const handleChannelStatus = (status: string) => {
+      if (!active) return;
+      if (status === "SUBSCRIBED") {
+        hasSubscribed = true;
+        setNotice((current) => current === "Live updates are reconnecting…" ? "" : current);
+        void reconcileAfterConnection().catch((syncError: unknown) => {
+          console.warn("Could not resync Community after reconnect:", syncError);
+        });
+      } else if (hasSubscribed && (status === "CHANNEL_ERROR" || status === "TIMED_OUT")) {
+        setNotice("Live updates are reconnecting…");
       }
-    } catch {
-      setDraftNotice("Unable to read a photo. Please try another PNG or JPG.");
-    }
+    };
 
-    event.target.value = "";
-  };
-
-  const removePhoto = (photoIndex: number) => {
-    if (!activeDraft) return;
-
-    updateActiveDraft({
-      photos: activeDraft.photos.filter((_, index) => index !== photoIndex),
+    const connect = async () => {
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (!active || sessionError || data.session?.user.id !== currentUserId) return;
+      await supabase.realtime.setAuth(data.session.access_token);
+      if (active) channel.subscribe(handleChannelStatus);
+    };
+    void connect().catch((connectionError: unknown) => {
+      console.warn("Could not authorize Community realtime:", connectionError);
     });
+
+    const handleVisible = () => {
+      if (document.visibilityState === "visible") {
+        void reconcileAfterConnection().catch((syncError: unknown) => {
+          console.warn("Could not refresh Community after returning to the page:", syncError);
+        });
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisible);
+
+    return () => {
+      active = false;
+      if (voteRefreshTimer) clearTimeout(voteRefreshTimer);
+      document.removeEventListener("visibilitychange", handleVisible);
+      void supabase.removeChannel(channel);
+    };
+  }, [
+    currentUserId,
+    canReceiveRealtime,
+    communityAccessUserId,
+    hasLoadedInitialPosts,
+    applyVoteStates,
+    mergeCommunityComments,
+    addCommunityCommentOnce,
+    advanceVoteRevision,
+    getVoteRevision,
+  ]);
+
+  const visiblePosts = useMemo(
+    () =>
+      feedFilter === "My Posts"
+        ? posts.filter((post) => post.author_id === currentUserId)
+        : posts,
+    [feedFilter, posts, currentUserId],
+  );
+  const selectedPost = visiblePosts.find((post) => post.id === selectedPostId)
+    ?? visiblePosts[0]
+    ?? null;
+
+  const filteredLocations = (query: string) => {
+    const normalized = query.trim().toLowerCase();
+    return locations
+      .filter((point) =>
+        transportTypeId === null ||
+        point.transportTypeId === null ||
+        point.transportTypeId === transportTypeId,
+      )
+      .filter((point) => !normalized || point.name.toLowerCase().includes(normalized))
+      .slice(0, 6);
   };
 
-  const isDraftValid = (draft: ContributionDraft) => {
-    const hasRouteDetails = Boolean(
-      draft.terminal.trim() ||
-        draft.origin.trim() ||
-        draft.destination.trim(),
-    );
-
-    const isFareValid = /^\d+(\.\d{1,2})?$/.test(draft.fare.trim());
-
-    return (
-      draft.photos.length > 0 &&
-      Boolean(draft.caption.trim()) &&
-      hasRouteDetails &&
-      Boolean(draft.vehicle.trim()) &&
-      Boolean(draft.commuterType.trim()) &&
-      isFareValid
-    );
+  const promptLogin = () => {
+    setLoginPrompt("Sign in with a registered QRoute account to participate in the Community.");
   };
 
-  const handleSubmitAll = () => {
-    if (needsLogin("Please log in or sign in to your QRoute account to access this feature.")) {
-      return;
-    }
-
-    setShowValidation(true);
-    setDraftNotice("");
-
-    if (drafts.length === 0) {
-      setDraftNotice("There are no drafts to submit.");
-      return;
-    }
-
-    const invalidIndex = drafts.findIndex((draft) => !isDraftValid(draft));
-
-    if (invalidIndex !== -1) {
-      setActiveDraftIndex(invalidIndex);
-      setDraftNotice(
-        `Some fields are missing or invalid in Draft ${invalidIndex + 1}. Please complete all drafts before submitting.`,
-      );
-      return;
-    }
-
-    setShowSubmitConfirmation(true);
+  const chooseLocation = (target: Target, point: ExistingPoint) => {
+    const nextPoint = {
+      name: point.name,
+      latitude: point.latitude,
+      longitude: point.longitude,
+    };
+    if (target === "start") setStart(nextPoint);
+    else setDestination(nextPoint);
+    setActiveTarget(target === "start" ? "destination" : null);
+    if (target === "start") setStartSearch("");
+    else setDestinationSearch("");
   };
 
-  const confirmSubmitAll = () => {
-    if (isSubmitting || drafts.length === 0) return;
+  const handleMapPick = (coordinates: [number, number]) => {
+    if (!activeTarget) return;
+    const [latitude, longitude] = coordinates;
+    const point = {
+      name: `Map point ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
+      latitude,
+      longitude,
+    };
+    if (activeTarget === "start") setStart(point);
+    else setDestination(point);
+    setActiveTarget(activeTarget === "start" ? "destination" : null);
+  };
 
-    if (needsLogin("Please log in or sign in to your QRoute account to access this feature.")) {
-      setShowSubmitConfirmation(false);
-      return;
+  const resetComposer = () => {
+    setTitle("");
+    setContent("");
+    setTransportTypeId(null);
+    setStart(null);
+    setDestination(null);
+    setActiveTarget("start");
+    setStartSearch("");
+    setDestinationSearch("");
+    setSelectedPhotos([]);
+  };
+
+  const handlePhotoSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    const remaining = MAX_PHOTOS - selectedPhotos.length;
+    const nextFiles = selectedFiles.slice(0, remaining);
+    if (selectedFiles.length > remaining) {
+      setError(`You can attach up to ${MAX_PHOTOS} photos per post.`);
     }
-
-    if (!currentUserId) return;
-
-    setIsSubmitting(true);
-    setDraftNotice("");
-
     try {
-      const batchId = crypto.randomUUID();
-      const submittedAt = new Date().toISOString();
-
-      const newPosts: CommunityPost[] = drafts.map((draft) => ({
-        ...draft,
-        userId: currentUserId,
-        status: "Pending",
-        submittedAt,
-        batchId,
-        likedBy: [],
-        dislikedBy: [],
-        reportedBy: [],
-        reports: [],
-        comments: [],
+      const nextPhotos = await Promise.all(nextFiles.map(async (file) => {
+        const validationError = validateImage(file);
+        if (validationError) throw new Error(validationError);
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => typeof reader.result === "string"
+            ? resolve(reader.result)
+            : reject(new Error("Unable to preview this photo."));
+          reader.onerror = () => reject(new Error("Unable to preview this photo."));
+          reader.readAsDataURL(file);
+        });
+        return { file, name: file.name, dataUrl };
       }));
+      setSelectedPhotos((previous) => [...previous, ...nextPhotos].slice(0, MAX_PHOTOS));
+      setError("");
+    } catch (photoError) {
+      setError(photoError instanceof Error ? photoError.message : "Unable to read a photo.");
+    } finally {
+      event.target.value = "";
+    }
+  };
 
-      const allPosts = readStorage<CommunityPost[]>(SUBMITTED_KEY, []);
-
-      localStorage.setItem(
-        SUBMITTED_KEY,
-        JSON.stringify([...allPosts, ...newPosts]),
-      );
-
-      localStorage.removeItem(getDraftsKey());
-
-      setShowAddPostModal(false);
-      setShowSubmitConfirmation(false);
-      setShowValidation(false);
-      setDraftNotice("");
-      setDrafts([]);
-      setActiveDraftIndex(0);
-      setNotice("Your post has been submitted for admin review.");
-    } catch {
-      setDraftNotice(
-        "Unable to submit your posts. Browser storage may be full. Try removing some photos.",
-      );
+  const submitPost = async () => {
+    if (!currentUserId || !isRegisteredUser) {
+      if (currentUserId) {
+        setError("A registered-user account is required to publish community posts.");
+        return;
+      }
+      promptLogin();
+      return;
+    }
+    if (!title.trim() || !content.trim() || !start || !destination) {
+      setError("Add a title, description, starting point, and destination.");
+      return;
+    }
+    setIsSubmitting(true);
+    setError("");
+    let uploadedPhotoPaths: string[] = [];
+    try {
+      uploadedPhotoPaths = await uploadCommunityPostPhotos(selectedPhotos.map((photo) => photo.file));
+      const created = await createCommunityPost({
+        title: title.trim(),
+        content: content.trim(),
+        start,
+        destination,
+        transportTypeId,
+        photoPaths: uploadedPhotoPaths,
+      });
+      setPosts((previous) => [created, ...previous]);
+      setSelectedPostId(created.id);
+      setShowCreatePost(false);
+      resetComposer();
+      setNotice("Your post is now public.");
+    } catch (submitError) {
+      if (uploadedPhotoPaths.length) {
+        await removeCommunityPostPhotos(uploadedPhotoPaths).catch(() => undefined);
+      }
+      setError(submitError instanceof Error ? submitError.message : "Unable to publish your post.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const routeError =
-    showValidation &&
-    activeDraft !== null &&
-    !activeDraft.terminal.trim() &&
-    !activeDraft.origin.trim() &&
-    !activeDraft.destination.trim();
+  const reactToPost = (post: CommunityPost, type: CommunityVoteType) => {
+    if (!currentUserId || !isRegisteredUser) {
+      if (currentUserId) {
+        setError("A registered-user account is required to vote.");
+        return;
+      }
+      promptLogin();
+      return;
+    }
+    setError("");
+    const currentVote = Object.prototype.hasOwnProperty.call(requestedVotesRef.current, post.id)
+      ? requestedVotesRef.current[post.id]
+      : votesUserId === currentUserId ? votes[post.id] ?? null : null;
+    const nextVote = currentVote === type ? null : type;
+    requestedVotesRef.current[post.id] = nextVote;
+    const revision = advanceVoteRevision(post.id);
+    setVotesUserId(currentUserId);
+    setVotes((previous) => {
+      const next = { ...previous };
+      if (nextVote) next[post.id] = nextVote;
+      else delete next[post.id];
+      return next;
+    });
 
-  const fareError =
-    showValidation &&
-    activeDraft !== null &&
-    (!activeDraft.fare.trim() ||
-      !/^\d+(\.\d{1,2})?$/.test(activeDraft.fare.trim()));
+    void voteMutationQueueRef.current.run(post.id, async () => {
+      try {
+        const savedState = nextVote
+          ? await setCommunityVote(post.id, nextVote)
+          : await removeCommunityVote(post.id);
+        applyVoteStates([savedState], new Map([[post.id, revision]]));
+      } catch (voteError) {
+        if (getVoteRevision(post.id) === revision) {
+          try {
+            const [savedState] = await getCommunityVoteStates([post.id]);
+            if (savedState) applyVoteStates([savedState], new Map([[post.id, revision]]));
+          } catch {
+            setError(voteError instanceof Error ? voteError.message : "Unable to save your vote.");
+          }
+        }
+      }
+    });
+  };
 
-  const fieldClass = (hasError: boolean) =>
-    `h-10 w-full rounded-lg border px-3 text-sm outline-none placeholder:text-gray-500 focus:ring-1 ${
-      hasError
-        ? "border-red-500 focus:border-red-500 focus:ring-red-500"
-        : "border-gray-300 focus:border-[#12395A] focus:ring-[#12395A]"
-    }`;
+  const toggleComments = async (postId: string) => {
+    const opening = !commentsOpenRef.current[postId];
+    const nextOpen = { ...commentsOpenRef.current, [postId]: opening };
+    commentsOpenRef.current = nextOpen;
+    setCommentsOpen(nextOpen);
+    if (!opening || comments[postId]) return;
+    setCommentsLoading((previous) => ({ ...previous, [postId]: true }));
+    try {
+      const detail = await getCommunityPost(postId);
+      mergeCommunityComments(postId, detail.comments);
+    } catch (commentError) {
+      setError(commentError instanceof Error ? commentError.message : "Unable to load comments.");
+    } finally {
+      setCommentsLoading((previous) => ({ ...previous, [postId]: false }));
+    }
+  };
 
-  const visiblePosts =
-    feedFilter === "My Posts"
-      ? currentUserId
-        ? posts.filter((post) => post.userId === currentUserId)
-        : []
-      : posts;
+  const submitComment = async (postId: string) => {
+    if (!currentUserId || !isRegisteredUser) {
+      if (currentUserId) {
+        setError("A registered-user account is required to comment.");
+        return;
+      }
+      promptLogin();
+      return;
+    }
+    const text = (commentDrafts[postId] ?? "").trim();
+    if (!text) return;
+    try {
+      const created = await createCommunityComment(postId, text);
+      addCommunityCommentOnce(created);
+      setCommentDrafts((previous) => ({ ...previous, [postId]: "" }));
+    } catch (commentError) {
+      setError(commentError instanceof Error ? commentError.message : "Unable to submit your comment.");
+    }
+  };
 
-  // ==================================================
-  // RENDER
-  // ==================================================
+  const locationPicker = (target: Target, value: CommunityPoint | null, query: string) => {
+    const setQuery = target === "start" ? setStartSearch : setDestinationSearch;
+    const results = filteredLocations(query);
+    return (
+      <div className="relative rounded-lg border border-gray-200 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+              {target === "start" ? "Starting point" : "Destination"}
+            </p>
+            <p className="mt-1 text-sm font-medium text-gray-800">
+              {value?.name ?? "Choose a transit point or map location"}
+            </p>
+            {value && (
+              <p className="text-xs text-gray-500">
+                {value.latitude.toFixed(5)}, {value.longitude.toFixed(5)}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTarget(activeTarget === target ? null : target)}
+            className={`rounded-lg px-3 py-2 text-xs font-semibold ${activeTarget === target ? "bg-[#12395A] text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}`}
+          >
+            {activeTarget === target ? "Click the map" : "Choose on map"}
+          </button>
+        </div>
+        <label className="mt-3 block text-xs font-medium text-gray-600">
+          Search existing approved points
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search terminal or stop"
+            className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-sm outline-none focus:border-[#12395A]"
+          />
+        </label>
+        {query && (
+          <div className="absolute inset-x-3 top-[116px] z-[1000] max-h-44 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+            {results.length ? results.map((point) => (
+              <button
+                type="button"
+                key={`${point.kind}-${point.id}`}
+                onClick={() => chooseLocation(target, point)}
+                className="block w-full border-b border-gray-100 px-3 py-2 text-left hover:bg-blue-50"
+              >
+                <span className="block text-sm font-medium text-gray-800">{point.name}</span>
+                <span className="text-xs text-gray-500">{point.kind === "terminal" ? "Terminal" : point.stopType === "train_station" ? "Station" : "Stop"}</span>
+              </button>
+            )) : <p className="px-3 py-3 text-sm text-gray-500">No matching approved points.</p>}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-[#f7f7f7]">
-      <aside className="absolute left-0 top-0 z-[2000] flex h-screen w-[220px] flex-col border-r border-white/10 bg-[#0f2a47] text-white sm:w-[230px] md:w-[240px] lg:w-[250px]">
-        <button
-          type="button"
-          onClick={() => navigate("/")}
-          title="Home"
-          className="absolute flex items-center justify-center rounded-lg transition-colors duration-200 hover:bg-white/10"
-          style={{ top: "30px", width: "100%", height: "75px" }}
-        >
-          <img
-            src={qrouteWhiteLogo}
-            alt="QRoute"
-            className="max-h-full max-w-full object-contain"
-          />
+    <main className="relative min-h-screen bg-[#f7f7f7] text-gray-900">
+      <aside className="fixed inset-y-0 left-0 z-[2000] flex w-[64px] flex-col border-r border-white/10 bg-[#0f2a47] text-white sm:w-[72px] lg:w-[250px]">
+        <button type="button" onClick={() => navigate("/")} title="Home" className="mx-auto mt-7 flex h-[75px] w-full items-center justify-center px-2 hover:bg-white/10 lg:px-5">
+          <img src={qrouteWhiteLogo} alt="QRoute" className="max-h-full max-w-full object-contain" />
         </button>
-
-        <nav className="absolute left-0 top-[145px] flex w-full flex-col gap-1.5 px-3">
+        <nav className="mt-8 flex flex-col gap-1.5 px-2 lg:px-3">
           {navItems.map(({ label, icon: Icon, path }) => (
             <button
               key={label}
               type="button"
-              onClick={() => {
-                if (label === "Community") {
-                  navigate(path);
-                  return;
-                }
-
-                if (!currentUserId) {
-                  setLoginPrompt(
-                    "Please log in or sign in to your QRoute account to access this feature.",
-                  );
-                  return;
-                }
-
-                navigate(path);
-              }}
-              className={`group flex h-[46px] w-full items-center rounded-xl px-3 text-left transition-colors duration-200 ${
-                label === "Community"
-                  ? "bg-[#d9dee3] font-semibold text-[#0f2a47]"
-                  : "font-medium text-white hover:bg-[#d0d5db] hover:text-[#0f2a47]"
-              }`}
+              onClick={() => label === "Community" ? navigate(path) : currentUserId ? navigate(path) : promptLogin()}
+              title={label}
+              className={`group flex h-[46px] w-full items-center justify-center rounded-xl px-2 text-left lg:justify-start lg:px-3 ${label === "Community" ? "bg-[#d9dee3] font-semibold text-[#0f2a47]" : "font-medium text-white hover:bg-white/15"}`}
             >
-              <span className="flex w-[28px] shrink-0 items-center justify-center">
-                <Icon
-                  size={19}
-                  strokeWidth={1.8}
-                  className="transition-transform duration-200 group-hover:scale-110"
-                />
-              </span>
-
-              <span className="ml-2 whitespace-nowrap text-[16px]">
-                {label}
-              </span>
+              <Icon size={19} className="lg:mr-3" /><span className="hidden lg:inline">{label}</span>
             </button>
           ))}
         </nav>
-
-        {!currentUserId && (
-          <button
-            type="button"
-            onClick={() => navigate("/login")}
-            className="absolute bottom-[30px] left-1/2 flex h-[40px] w-[160px] -translate-x-1/2 items-center justify-center rounded-xl bg-[#d9dee3] font-semibold text-[#0f2a47] transition-all duration-200 hover:-translate-y-0.5 hover:bg-white"
-          >
-            Sign In
-          </button>
-        )}
       </aside>
 
-      {/* HEADER */}
+      <div className="ml-[64px] min-h-screen sm:ml-[72px] lg:ml-[250px]">
+        <header className="fixed left-[64px] right-0 top-0 z-[1500] flex h-[86px] items-center justify-between border-b border-gray-200 bg-white px-3 shadow-sm sm:left-[72px] sm:px-5 lg:left-[250px]">
+          <div>
+            <h1 className="text-xl font-bold text-[#12395A]">QRoute Community</h1>
+            <p className="text-xs text-gray-500">Share commute questions and local experiences.</p>
+          </div>
+          <div className="relative flex items-center gap-3">
+            <Bell size={19} className="text-gray-500" />
+            <button type="button" onClick={() => setProfileMenu((open) => !open)} aria-label="Profile menu" className="flex h-10 w-10 items-center justify-center rounded-full bg-[#e8eef3] text-[#12395A]">
+              <UserCircle size={23} />
+            </button>
+            {profileMenu && (
+              <div className="absolute right-0 top-12 z-[3000] w-36 rounded-xl bg-white p-2 shadow-lg">
+                {currentUserId ? <>
+                  <button type="button" onClick={() => navigate("/profile")} className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-gray-100">Account</button>
+                  <button type="button" onClick={() => { void onLogout(); navigate("/"); }} className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-gray-100">Log out</button>
+                </> : <button type="button" onClick={() => navigate("/login")} className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-gray-100">Sign in</button>}
+              </div>
+            )}
+          </div>
+        </header>
 
-<header className="absolute left-[220px] right-0 top-0 z-[40] flex min-h-[130px] items-start justify-between bg-[#f7f7f7] px-[30px] pt-[35px] sm:left-[20px] md:left-[290px] lg:left-[300px]">
-        <div className="flex flex-col justify-center">
-          <h1 className="text-[26px] font-semibold tracking-[-0.4px] text-gray-900">
-            Community
-          </h1>
-          <p className="mt-1 text-[14px] text-gray-500">
-            Share and explore commuter experiences.
-          </p>
-        </div>
-
-        <div className="relative flex h-[55px] -translate-y-[5px] items-center gap-[20px]">
-          {/* NOTIFICATIONS */}
-
-          <div className="relative">
+        <div className="mx-auto max-w-[1050px] px-5 pb-10 pt-[106px]">
+          <section className="min-w-0">
             <button
               type="button"
-              title="Notifications"
-              onClick={() => {
-                if (
-                  needsLogin(
-                    "Please log in or sign in to your QRoute account to access this feature.",
-                  )
-                ) {
-                  return;
-                }
-
-                setNotificationsOpen((previous) => !previous);
-              }}
-              className="group relative flex h-[45px] w-[45px] items-center justify-center rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)] transition-all duration-200 hover:scale-105 hover:bg-gray-100 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]"
+              onClick={() => currentUserId && isRegisteredUser ? setShowCreatePost(true) : currentUserId ? setError("A registered-user account is required to publish community posts.") : promptLogin()}
+              className="group flex w-full items-center gap-4 rounded-xl border border-gray-200 bg-white px-5 py-4 text-left shadow-sm transition hover:bg-gray-50 hover:shadow-md"
             >
-              <Bell
-                size={20}
-                strokeWidth={2}
-                className="transition-transform duration-200 group-hover:rotate-6"
-              />
-
-              {currentUserId && notifications.length > 0 && (
-                <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
-                  {notifications.length}
-                </span>
-              )}
+              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#12395A] text-white"><Plus size={21} /></span>
+              <span><strong className="block text-sm">Create a community post</strong><small className="text-gray-500">Ask a question or share a commute experience</small></span>
             </button>
-
-            {notificationsOpen && currentUserId && (
-              <div className="absolute right-0 top-[55px] z-[3000] w-[300px] rounded-xl border border-gray-100 bg-white p-3 shadow-xl">
-                <h2 className="mb-2 px-1 text-sm font-semibold text-gray-900">
-                  Notifications
-                </h2>
-
-                {notifications.length === 0 ? (
-                  <p className="px-1 py-4 text-sm text-gray-500">
-                    No notifications yet.
-                  </p>
-                ) : (
-                  <div className="max-h-[300px] overflow-y-auto">
-                    {notifications.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => openPost(item.postId)}
-                        className="w-full rounded-lg px-2 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
-                      >
-                        {item.text}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* PROFILE */}
-
-          <button
-            type="button"
-            onClick={() => setProfileMenu((previous) => !previous)}
-            title="Profile"
-            className="group flex h-[45px] w-[45px] items-center justify-center overflow-hidden rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)] transition-all duration-200 hover:scale-105 hover:bg-gray-100 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]"
-          >
-            {currentAccount?.profilePicture ? (
-              <img
-                src={currentAccount.profilePicture}
-                alt="Profile"
-                className="h-full w-full rounded-full object-cover"
-              />
-            ) : (
-              <UserCircle
-                size={21}
-                strokeWidth={2}
-                className="transition-transform duration-200 group-hover:scale-105"
-              />
-            )}
-          </button>
-
-          {profileMenu && (
-            <div className="absolute right-0 top-[58px] z-[4000] w-[150px] rounded-xl bg-white p-2 shadow-[0_4px_15px_rgba(0,0,0,0.18)]">
-              {!currentUserId ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProfileMenu(false);
-                    navigate("/login");
-                  }}
-                  className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                >
-                  Sign In
-                </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setProfileMenu(false);
-                      navigate("/profile");
-                    }}
-                    className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                  >
-                    Account
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setProfileMenu(false);
-                      onLogout();
-                      navigate("/");
-                    }}
-                    className="mt-1 w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                  >
-                    Log Out
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      </header>
-
-      {/* FEED */}
-
-      <section className="absolute inset-0 z-0 ml-[220px] overflow-y-auto pt-[10px] sm:ml-[230px] md:ml-[240px] lg:ml-[250px]">
-        <div className="mx-auto w-full max-w-[900px] px-8 pb-12 pt-[125px]">
-          <button
-            type="button"
-            onClick={openAddPostModal}
-            className="group mt-1 flex w-full items-center gap-4 rounded-xl border border-gray-200 bg-white px-5 py-4 text-left shadow-[0_2px_8px_rgba(0,0,0,0.10)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-gray-50 hover:shadow-[0_4px_12px_rgba(0,0,0,0.14)]"
-          >
-            <div className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full bg-[#12395A] text-white transition-transform duration-200 group-hover:scale-105">
-              <Plus size={21} strokeWidth={2.2} />
-            </div>
-
-            <div>
-              <p className="text-[15px] font-semibold text-gray-900">
-                Add Post
-              </p>
-              <p className="mt-0.5 text-[13px] text-gray-500">
-                Create up to {MAX_DRAFTS} drafts and submit them for review
-              </p>
-            </div>
-          </button>
-
-          <div className="mt-5 flex flex-wrap gap-2">
-            {(["Public Feed", "My Posts"] as FeedFilter[]).map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                onClick={() => {
-                  if (
-                    filter === "My Posts" &&
-                    needsLogin(
-                      "Please log in or sign in to your QRoute account to access this feature.",
-                    )
-                  ) {
-                    return;
-                  }
-
-                  setFeedFilter(filter);
-                }}
-                className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
-                  feedFilter === filter
-                    ? "bg-[#12395A] text-white"
-                    : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-100"
-                }`}
-              >
-                {filter}
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-4 w-full">
-            {visiblePosts.map((post) => {
-              const liked = currentUserId
-                ? (post.likedBy ?? []).includes(currentUserId)
-                : false;
-
-              const disliked = currentUserId
-                ? (post.dislikedBy ?? []).includes(currentUserId)
-                : false;
-
-              const comments = post.comments ?? [];
-              const author = accounts.find(
-                (account) => account.id === post.userId,
-              );
-
-              return (
-                <article
-                  id={`community-post-${post.id}`}
-                  key={post.id}
-                  className="mx-auto mb-3 w-full max-w-[4000px] rounded-xl border border-gray-200 bg-white p-3 shadow-[0_2px_8px_rgba(0,0,0,0.05)]"
-                >
-                  {/* AUTHOR */}
-
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-start gap-3">
-                      {author?.profilePicture ? (
-                        <img
-                          src={author.profilePicture}
-                          alt="Profile"
-                          className="h-11 w-11 shrink-0 rounded-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#e8eef3] text-[#12395A]">
-                          <UserCircle size={25} />
-                        </div>
-                      )}
-
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-gray-900">
-                          {displayName(post.userId, accounts)}
-                        </p>
-                        <span className="mt-1 inline-block rounded-full bg-[#eaf1f7] px-2.5 py-1 text-[11px] font-medium text-[#12395A]">
-                          Contributor
-                        </span>
-                      </div>
-                    </div>
-
-                    <p className="shrink-0 pt-0.5 text-xs text-gray-500">
-                      {dateLabel(post.submittedAt)}
-                    </p>
-                  </div>
-
-                  {/* ROUTE */}
-
-                  {(post.terminal || post.origin || post.destination) && (
-                    <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-700">
-                      <MapPin
-                        size={16}
-                        className="shrink-0 text-[#12395A]"
-                      />
-
-                      {post.terminal && (
-                        <span>
-                          <span className="font-medium">Terminal:</span>{" "}
-                          {post.terminal}
-                        </span>
-                      )}
-
-                      {(post.origin || post.destination) && (
-                        <span className="font-medium">
-                          {post.origin || "—"} → {post.destination || "—"}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  
-
-{/* POST PHOTOS - COLLAGE PREVIEW */}
-{post.photos?.length > 0 && (
-  <div
-    className={`mt-3 grid gap-1 overflow-hidden rounded-lg ${
-      post.photos.length === 1
-        ? "grid-cols-1"
-        : post.photos.length === 2
-          ? "grid-cols-2"
-          : "grid-cols-2 grid-rows-2"
-    }`}
-  >
-    {/* Single photo */}
-    {post.photos.length === 1 && (
-      <img
-        src={post.photos[0].dataUrl}
-        alt="Community post photo 1"
-        onClick={() => {
-          setSelectedImagePhotos(post.photos);
-          setSelectedImageIndex(0);
-          setSelectedImage(post.photos[0].dataUrl);
-        }}
-        className="h-[260px] w-full cursor-pointer object-cover"
-      />
-    )}
-
-    {/* Two photos */}
-    {post.photos.length === 2 &&
-      post.photos.map((photo, index) => (
-        <img
-          key={`${post.id}-${index}`}
-          src={photo.dataUrl}
-          alt={`Community post photo ${index + 1}`}
-          onClick={() => {
-            setSelectedImagePhotos(post.photos);
-            setSelectedImageIndex(index);
-            setSelectedImage(photo.dataUrl);
-          }}
-          className="h-[220px] w-full cursor-pointer object-cover"
-        />
-      ))}
-
-    {/* Three or more photos */}
-    {post.photos.length >= 3 && (
-      <>
-        {/* Large photo on the left */}
-        <img
-          src={post.photos[0].dataUrl}
-          alt="Community post photo 1"
-          onClick={() => {
-            setSelectedImagePhotos(post.photos);
-            setSelectedImageIndex(0);
-            setSelectedImage(post.photos[0].dataUrl);
-          }}
-          className="col-start-1 row-span-2 h-[300px] w-full cursor-pointer object-cover"
-        />
-
-        {/* Top-right photo */}
-        <img
-          src={post.photos[1].dataUrl}
-          alt="Community post photo 2"
-          onClick={() => {
-            setSelectedImagePhotos(post.photos);
-            setSelectedImageIndex(1);
-            setSelectedImage(post.photos[1].dataUrl);
-          }}
-          className="h-[148px] w-full cursor-pointer object-cover"
-        />
-
-        {/* Bottom-right photo and remaining count */}
-        <div className="relative h-[148px] overflow-hidden">
-          <img
-            src={post.photos[2].dataUrl}
-            alt="Community post photo 3"
-            onClick={() => {
-              setSelectedImagePhotos(post.photos);
-              setSelectedImageIndex(2);
-              setSelectedImage(post.photos[2].dataUrl);
-            }}
-            className="h-full w-full cursor-pointer object-cover"
-          />
-
-          {post.photos.length > 3 && (
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedImagePhotos(post.photos);
-                setSelectedImageIndex(3);
-                setSelectedImage(post.photos[3].dataUrl);
-              }}
-              className="absolute inset-0 flex items-center justify-center bg-black/55 text-3xl font-semibold text-white transition-colors hover:bg-black/65"
-              aria-label={`View ${post.photos.length - 3} more photos`}
-            >
-              +{post.photos.length - 3}
-            </button>
-          )}
-        </div>
-      </>
-    )}
-  </div>
-)}
-
-                  {/* CAPTION */}
-
-                  <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800">
-                    {post.caption}
-                  </p>
-
-                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
-                    {post.vehicle && <span>{post.vehicle}</span>}
-                    {post.commuterType && <span>{post.commuterType}</span>}
-                    <span className="font-semibold">₱{post.fare}</span>
-                  </div>
-
-                  {/* INTERACTIONS */}
-
-                  <div className="mt-3 flex flex-wrap items-center gap-1 border-t border-gray-100 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => react(post.id, "like")}
-                      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-                        liked
-                          ? "bg-pink-50 text-pink-700"
-                          : "text-gray-600 hover:bg-gray-100"
-                      }`}
-                    >
-                      <Heart
-                        size={17}
-                        className={liked ? "fill-current" : ""}
-                      />
-                      {post.likedBy?.length ?? 0}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => react(post.id, "dislike")}
-                      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-                        disliked
-                          ? "bg-blue-50 text-blue-700"
-                          : "text-gray-600 hover:bg-gray-100"
-                      }`}
-                    >
-                      <ThumbsDown size={17} />
-                      {post.dislikedBy?.length ?? 0}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCommentOpen((previous) =>
-                          previous.includes(post.id)
-                            ? previous.filter((id) => id !== post.id)
-                            : [...previous, post.id],
-                        );
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 transition-colors hover:bg-gray-100"
-                    >
-                      <MessageSquare size={17} />
-                      {comments.length} Comments
-                    </button>
-
-                    <div className="ml-auto flex items-center gap-1">
-                      <span className="text-xs text-gray-500">
-                        {(post.reports?.length ?? 0) +
-                          (post.reportedBy?.length ?? 0)}
-                      </span>
-
-                      <button
-                        type="button"
-                        title="Report post"
-                        onClick={() => {
-                          if (
-                            needsLogin(
-                              "Please log in or sign in to your QRoute account to access this feature.",
-                            )
-                          ) {
-                            return;
-                          }
-
-                          setReportReason("");
-                          setReportTarget({ postId: post.id });
-                        }}
-                        className="inline-flex items-center gap-1 rounded-lg px-2 py-2 text-sm text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Flag size={16} />
-                        Report
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* COMMENTS */}
-
-                  {commentOpen.includes(post.id) && (
-                    <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
-                      {comments.map((item) => (
-                        <div
-                          key={item.id}
-                          className="min-w-0 rounded-lg bg-gray-50 px-3 py-2"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="text-xs font-semibold text-gray-800">
-                              {displayName(item.userId, accounts)}
-                            </p>
-
-                            <div className="flex shrink-0 items-center gap-1">
-                              <span className="text-[11px] text-gray-500">
-                                {item.reports?.length ?? 0}
-                              </span>
-
-                              <button
-                                type="button"
-                                title="Report comment"
-                                aria-label="Report comment"
-                                onClick={() => {
-                                  if (
-                                    needsLogin(
-                                      "Please log in or sign in to your QRoute account to access this feature.",
-                                    )
-                                  ) {
-                                    return;
-                                  }
-
-                                  setReportReason("");
-                                  setReportTarget({
-                                    postId: post.id,
-                                    commentId: item.id,
-                                  });
-                                }}
-                                className="rounded-md p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                              >
-                                <Flag size={14} />
-                              </button>
-                            </div>
-                          </div>
-
-                          <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-gray-700">
-                            {item.text}
-                          </p>
-                        </div>
-                      ))}
-
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={commentText[post.id] ?? ""}
-                          onChange={(event) =>
-                            setCommentText((previous) => ({
-                              ...previous,
-                              [post.id]: event.target.value,
-                            }))
-                          }
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") comment(post.id);
-                          }}
-                          placeholder="Write a comment..."
-                          className="min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#12395A]"
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() => comment(post.id)}
-                          className="rounded-lg bg-[#12395A] px-3 py-2 text-white transition-colors hover:bg-[#1b4b6f]"
-                          aria-label="Send comment"
-                        >
-                          <Send size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-
-            {visiblePosts.length === 0 && (
-              <div className="mt-4 flex min-h-[260px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-6 text-center shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
-                <div className="flex h-[58px] w-[58px] items-center justify-center rounded-full bg-[#f1f3f5]">
-                  <MessageSquare
-                    size={27}
-                    strokeWidth={1.8}
-                    className="text-gray-400"
-                  />
-                </div>
-
-                <h2 className="mt-5 text-[17px] font-semibold text-gray-800">
-                  {feedFilter === "My Posts"
-                    ? "You have no published posts yet."
-                    : "No community posts yet."}
-                </h2>
-
-                <p className="mt-2 max-w-[380px] text-[13px] leading-[1.6] text-gray-500">
-                  {feedFilter === "My Posts"
-                    ? "Your approved posts will appear here."
-                    : "Approved community contributions will appear here."}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {/* CREATE POST MODAL */}
-
-      {showAddPostModal && activeDraft && (
-        <div
-          className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/45 px-4 py-6"
-          onClick={closeAddPostModal}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="add-post-title"
-            className="max-h-[90vh] w-full max-w-[620px] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:p-8"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="mb-5 flex items-start justify-between gap-4">
-              <div>
-                <h2
-                  id="add-post-title"
-                  className="text-xl font-semibold text-gray-900"
-                >
-                  Create Post
-                </h2>
-                <p className="mt-1 text-sm text-gray-500">
-                  Save up to {MAX_DRAFTS} separate posts for admin review.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                aria-label="Close"
-                onClick={closeAddPostModal}
-                className="rounded-full px-2 py-1 text-xl leading-none text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
-              >
-                ×
-              </button>
-            </div>
-
-            {draftNotice && (
-              <p
-                role="alert"
-                className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
-              >
-                {draftNotice}
-              </p>
-            )}
-
-            <div className="space-y-4">
-              {/* PHOTOS */}
-
-              <div>
-                <div className="mb-1.5 flex items-center justify-between">
-                  <label className="block text-sm font-medium text-gray-900">
-                    Photos <span className="text-red-500">*</span>
-                  </label>
-
-                  <span className="text-xs text-gray-500">
-                    {activeDraft.photos.length}/{MAX_PHOTOS} photos
-                  </span>
-                </div>
-
-                <div
-                  className={`grid grid-cols-2 gap-3 rounded-xl sm:grid-cols-3 ${
-                    showValidation && activeDraft.photos.length === 0
-                      ? "border border-red-500 p-2"
-                      : ""
-                  }`}
-                >
-                  {activeDraft.photos.map((photo, index) => (
-                    <div
-                      key={`${activeDraft.id}-${photo.name}-${index}`}
-                      className="relative overflow-hidden rounded-xl border border-gray-200 bg-gray-50"
-                    >
-                      <img
-                        src={photo.dataUrl}
-                        alt={`Selected photo ${index + 1}`}
-                        className="h-28 w-full object-cover"
-                      />
-
-                      <button
-                        type="button"
-                        aria-label={`Remove photo ${index + 1}`}
-                        onClick={() => removePhoto(index)}
-                        className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white transition-colors hover:bg-red-600"
-                      >
-                        ×
-                      </button>
-
-                      <p className="truncate px-2 py-1.5 text-xs text-gray-600">
-                        {photo.name}
-                      </p>
-                    </div>
-                  ))}
-
-                  {activeDraft.photos.length < MAX_PHOTOS && (
-                    <button
-                      type="button"
-                      onClick={() => photoInputRef.current?.click()}
-                      className="flex min-h-[112px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 px-3 py-4 text-center transition-colors hover:border-[#12395A] hover:bg-gray-100"
-                    >
-                      <Plus size={25} className="mb-1 text-gray-500" />
-                      <span className="text-sm font-medium text-gray-700">
-                        Add photo
-                      </span>
-                      <span className="mt-1 text-xs text-gray-500">
-                        PNG, JPG, or JPEG
-                      </span>
-                    </button>
-                  )}
-                </div>
-
-                <input
-                  ref={photoInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg"
-                  multiple
-                  className="hidden"
-                  onChange={handlePhotoChange}
-                />
-
-                {showValidation && activeDraft.photos.length === 0 && (
-                  <p className="mt-1 text-xs text-red-600">
-                    Please add at least one photo.
-                  </p>
-                )}
-              </div>
-
-              {/* CAPTION */}
-
-              <div>
-                <label
-                  htmlFor="post-caption"
-                  className="mb-1.5 block text-sm font-medium text-gray-700"
-                >
-                  Caption <span className="text-red-500">*</span>
-                </label>
-
-                <textarea
-                  id="post-caption"
-                  value={activeDraft.caption}
-                  onChange={(event) =>
-                    updateActiveDraft({ caption: event.target.value })
-                  }
-                  placeholder="Share your route experience..."
-                  rows={2}
-                  className={`w-full resize-none rounded-lg border px-3 py-2 text-sm outline-none focus:ring-1 ${
-                    showValidation && !activeDraft.caption.trim()
-                      ? "border-red-500 focus:border-red-500 focus:ring-red-500"
-                      : "border-gray-300 focus:border-[#12395A] focus:ring-[#12395A]"
-                  }`}
-                />
-
-                {showValidation && !activeDraft.caption.trim() && (
-                  <p className="mt-1 text-xs text-red-600">
-                    Caption is required.
-                  </p>
-                )}
-              </div>
-
-              {/* TERMINAL */}
-
-              <div>
-                <label
-                  htmlFor="post-terminal"
-                  className="mb-1.5 block text-sm font-medium text-gray-900"
-                >
-                  Terminal
-                </label>
-
-                <input
-                  id="post-terminal"
-                  value={activeDraft.terminal}
-                  onChange={(event) =>
-                    updateActiveDraft({ terminal: event.target.value })
-                  }
-                  placeholder="Enter terminal name"
-                  className={fieldClass(routeError)}
-                />
-              </div>
-
-              {/* ROUTE */}
-
-              <div>
-                <p className="mb-1.5 block text-sm font-medium text-gray-900">
-                  Route details
-                </p>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <label
-                      htmlFor="post-origin"
-                      className="mb-1 block text-xs text-gray-500"
-                    >
-                      Point A / Origin
-                    </label>
-
-                    <input
-                      id="post-origin"
-                      value={activeDraft.origin}
-                      onChange={(event) =>
-                        updateActiveDraft({ origin: event.target.value })
-                      }
-                      placeholder="Starting point"
-                      className={fieldClass(routeError)}
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="post-destination"
-                      className="mb-1 block text-xs text-gray-500"
-                    >
-                      Point B / Destination
-                    </label>
-
-                    <input
-                      id="post-destination"
-                      value={activeDraft.destination}
-                      onChange={(event) =>
-                        updateActiveDraft({
-                          destination: event.target.value,
-                        })
-                      }
-                      placeholder="Destination"
-                      className={fieldClass(routeError)}
-                    />
-                  </div>
-                </div>
-
-                {routeError && (
-                  <p className="mt-1 text-xs text-red-600">
-                    Enter a terminal, origin, or destination.
-                  </p>
-                )}
-              </div>
-
-              {/* VEHICLE */}
-
-              <div>
-                <label
-                  htmlFor="post-vehicle"
-                  className="mb-1.5 block text-sm font-medium text-gray-900"
-                >
-                  Type of vehicle <span className="text-red-500">*</span>
-                </label>
-
-                <select
-                  id="post-vehicle"
-                  value={activeDraft.vehicle}
-                  onChange={(event) =>
-                    updateActiveDraft({ vehicle: event.target.value })
-                  }
-                  className={fieldClass(
-                    showValidation && !activeDraft.vehicle,
-                  )}
-                >
-                  <option value="" disabled>
-                    Vehicle Type
-                  </option>
-                  <option value="Bus">Bus</option>
-                  <option value="Jeepney">Jeepney</option>
-                  <option value="Train">Train</option>
-                </select>
-              </div>
-
-              {/* COMMUTER TYPE */}
-
-              <div>
-                <label
-                  htmlFor="post-commuter-type"
-                  className="mb-1.5 block text-sm font-medium text-gray-900"
-                >
-                  Type of commuter <span className="text-red-500">*</span>
-                </label>
-
-                <select
-                  id="post-commuter-type"
-                  value={activeDraft.commuterType}
-                  onChange={(event) =>
-                    updateActiveDraft({
-                      commuterType: event.target.value,
-                    })
-                  }
-                  className={fieldClass(
-                    showValidation && !activeDraft.commuterType,
-                  )}
-                >
-                  <option value="" disabled>
-                    Commuter Type
-                  </option>
-                  <option value="Regular">Regular</option>
-                  <option value="Discounted">Discounted</option>
-                </select>
-              </div>
-
-              {/* FARE */}
-
-              <div>
-                <label
-                  htmlFor="post-fare"
-                  className="mb-1.5 block text-sm font-medium text-gray-900"
-                >
-                  Fare (₱) <span className="text-red-500">*</span>
-                </label>
-
-                <input
-                  id="post-fare"
-                  type="text"
-                  inputMode="decimal"
-                  value={activeDraft.fare}
-                  onChange={(event) => {
-                    const value = event.target.value;
-
-                    if (/^\d*\.?\d{0,2}$/.test(value)) {
-                      updateActiveDraft({ fare: value });
-                    }
-                  }}
-                  placeholder="0.00"
-                  className={fieldClass(fareError)}
-                />
-
-                {fareError && (
-                  <p className="mt-1 text-xs text-red-600">
-                    Enter a valid fare with up to two decimal places.
-                  </p>
-                )}
-              </div>
-
-              {showValidation && !isDraftValid(activeDraft) && (
-                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                  Complete the required fields in this draft before
-                  submitting the batch.
-                </p>
-              )}
-            </div>
-
-            {/* DRAFT TABS */}
-
-            <div className="mt-6 border-t border-gray-100 pt-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-gray-800">
-                    Your draft posts
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    {drafts.length} of {MAX_DRAFTS} drafts
-                  </p>
-                </div>
-
-                <p className="text-xs text-gray-500">
-                  Draft {activeDraftIndex + 1} of {drafts.length}
-                </p>
-              </div>
-
-              <div className="mb-4 flex flex-wrap items-center gap-2">
-                {drafts.map((draft, index) => {
-                  const isActive = index === activeDraftIndex;
-
-                  const hasContent = Boolean(
-                    draft.caption.trim() ||
-                      draft.terminal.trim() ||
-                      draft.origin.trim() ||
-                      draft.destination.trim() ||
-                      draft.photos.length > 0,
-                  );
-
-                  return (
-                    <div
-                      key={draft.id}
-                      className={`flex items-center overflow-hidden rounded-lg border transition-colors ${
-                        isActive
-                          ? "border-[#12395A] bg-[#12395A] text-white"
-                          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-100"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveDraftIndex(index);
-                          setShowValidation(false);
-                          setDraftNotice("");
-                        }}
-                        className="px-3 py-2 text-xs font-semibold"
-                      >
-                        Draft {index + 1}
-                        {hasContent ? " •" : ""}
-                      </button>
-
-                      <button
-                        type="button"
-                        aria-label={`Delete draft ${index + 1}`}
-                        title={`Delete draft ${index + 1}`}
-                        onClick={() => {
-                          setActiveDraftIndex(index);
-                          setShowDeleteConfirmation(true);
-                        }}
-                        className={`border-l px-2 py-2 transition-colors ${
-                          isActive
-                            ? "border-white/20 hover:bg-red-600"
-                            : "border-gray-200 hover:bg-red-50 hover:text-red-600"
-                        }`}
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-col-reverse justify-end gap-3 sm:flex-row">
-              <button
-                type="button"
-                onClick={addAnotherDraft}
-                disabled={drafts.length >= MAX_DRAFTS}
-                className="rounded-lg border border-[#12395A] px-4 py-2.5 text-sm font-semibold text-[#12395A] transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                + Add Another Post
-              </button>
-
-              <button
-                type="button"
-                onClick={handleSubmitAll}
-                disabled={isSubmitting}
-                className="rounded-lg bg-[#12395A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Submit All
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {/* SUBMIT CONFIRMATION */}
-
-      {showSubmitConfirmation && (
-        <div
-          className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
-          onClick={() => setShowSubmitConfirmation(false)}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            className="w-full max-w-[390px] rounded-2xl bg-white p-6 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 className="text-lg font-semibold text-gray-900">
-              Submit your posts?
-            </h2>
-
-            <p className="mt-2 text-sm leading-relaxed text-gray-600">
-              Submit {drafts.length} post{drafts.length === 1 ? "" : "s"} for
-              admin review? You cannot edit them while they are pending.
-            </p>
-
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setShowSubmitConfirmation(false)}
-                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={confirmSubmitAll}
-                disabled={isSubmitting}
-                className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1b4b6f] disabled:opacity-50"
-              >
-                {isSubmitting ? "Submitting..." : "Confirm"}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {/* DELETE DRAFT CONFIRMATION */}
-
-      {showDeleteConfirmation && activeDraft && (
-        <div
-          className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 px-4"
-          onClick={() => setShowDeleteConfirmation(false)}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            className="w-full max-w-[390px] rounded-2xl bg-white p-6 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 className="text-lg font-semibold text-gray-900">
-              Delete this draft?
-            </h2>
-
-            <p className="mt-2 text-sm leading-relaxed text-gray-600">
-              The current draft and its photos will be removed.
-            </p>
-
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setShowDeleteConfirmation(false)}
-                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={deleteActiveDraft}
-                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
-              >
-                Delete Draft
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {/* SIGN-IN POPUP — MATCHES LANDING */}
-
-      {loginPrompt && (
-        <div
-          className="fixed inset-0 z-[7000] flex items-center justify-center bg-black/30"
-          onClick={() => setLoginPrompt("")}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            className="w-[320px] rounded-xl bg-white p-6 text-center shadow-[0_4px_20px_rgba(0,0,0,0.2)]"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 className="text-[18px] font-semibold text-gray-900">
-              Sign in to access this
-            </h2>
-
-            <p className="mt-2 text-[12px] leading-relaxed text-gray-600">
-              Please log in or sign in to your QRoute account to access this
-              feature.
-            </p>
 
             <div className="mt-5 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setLoginPrompt("")}
-                className="h-9 flex-1 rounded-[6px] border border-gray-300 bg-white text-[11px] font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginPrompt("");
-                  navigate("/login");
-                }}
-                className="h-9 flex-1 rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white hover:bg-[#5547E8]"
-              >
-                Sign In
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* REPORT MODAL */}
-
-      {reportTarget && (
-        <div
-          className="fixed inset-0 z-[8000] flex items-center justify-center bg-black/45 px-4"
-          onClick={() => {
-            setReportTarget(null);
-            setReportReason("");
-          }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="report-title"
-            className="w-full max-w-[420px] rounded-2xl bg-white p-6 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="mb-4 w-full">
-              <h2
-                id="report-title"
-                className="w-full text-center text-lg font-bold text-gray-950"
-              >
-                Why are you reporting this{" "}
-                {reportTarget.commentId ? "comment" : "contribution"}?
-              </h2>
-            </div>
-
-            <p className="mb-5 text-center text-sm text-gray-600">
-              Let the admins know why you are reporting this{" "}
-              {reportTarget.commentId ? "comment" : "post"}.
-            </p>
-
-            <div className="space-y-1">
-              {[
-                "Misleading or troll submissions",
-                "Offensive or inappropriate content",
-              ].map((reason) => (
-                <button
-                  key={reason}
-                  type="button"
-                  onClick={() => setReportReason(reason)}
-                  className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-3 text-left text-sm transition-colors ${
-                    reportReason === reason
-                      ? "bg-gray-100 font-semibold text-gray-950"
-                      : "text-gray-800 hover:bg-gray-50"
-                  }`}
-                >
-                  <span>{reason}</span>
-                  <span className="text-lg leading-none text-gray-950">
-                    ›
-                  </span>
+              {(["Public Feed", "My Posts"] as FeedFilter[]).map((filter) => (
+                <button key={filter} type="button" onClick={() => {
+                  if (filter === "My Posts" && !currentUserId) { promptLogin(); return; }
+                  setFeedFilter(filter);
+                }} className={`rounded-lg px-4 py-2 text-sm font-semibold ${feedFilter === filter ? "bg-[#12395A] text-white" : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-100"}`}>
+                  {filter}
                 </button>
               ))}
+              <button type="button" onClick={() => void reloadPosts()} aria-label="Refresh posts" className="ml-auto rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-600 hover:bg-gray-100">Refresh</button>
             </div>
 
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setReportTarget(null);
-                  setReportReason("");
-                }}
-                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
-              >
-                Cancel
-              </button>
+            {error && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+            {notice && <p role="status" className="mt-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{notice}</p>}
+            {loading ? <p role="status" className="mt-6 rounded-xl bg-white p-8 text-center text-sm text-gray-500">Loading community posts…</p> : (
+              <div className="mt-4 space-y-3">
+                {visiblePosts.map((post) => (
+                  <article key={post.id} className={`rounded-xl border bg-white p-4 shadow-sm ${selectedPost?.id === post.id ? "border-[#12395A] ring-1 ring-[#12395A]/15" : "border-gray-200"}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e8eef3] text-[#12395A]"><UserCircle size={22} /></span>
+                        <div className="min-w-0"><p className="truncate text-sm font-semibold">{post.author_display_name}</p><p className="text-xs text-gray-500">{formatDate(post.created_at)}</p></div>
+                      </div>
+                      <button type="button" onClick={() => setSelectedPostId(post.id)} className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold text-[#12395A] hover:bg-blue-50">View map</button>
+                    </div>
+                    <button type="button" onClick={() => setSelectedPostId(post.id)} className="mt-3 block w-full text-left">
+                      <h2 className="text-base font-bold text-gray-900">{post.title}</h2>
+                      <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-700">{post.content}</p>
+                    </button>
+                    <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-[#f4f8fb] px-3 py-2 text-xs text-gray-700">
+                      <span className="font-semibold">{post.start_name}</span><ArrowRight size={14} /><span className="font-semibold">{post.destination_name}</span>
+                      {post.transport_type && <span className="ml-auto rounded-full bg-white px-2.5 py-1 text-[#12395A]">{post.transport_type}</span>}
+                    </div>
+                    {post.photos.length > 0 && (
+                      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {post.photos.map((photo) => (
+                          <a key={photo.path} href={photo.url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-lg border border-gray-200">
+                            <img src={photo.url} alt={`Photo attached to ${post.title}`} loading="lazy" className="h-32 w-full object-cover" />
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                    {selectedPost?.id === post.id && (
+                      <div className="mt-3">
+                        <CommunityPostMap
+                          start={{ name: post.start_name, latitude: post.start_latitude, longitude: post.start_longitude }}
+                          destination={{ name: post.destination_name, latitude: post.destination_latitude, longitude: post.destination_longitude }}
+                          transportType={post.transport_type ?? ""}
+                          routeColor={transportTypes.find((type) => type.id === post.transport_type_id)?.color ?? "#2563eb"}
+                          height="h-[300px]"
+                        />
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600">
+                          <p><strong>Start</strong><br />{post.start_name}</p>
+                          <p><strong>Destination</strong><br />{post.destination_name}</p>
+                        </div>
+                        <p className="mt-2 text-xs text-gray-500">The line visualizes submitted locations and does not necessarily show a transit route.</p>
+                      </div>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2">
+                      <button type="button" onClick={() => void reactToPost(post, "upvote")} aria-pressed={currentUserId === votesUserId && votes[post.id] === "upvote"} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm ${currentUserId === votesUserId && votes[post.id] === "upvote" ? "bg-green-50 text-green-700" : "text-gray-600 hover:bg-gray-100"}`}><ThumbsUp size={16} />{post.upvotes}</button>
+                      <button type="button" onClick={() => void reactToPost(post, "downvote")} aria-pressed={currentUserId === votesUserId && votes[post.id] === "downvote"} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm ${currentUserId === votesUserId && votes[post.id] === "downvote" ? "bg-red-50 text-red-700" : "text-gray-600 hover:bg-gray-100"}`}><ThumbsDown size={16} />{post.downvotes}</button>
+                      <button type="button" onClick={() => void toggleComments(post.id)} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 hover:bg-gray-100"><MessageSquare size={16} />{post.comment_count} Comments</button>
+                    </div>
 
-              <button
-                type="button"
-                onClick={submitReport}
-                disabled={!reportReason}
-                className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Submit Report
-              </button>
+                    {commentsOpen[post.id] && (
+                      <div className="mt-2 space-y-2 border-t border-gray-100 pt-3">
+                        {commentsLoading[post.id] && <p role="status" className="text-sm text-gray-500">Loading comments…</p>}
+                        {(comments[post.id] ?? []).map((comment) => <div key={comment.id} className="rounded-lg bg-gray-50 px-3 py-2"><div className="flex justify-between gap-3"><strong className="text-xs">{comment.author_display_name}</strong><time className="text-[11px] text-gray-500">{formatDate(comment.created_at)}</time></div><p className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-700">{comment.content}</p></div>)}
+                        {!commentsLoading[post.id] && (comments[post.id]?.length ?? 0) === 0 && <p className="text-sm text-gray-500">No comments yet.</p>}
+                        {currentUserId && isRegisteredUser ? <div className="flex gap-2"><input maxLength={1000} value={commentDrafts[post.id] ?? ""} onChange={(event) => setCommentDrafts((previous) => ({ ...previous, [post.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") void submitComment(post.id); }} placeholder="Write a comment…" className="min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#12395A]" /><button type="button" onClick={() => void submitComment(post.id)} aria-label="Send comment" className="rounded-lg bg-[#12395A] px-3 text-white"><Send size={16} /></button></div> : <button type="button" onClick={currentUserId ? () => setError("A registered-user account is required to comment.") : promptLogin} className="text-sm font-medium text-[#12395A] underline">{currentUserId ? "Registered users can comment" : "Sign in to comment"}</button>}
+                      </div>
+                    )}
+                  </article>
+                ))}
+                {!visiblePosts.length && <div className="rounded-xl border border-gray-200 bg-white px-6 py-14 text-center"><MessageSquare size={28} className="mx-auto text-gray-400" /><p className="mt-3 font-semibold">{feedFilter === "My Posts" ? "You haven’t published a post yet." : "No community posts yet."}</p><p className="mt-1 text-sm text-gray-500">Posts from QRoute members appear here as soon as they are published.</p></div>}
+              </div>
+            )}
+          </section>
+
+        </div>
+      </div>
+
+      {showCreatePost && (
+        <div className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/50 p-3 sm:p-6" onClick={() => setShowCreatePost(false)}>
+          <section role="dialog" aria-modal="true" aria-labelledby="community-create-title" onClick={(event) => event.stopPropagation()} className="max-h-[94vh] w-full max-w-[900px] overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl sm:p-7">
+            <div className="mb-5 flex items-start justify-between gap-3"><div><h2 id="community-create-title" className="text-xl font-bold text-[#12395A]">Create a public post</h2><p className="mt-1 text-sm text-gray-500">Your post will be visible as soon as you publish it.</p></div><button type="button" onClick={() => setShowCreatePost(false)} aria-label="Close" className="rounded-lg p-2 text-gray-500 hover:bg-gray-100"><X size={20} /></button></div>
+            {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+              <div className="space-y-4">
+                <label className="block text-sm font-medium">Title<input maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-gray-200 px-3 outline-none focus:border-[#12395A]" placeholder="What should commuters know?" /></label>
+                <label className="block text-sm font-medium">Description<textarea maxLength={5000} rows={5} value={content} onChange={(event) => setContent(event.target.value)} className="mt-1 w-full resize-y rounded-lg border border-gray-200 px-3 py-2 outline-none focus:border-[#12395A]" placeholder="Share your question or experience…" /></label>
+                <div>
+                  <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden onChange={(event) => void handlePhotoSelection(event)} />
+                  <button type="button" onClick={() => photoInputRef.current?.click()} disabled={selectedPhotos.length >= MAX_PHOTOS} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                    <ImagePlus size={17} /> Add photos ({selectedPhotos.length}/{MAX_PHOTOS})
+                  </button>
+                  {selectedPhotos.length > 0 && (
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      {selectedPhotos.map((photo, index) => (
+                        <div key={`${photo.name}-${index}`} className="relative overflow-hidden rounded-lg border border-gray-200">
+                          <img src={photo.dataUrl} alt={`Preview of ${photo.name}`} className="h-24 w-full object-cover" />
+                          <button type="button" aria-label={`Remove ${photo.name}`} onClick={() => setSelectedPhotos((previous) => previous.filter((_, photoIndex) => photoIndex !== index))} className="absolute right-1 top-1 rounded-full bg-white/90 p-1 text-gray-700 shadow"><X size={14} /></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <p className="mt-1 text-xs text-gray-500">JPEG, PNG, or WebP, up to 5 MB each. Up to five photos.</p>
+                </div>
+                <label className="block text-sm font-medium">Transportation type (optional)<select value={transportTypeId ?? ""} onChange={(event) => setTransportTypeId(event.target.value ? Number(event.target.value) : null)} className="mt-1 h-10 w-full rounded-lg border border-gray-200 bg-white px-3"><option value="">Any / not specified</option>{transportTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></label>
+                {locationPicker("start", start, startSearch)}
+                {locationPicker("destination", destination, destinationSearch)}
+              </div>
+              <div><p className="mb-2 text-sm font-medium text-gray-700">Choose {activeTarget === "destination" ? "destination" : "starting point"} by searching or clicking the map.</p><CommunityPostMap start={start} destination={destination} activeTarget={activeTarget} existingPoints={locations.filter((point) => transportTypeId === null || point.transportTypeId === null || point.transportTypeId === transportTypeId)} onMapPick={handleMapPick} onExistingPointPick={(point) => activeTarget && chooseLocation(activeTarget, point)} transportType={transportTypes.find((type) => type.id === transportTypeId)?.name ?? ""} routeColor={transportTypes.find((type) => type.id === transportTypeId)?.color ?? "#2563eb"} height="h-[300px]" /><p className="mt-2 text-xs text-gray-500">Select a start or destination above, then click any map location. The line only visualizes your selected points.</p></div>
             </div>
+            <div className="mt-6 flex flex-col-reverse gap-2 border-t border-gray-100 pt-4 sm:flex-row sm:justify-end"><button type="button" onClick={() => { setShowCreatePost(false); resetComposer(); }} className="rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">Cancel</button><button type="button" disabled={isSubmitting} onClick={() => void submitPost()} className="rounded-lg bg-[#12395A] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#1b4b6f] disabled:opacity-50">{isSubmitting ? "Publishing…" : "Publish post"}</button></div>
           </section>
         </div>
       )}
 
-      {/* NOTICE */}
-
-      {notice && (
-        <div className="fixed bottom-5 right-5 z-[9000] max-w-sm rounded-xl bg-[#12395A] px-4 py-3 text-sm text-white shadow-xl">
-          <div className="flex items-start gap-3">
-            <p>{notice}</p>
-
-            <button
-              type="button"
-              aria-label="Dismiss"
-              onClick={() => setNotice("")}
-              className="shrink-0 text-white/80 hover:text-white"
-            >
-              <X size={16} />
-            </button>
-          </div>
+      {loginPrompt && (
+        <div className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/45 p-4" onClick={() => setLoginPrompt("")}>
+          <section role="dialog" aria-modal="true" className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}><h2 className="text-lg font-semibold text-[#12395A]">Sign in to participate</h2><p className="mt-2 text-sm text-gray-600">{loginPrompt}</p><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setLoginPrompt("")} className="rounded-lg border border-gray-200 px-4 py-2 text-sm">Close</button><button type="button" onClick={() => navigate("/login")} className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white">Sign in</button></div></section>
         </div>
       )}
-
-      {/* EXPANDED IMAGE */}
-
-{selectedImage && (
-  <div
-    className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4"
-    onClick={() => setSelectedImage(null)}
-  >
-    {/* Close button */}
-    <button
-      type="button"
-      onClick={() => setSelectedImage(null)}
-      className="absolute right-5 top-5 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
-      aria-label="Close image"
-    >
-      <X size={28} />
-    </button>
-
-    {/* Previous photo */}
-    {selectedImagePhotos.length > 1 && (
-      <button
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          const nextIndex =
-            (selectedImageIndex - 1 + selectedImagePhotos.length) %
-            selectedImagePhotos.length;
-
-          setSelectedImageIndex(nextIndex);
-          setSelectedImage(selectedImagePhotos[nextIndex].dataUrl);
-        }}
-        className="absolute left-4 z-10 rounded-full bg-black/50 p-3 text-white hover:bg-black/75"
-        aria-label="Previous photo"
-      >
-        <ChevronLeft size={30} />
-      </button>
-    )}
-
-    {/* Current photo */}
-    <div
-      className="flex max-h-[90vh] max-w-[95vw] flex-col items-center gap-3"
-      onClick={(event) => event.stopPropagation()}
-    >
-      <img
-        src={selectedImage}
-        alt="Expanded post"
-        className="max-h-[82vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
-      />
-
-      {selectedImagePhotos.length > 1 && (
-        <p className="text-sm text-white">
-          {selectedImageIndex + 1} / {selectedImagePhotos.length}
-        </p>
-      )}
-    </div>
-
-    {/* Next photo */}
-    {selectedImagePhotos.length > 1 && (
-      <button
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          const nextIndex =
-            (selectedImageIndex + 1) % selectedImagePhotos.length;
-
-          setSelectedImageIndex(nextIndex);
-          setSelectedImage(selectedImagePhotos[nextIndex].dataUrl);
-        }}
-        className="absolute right-4 z-10 rounded-full bg-black/50 p-3 text-white hover:bg-black/75"
-        aria-label="Next photo"
-      >
-        <ChevronRight size={30} />
-      </button>
-    )}
-  </div>
-)}
-
     </main>
   );
 }
