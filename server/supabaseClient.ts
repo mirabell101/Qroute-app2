@@ -29,6 +29,27 @@ export function getSupabaseClient() {
   return createClient(supabaseUrl, supabasePublishableKey);
 }
 
+// Request-scoped client: preserves the caller's identity so database RLS runs
+// for Express writes instead of granting the API service elevated access.
+export function getSupabaseClientForAccessToken(accessToken: string) {
+  if (!supabaseUrl || !supabasePublishableKey) {
+    throw new Error(
+      "Missing SUPABASE_URL or SUPABASE_PUBLISHABLE_KEY"
+    );
+  }
+
+  return createClient(supabaseUrl, supabasePublishableKey, {
+    global: {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
 // Privileged client for trusted backend operations only.
 export function getSupabaseAdminClient() {
   if (!supabaseUrl || !supabaseSecretKey) {

@@ -13,7 +13,11 @@ export async function getTerminals(): Promise<Terminal[]> {
   const { data, error } = await supabase
     .from("terminals")
     .select("id, name, latitude, longitude, is_active")
-    .eq("is_active", true);
+    .eq("is_approved", true)
+    .eq("moderation_status", "approved")
+    .eq("is_active", true)
+    .eq("is_deleted", false)
+    .eq("is_banned", false);
 
   if (error) {
     throw new Error(error.message);

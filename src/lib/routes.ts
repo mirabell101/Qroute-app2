@@ -74,6 +74,7 @@ export async function getRouteMapIndex(): Promise<RouteMapIndex> {
     .eq("is_deleted", false)
     .eq("is_banned", false)
     .eq("is_approved", true)
+    .eq("moderation_status", "approved")
     .order("name", { ascending: true });
 
   if (error) throw new Error(error.message);
@@ -153,6 +154,7 @@ export async function getRouteDetails(
     .eq("is_deleted", false)
     .eq("is_banned", false)
     .eq("is_approved", true)
+    .eq("moderation_status", "approved")
     .single();
 
   if (error) throw new Error(error.message);

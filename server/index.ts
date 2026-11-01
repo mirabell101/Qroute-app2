@@ -1,6 +1,7 @@
 
 import "dotenv/config";
 import authRoutes from './routes/authRoutes.ts';
+import communityRoutes from "./routes/communityRoutes.ts";
 import express, {
   type Request,
   type Response,
@@ -89,6 +90,7 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use("/api/auth", authRoutes);
+app.use("/api/community", communityRoutes);
 
 // Express server health check
 app.get("/api/health", (_req: Request, res: Response) => {
@@ -248,7 +250,6 @@ app.use((_req: Request, res: Response) => {
 });
 
 // Error handler
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use(
   (
     err: unknown,
@@ -256,6 +257,7 @@ app.use(
     res: Response,
     _next: NextFunction
   ) => {
+    void _next;
     console.error("[server] Unhandled error:", err);
 
     res.status(500).json({

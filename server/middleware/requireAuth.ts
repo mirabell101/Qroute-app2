@@ -38,6 +38,7 @@ const requireAuth: RequestHandler = async (req, res, next) => {
     }
 
     res.locals.user = user;
+    res.locals.accessToken = accessToken;
     next();
   } catch (error: unknown) {
     console.error("[auth] Token validation failed:", error);

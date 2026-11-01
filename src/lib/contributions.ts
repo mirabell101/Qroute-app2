@@ -137,6 +137,7 @@ export async function getTransitCatalog(): Promise<TransitCatalog> {
       .from("terminals")
       .select("id, name, latitude, longitude, transport_type_id")
       .eq("is_approved", true)
+      .eq("moderation_status", "approved")
       .eq("is_active", true)
       .eq("is_deleted", false)
       .eq("is_banned", false)
@@ -145,6 +146,7 @@ export async function getTransitCatalog(): Promise<TransitCatalog> {
       .from("stops")
       .select("id, name, stop_type, latitude, longitude, transport_type_id")
       .eq("is_approved", true)
+      .eq("moderation_status", "approved")
       .eq("is_active", true)
       .eq("is_deleted", false)
       .eq("is_banned", false)
@@ -155,6 +157,7 @@ export async function getTransitCatalog(): Promise<TransitCatalog> {
         "id, name, transport_type_id, variant_id, route_stops ( stop_order, terminal_id, stop_id )"
       )
       .eq("is_approved", true)
+      .eq("moderation_status", "approved")
       .eq("is_active", true)
       .eq("is_deleted", false)
       .eq("is_banned", false)

@@ -69,6 +69,8 @@ export async function getPointImages(
     )
     .eq("is_deleted", false)
     .eq("is_approved", true)
+    .eq("moderation_status", "approved")
+    .eq("is_banned", false)
     .or(filters.join(","))
     .order("created_at", { ascending: false });
 
