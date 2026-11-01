@@ -3,6 +3,13 @@ import { buildRouteMapIndex } from "./routeMap";
 import type { RouteMapIndex, RouteMapRouteRecord } from "./routeMap";
 import { getPublicMapData, hasMapAuthSession } from "./publicMap";
 
+const routeMapCacheLifetime = 60_000;
+let cachedRouteMapIndex: {
+  value: RouteMapIndex;
+  expiresAt: number;
+} | null = null;
+let routeMapIndexRequest: Promise<RouteMapIndex> | null = null;
+
 export type PointKind = "terminal" | "stop";
 export type StopType = "terminal" | "road_stop" | "train_station";
 export type FareModel = "distance" | "matrix";
@@ -54,12 +61,7 @@ function hasApprovedPoint(row: {
   );
 }
 
-export async function getRouteMapIndex(): Promise<RouteMapIndex> {
-  if (!(await hasMapAuthSession())) {
-    const { routes } = await getPublicMapData();
-    return buildRouteMapIndex(routes);
-  }
-
+async function fetchAuthenticatedRouteMapIndex(): Promise<RouteMapIndex> {
   const { data, error } = await supabase
     .from("routes")
     .select(
@@ -92,6 +94,34 @@ export async function getRouteMapIndex(): Promise<RouteMapIndex> {
   );
 
   return buildRouteMapIndex(records);
+}
+
+export async function getRouteMapIndex(): Promise<RouteMapIndex> {
+  if (!(await hasMapAuthSession())) {
+    const { routes } = await getPublicMapData();
+    return buildRouteMapIndex(routes);
+  }
+
+  if (cachedRouteMapIndex && cachedRouteMapIndex.expiresAt > Date.now()) {
+    return cachedRouteMapIndex.value;
+  }
+
+  if (!routeMapIndexRequest) {
+    routeMapIndexRequest = fetchAuthenticatedRouteMapIndex().then((index) => {
+    cachedRouteMapIndex = {
+      value: index,
+      expiresAt: Date.now() + routeMapCacheLifetime,
+    };
+    return index;
+    });
+  }
+
+  const request = routeMapIndexRequest;
+  try {
+    return await request;
+  } finally {
+    if (routeMapIndexRequest === request) routeMapIndexRequest = null;
+  }
 }
 
 interface RawPoint {

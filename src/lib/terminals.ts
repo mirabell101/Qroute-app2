@@ -2,6 +2,10 @@
 import { supabase } from "@/lib/supabase";
 import { getPublicMapData, hasMapAuthSession } from "./publicMap";
 
+const terminalMapCacheLifetime = 60_000;
+let cachedTerminals: { value: Terminal[]; expiresAt: number } | null = null;
+let terminalsRequest: Promise<Terminal[]> | null = null;
+
 export interface Terminal {
   id: number;
   name: string;
@@ -10,11 +14,7 @@ export interface Terminal {
   is_active: boolean;
 }
 
-export async function getTerminals(): Promise<Terminal[]> {
-  if (!(await hasMapAuthSession())) {
-    return (await getPublicMapData()).terminals;
-  }
-
+async function fetchAuthenticatedTerminals(): Promise<Terminal[]> {
   const { data, error } = await supabase
     .from("terminals")
     .select("id, name, latitude, longitude, is_active")
@@ -29,4 +29,31 @@ export async function getTerminals(): Promise<Terminal[]> {
   }
 
   return data ?? [];
+}
+
+export async function getTerminals(): Promise<Terminal[]> {
+  if (!(await hasMapAuthSession())) {
+    return (await getPublicMapData()).terminals;
+  }
+
+  if (cachedTerminals && cachedTerminals.expiresAt > Date.now()) {
+    return cachedTerminals.value;
+  }
+
+  if (!terminalsRequest) {
+    terminalsRequest = fetchAuthenticatedTerminals().then((terminals) => {
+      cachedTerminals = {
+        value: terminals,
+        expiresAt: Date.now() + terminalMapCacheLifetime,
+      };
+      return terminals;
+    });
+  }
+
+  const request = terminalsRequest;
+  try {
+    return await request;
+  } finally {
+    if (terminalsRequest === request) terminalsRequest = null;
+  }
 }

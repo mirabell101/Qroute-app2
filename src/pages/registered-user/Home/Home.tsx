@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import {
   Bell,
@@ -20,6 +21,28 @@ import {
   TransitMapStatus,
   useTransitMap,
 } from "@/components/transit-map";
+import type { SavedKind } from "@/lib/savedItems";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getSavedSelection(
+  state: unknown
+): { kind: SavedKind; targetId: number } | null {
+  if (!isRecord(state) || !isRecord(state.savedSelection)) return null;
+
+  const { kind, targetId } = state.savedSelection;
+  if (
+    (kind === "route" || kind === "stop" || kind === "terminal") &&
+    typeof targetId === "number" &&
+    Number.isSafeInteger(targetId)
+  ) {
+    return { kind, targetId };
+  }
+
+  return null;
+}
 
 const navItems = [
   { label: "Recents", icon: HomeIcon },
@@ -35,13 +58,46 @@ interface HomeProps {
 
 export default function Home({ currentUserId, onLogout }: HomeProps) {
   const map = useTransitMap();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const handledSavedSelection = useRef<string | null>(null);
 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showSignInPrompt, setShowSignInPrompt] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
+  const savedSelection = getSavedSelection(location.state);
+  const savedSelectionKey = savedSelection
+    ? `${savedSelection.kind}:${savedSelection.targetId}`
+    : null;
+
+  useEffect(() => {
+    if (
+      !savedSelection ||
+      !savedSelectionKey ||
+      handledSavedSelection.current === savedSelectionKey ||
+      map.routesLoading ||
+      map.terminalsLoading
+    ) {
+      return;
+    }
+
+    handledSavedSelection.current = savedSelectionKey;
+    map.handleSavedItemSelect(savedSelection.kind, savedSelection.targetId);
+    navigate("/home", { replace: true, state: null });
+  }, [
+    map,
+    navigate,
+    savedSelection,
+    savedSelectionKey,
+  ]);
+
   const handleNavigation = (name: string) => {
-    // Connect Recents, Saved, and vehicle filters later.
+    if (name === "Saved") {
+      navigate("/saved");
+      return;
+    }
+
     void name;
     void currentUserId;
   };

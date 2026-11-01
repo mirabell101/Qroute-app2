@@ -1,9 +1,14 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
 
 import { Accessibility, GraduationCap, UserRound } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import { findRouteStopIndex } from "@/lib/routeMap";
 import type { RouteDetails } from "@/lib/routes";
+import { hasSavedBookmark } from "@/lib/savedItems";
+import type { SavedKind } from "@/lib/savedItems";
+import { useSavedItems } from "@/components/saved/savedItemsStore";
 
 import { stopTypeLabel } from "./useTransitMap";
 import type { TransitMapController } from "./useTransitMap";
@@ -21,6 +26,23 @@ export function TransitMapPanel({
   // Page-specific actions (e.g. Home's "Edit route") stay in the page shell.
   renderRouteActions?: (route: RouteDetails) => ReactNode;
 }) {
+  const navigate = useNavigate();
+  const {
+    userId,
+    bookmarkIds,
+    loading: bookmarksLoading,
+    error: bookmarksError,
+    addBookmark,
+    removeBookmark,
+  } = useSavedItems();
+  const [bookmarkActionKey, setBookmarkActionKey] = useState<string | null>(
+    null
+  );
+  const [bookmarkActionError, setBookmarkActionError] = useState<string | null>(
+    null
+  );
+  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+
   const {
     selectedPlace,
     selectedPlaceImage,
@@ -56,6 +78,61 @@ export function TransitMapPanel({
     closePlace,
   } = map;
 
+  const toggleBookmark = async (
+    kind: SavedKind,
+    targetId: number,
+    isSaved: boolean
+  ) => {
+    if (!userId) {
+      setShowLoginPrompt(true);
+      return;
+    }
+
+    const key = `${kind}:${targetId}`;
+    setBookmarkActionKey(key);
+    setBookmarkActionError(null);
+
+    try {
+      if (isSaved) {
+        await removeBookmark(kind, targetId);
+      } else {
+        await addBookmark(kind, targetId);
+      }
+    } catch (cause: unknown) {
+      setBookmarkActionError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to update this saved item."
+      );
+    } finally {
+      setBookmarkActionKey(null);
+    }
+  };
+
+  const bookmarkButton = (kind: SavedKind, targetId: number) => {
+    const label =
+      kind === "route" ? "Route" : kind === "stop" ? "Stop" : "Terminal";
+    const isSaved = hasSavedBookmark(bookmarkIds, kind, targetId);
+    const key = `${kind}:${targetId}`;
+    const isPending = bookmarkActionKey === key;
+
+    return (
+      <button
+        type="button"
+        aria-pressed={isSaved}
+        disabled={bookmarksLoading || isPending}
+        onClick={() => void toggleBookmark(kind, targetId, isSaved)}
+        className="w-full rounded-lg border border-[#0f2a47] px-3 py-2 text-xs font-semibold text-[#0f2a47] hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {isPending
+          ? `${isSaved ? "Removing" : "Saving"} ${label}...`
+          : isSaved
+            ? `Remove Saved ${label}`
+            : `Save ${label}`}
+      </button>
+    );
+  };
+
   const visible =
     selectedPlace ||
     selectedRoute ||
@@ -69,6 +146,24 @@ export function TransitMapPanel({
 
   return (
     <div className={className}>
+      {bookmarksLoading && userId && (
+        <p role="status" className="mb-2 text-xs text-gray-500">
+          Checking saved status...
+        </p>
+      )}
+
+      {bookmarksError && (
+        <p role="alert" className="mb-2 text-xs text-red-600">
+          Saved status could not be loaded: {bookmarksError}
+        </p>
+      )}
+
+      {bookmarkActionError && (
+        <p role="alert" className="mb-2 text-xs text-red-600">
+          {bookmarkActionError}
+        </p>
+      )}
+
       {routesLoading && (
         <p role="status" className="text-sm text-gray-500">
           Loading routes and stops...
@@ -144,6 +239,10 @@ export function TransitMapPanel({
             {selectedPlace.longitude.toFixed(5)}
           </p>
 
+          <div className="mt-3">
+            {bookmarkButton(selectedPlace.kind, selectedPlace.ref_id)}
+          </div>
+
           {selectedPlace.routes.length > 1 && (
             <p className="mt-2 text-xs text-gray-600">
               Several routes serve this place. Click a colored route line to
@@ -215,6 +314,10 @@ export function TransitMapPanel({
           <p className="mt-1 text-[11px] text-gray-500">
             Destination: {destinationName}
           </p>
+
+          <div className="mt-3">
+            {bookmarkButton("route", selectedRoute.id)}
+          </div>
 
           {/* Trip + fare */}
           <div className="mt-3 rounded-lg bg-gray-50 p-3 text-[11px] text-gray-700">
@@ -470,6 +573,44 @@ export function TransitMapPanel({
             >
               Clear selected route
             </button>
+          </div>
+        </div>
+      )}
+
+      {showLoginPrompt && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bookmark-login-title"
+          className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/40 p-4"
+        >
+          <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
+            <h2
+              id="bookmark-login-title"
+              className="text-lg font-semibold text-gray-900"
+            >
+              Sign in to save map information
+            </h2>
+            <p className="mt-2 text-sm text-gray-600">
+              Sign in or create an account to save routes, stops, and
+              terminals.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowLoginPrompt(false)}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate("/login")}
+                className="rounded-lg bg-[#0f2a47] px-4 py-2 text-sm font-medium text-white hover:bg-[#183b60]"
+              >
+                Sign In
+              </button>
+            </div>
           </div>
         </div>
       )}

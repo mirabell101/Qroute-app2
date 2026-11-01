@@ -1,5 +1,6 @@
 import type { PointKind, RouteStop, StopType } from "./routes";
 import type { Terminal } from "./terminals";
+import type { SavedKind } from "./savedItems";
 
 export interface RouteMapRoute {
   id: number;
@@ -47,6 +48,23 @@ export interface RouteMapIndex {
 export type RouteMapSearchResult =
   | { kind: "route"; route: RouteMapRoute }
   | { kind: "point"; point: RouteMapPoint };
+
+export function resolveSavedMapSelection(
+  routeMapIndex: RouteMapIndex,
+  mapPoints: RouteMapPoint[],
+  kind: SavedKind,
+  targetId: number
+): RouteMapSearchResult | null {
+  if (kind === "route") {
+    const route = routeMapIndex.routes.find((item) => item.id === targetId);
+    return route ? { kind: "route", route } : null;
+  }
+
+  const point = mapPoints.find(
+    (item) => item.kind === kind && item.ref_id === targetId
+  );
+  return point ? { kind: "point", point } : null;
+}
 
 export interface TripSelection {
   boardingIndex: number | null;

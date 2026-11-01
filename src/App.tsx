@@ -9,6 +9,7 @@ import {
 } from "react-router-dom";
 
 import { supabase } from "./lib/supabase";
+import { SavedItemsProvider } from "./components/saved/SavedItemsContext";
 
 import Landing from "./pages/visitor/Landing/Landing";
 import Home from "./pages/registered-user/Home/Home";
@@ -24,6 +25,7 @@ import Profile from "./pages/registered-user/Profile/Profile";
 import Contribution from "./pages/registered-user/contribution/contribution";
 import Community from "./pages/registered-user/community/community";
 import PointsBadges from "./pages/registered-user/points-badges/points-badges";
+import Saved from "./pages/registered-user/saved/saved";
 import AdminBase from "./pages/admin/base/base";
 import Dashboard from "./pages/admin/dashboard/dashboard";
 import RouteManagement from "./pages/admin/route-management/route-management";
@@ -183,7 +185,11 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
+      <SavedItemsProvider
+        key={currentUserId ?? "anonymous"}
+        userId={currentUserId}
+      >
+        <Routes>
         {/* Public routes */}
         <Route
           path="/"
@@ -214,6 +220,11 @@ function App() {
               onLogout={handleLogout}
             />
           ))}
+        />
+
+        <Route
+          path="/saved"
+          element={protectedPage(() => <Saved />)}
         />
 
         <Route
@@ -248,12 +259,12 @@ function App() {
 
         <Route
           path="/community"
-          element={protectedPage((userId) => (
+          element={
             <Community
-              currentUserId={userId}
+              currentUserId={currentUserId}
               onLogout={handleLogout}
             />
-          ))}
+          }
         />
 
         {/* Visitor routes */}
@@ -314,7 +325,8 @@ function App() {
           path="*"
           element={<Navigate to="/" replace />}
         />
-      </Routes>
+        </Routes>
+      </SavedItemsProvider>
     </BrowserRouter>
   );
 }

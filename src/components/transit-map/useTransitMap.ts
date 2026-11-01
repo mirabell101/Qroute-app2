@@ -14,6 +14,7 @@ import {
   getUniqueServingRoute,
   isRepeatedBoardingPoint,
   mergeMapTerminals,
+  resolveSavedMapSelection,
   searchRouteMapItems,
   selectTripStop,
 } from "@/lib/routeMap";
@@ -22,6 +23,7 @@ import type {
   RouteMapPoint,
   RouteMapSearchResult,
 } from "@/lib/routeMap";
+import type { SavedKind } from "@/lib/savedItems";
 import {
   buildFareCards,
   calculateFareOptionEstimates,
@@ -712,6 +714,19 @@ export function useTransitMap() {
     handlePlaceSelect(result.point);
   };
 
+  const handleSavedItemSelect = (kind: SavedKind, targetId: number) => {
+    const result = resolveSavedMapSelection(
+      routeMapIndex,
+      mapPoints,
+      kind,
+      targetId
+    );
+    if (!result) return false;
+
+    handleSearchResultSelect(result);
+    return true;
+  };
+
   const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
       setShowSearchResults(false);
@@ -814,6 +829,7 @@ export function useTransitMap() {
     handlePlaceSelect,
     handleRouteLineSelect,
     handleSearchResultSelect,
+    handleSavedItemSelect,
     handleSearchKeyDown,
     handleListPick: handleTripStop,
     clearTrip,
