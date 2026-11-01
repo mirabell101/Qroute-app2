@@ -1,5 +1,6 @@
 
 import { supabase } from "@/lib/supabase";
+import { getPublicMapData, hasMapAuthSession } from "./publicMap";
 
 export interface Terminal {
   id: number;
@@ -10,6 +11,10 @@ export interface Terminal {
 }
 
 export async function getTerminals(): Promise<Terminal[]> {
+  if (!(await hasMapAuthSession())) {
+    return (await getPublicMapData()).terminals;
+  }
+
   const { data, error } = await supabase
     .from("terminals")
     .select("id, name, latitude, longitude, is_active")

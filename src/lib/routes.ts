@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { buildRouteMapIndex } from "./routeMap";
 import type { RouteMapIndex, RouteMapRouteRecord } from "./routeMap";
+import { getPublicMapData, hasMapAuthSession } from "./publicMap";
 
 export type PointKind = "terminal" | "stop";
 export type StopType = "terminal" | "road_stop" | "train_station";
@@ -54,6 +55,11 @@ function hasApprovedPoint(row: {
 }
 
 export async function getRouteMapIndex(): Promise<RouteMapIndex> {
+  if (!(await hasMapAuthSession())) {
+    const { routes } = await getPublicMapData();
+    return buildRouteMapIndex(routes);
+  }
+
   const { data, error } = await supabase
     .from("routes")
     .select(
@@ -130,6 +136,60 @@ async function getRouteOwnerId(routeId: number): Promise<string | null> {
 export async function getRouteDetails(
   routeId: number
 ): Promise<RouteDetails> {
+  if (!(await hasMapAuthSession())) {
+    const { routes } = await getPublicMapData();
+    const route = routes.find((item) => item.id === routeId);
+
+    if (!route) throw new Error("This route isn't available yet.");
+
+    const routeStops = route.route_stops.flatMap((row): RouteStop[] => {
+      if (row.terminals) {
+        return [{
+          route_id: row.route_id,
+          stop_order: row.stop_order,
+          kind: "terminal",
+          ref_id: row.terminals.id,
+          name: row.terminals.name,
+          latitude: row.terminals.latitude,
+          longitude: row.terminals.longitude,
+          stop_type: "terminal",
+          description: null,
+        }];
+      }
+
+      if (row.stops) {
+        return [{
+          route_id: row.route_id,
+          stop_order: row.stop_order,
+          kind: "stop",
+          ref_id: row.stops.id,
+          name: row.stops.name,
+          latitude: row.stops.latitude,
+          longitude: row.stops.longitude,
+          stop_type: row.stops.stop_type ?? "road_stop",
+          description: row.stops.description ?? null,
+        }];
+      }
+
+      return [];
+    }).sort((a, b) => a.stop_order - b.stop_order);
+
+    if (routeStops.length === 0) throw new Error("This route isn't available yet.");
+
+    return {
+      id: route.id,
+      name: route.name,
+      transport_type_id: route.transport_type_id,
+      fare_area_id: route.fare_area_id,
+      created_by: null,
+      is_approved: true,
+      moderation_status: "approved",
+      transport_types: route.transport_types,
+      transport_variants: route.transport_variants,
+      route_stops: routeStops,
+    };
+  }
+
   const { data, error } = await supabase
     .from("routes")
     .select(
