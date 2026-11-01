@@ -1,6 +1,10 @@
 import { API_BASE_URL } from "@/lib/api";
 import { validateImage } from "@/lib/mapImages";
 import { supabase } from "@/lib/supabase";
+import {
+  toPublicCommunityPost,
+  type PublicCommunityPostData,
+} from "@/lib/communityPublicData";
 
 const COMMUNITY_PHOTO_BUCKET = "community-post-photos";
 
@@ -12,7 +16,7 @@ export interface CommunityPoint {
 
 export interface CommunityPost {
   id: string;
-  author_id: string;
+  author_id?: string;
   author_display_name: string;
   title: string;
   content: string;
@@ -44,6 +48,11 @@ export interface CommunityComment {
   author_display_name: string;
   content: string;
   created_at: string;
+}
+
+interface PublicCommunityData {
+  posts: PublicCommunityPostData[];
+  comments: CommunityComment[];
 }
 
 export interface CommunityPostInput {
@@ -111,7 +120,20 @@ async function request<T>(path: string, options: RequestInit = {}, authenticated
 }
 
 export async function getCommunityPosts(): Promise<CommunityPost[]> {
-  const result = await request<{ posts: CommunityPost[] }>("/posts");
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw new Error(sessionError.message);
+
+  if (!sessionData.session) {
+    const { data, error } = await supabase.rpc("get_public_community_data", {
+      p_post_ids: null,
+      p_include_posts: true,
+      p_include_comments: false,
+    });
+    if (error) throw new Error(error.message);
+    return ((data as PublicCommunityData | null)?.posts ?? []).map(toPublicCommunityPost);
+  }
+
+  const result = await request<{ posts: CommunityPost[] }>("/posts", {}, true);
   return (result.posts ?? []).map(withPhotoUrls);
 }
 
@@ -119,17 +141,51 @@ export async function getCommunityPost(postId: string): Promise<{
   post: CommunityPost;
   comments: CommunityComment[];
 }> {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw new Error(sessionError.message);
+
+  if (!sessionData.session) {
+    const { data, error } = await supabase.rpc("get_public_community_data", {
+      p_post_ids: [postId],
+      p_include_posts: true,
+      p_include_comments: true,
+    });
+    if (error) throw new Error(error.message);
+    const result = data as PublicCommunityData | null;
+    const post = result?.posts?.[0];
+    if (!post) throw new Error("Post not found.");
+    return {
+      post: toPublicCommunityPost(post),
+      comments: result?.comments ?? [],
+    };
+  }
+
   const result = await request<{
     post: CommunityPost;
     comments: CommunityComment[];
-  }>(`/posts/${encodeURIComponent(postId)}`);
+  }>(`/posts/${encodeURIComponent(postId)}`, {}, true);
   return { ...result, post: withPhotoUrls(result.post) };
 }
 
 export async function getCommunityComments(postIds: string[]): Promise<CommunityComment[]> {
   if (!postIds.length) return [];
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw new Error(sessionError.message);
+
+  if (!sessionData.session) {
+    const { data, error } = await supabase.rpc("get_public_community_data", {
+      p_post_ids: postIds,
+      p_include_posts: false,
+      p_include_comments: true,
+    });
+    if (error) throw new Error(error.message);
+    return (data as PublicCommunityData | null)?.comments ?? [];
+  }
+
   const result = await request<{ comments: CommunityComment[] }>(
     `/comments?postIds=${encodeURIComponent(postIds.join(","))}`,
+    {},
+    true,
   );
   return result.comments ?? [];
 }

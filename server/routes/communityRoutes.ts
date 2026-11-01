@@ -32,19 +32,19 @@ function sendDatabaseError(res: Response, error: { code?: string; message: strin
 
 async function voteCounts(postIds: string[]) {
   if (postIds.length === 0) return new Map<string, { upvotes: number; downvotes: number }>();
-  const { data, error } = await getSupabaseClient()
-    .from("community_post_votes")
-    .select("post_id, vote_type")
-    .in("post_id", postIds);
+  const { data, error } = await getSupabaseClient().rpc("get_public_community_data", {
+    p_post_ids: postIds,
+    p_include_posts: true,
+    p_include_comments: false,
+  });
   if (error) throw error;
 
   const totals = new Map<string, { upvotes: number; downvotes: number }>();
   for (const id of postIds) totals.set(id, { upvotes: 0, downvotes: 0 });
-  for (const vote of data ?? []) {
-    const total = totals.get(vote.post_id);
-    if (!total) continue;
-    if (vote.vote_type === "upvote") total.upvotes += 1;
-    if (vote.vote_type === "downvote") total.downvotes += 1;
+  const posts = (data as { posts?: Array<{ id: string; upvotes: number; downvotes: number }> } | null)?.posts ?? [];
+  for (const post of posts) {
+    if (!totals.has(post.id)) continue;
+    totals.set(post.id, { upvotes: post.upvotes, downvotes: post.downvotes });
   }
   return totals;
 }
@@ -73,9 +73,10 @@ async function voteStates(
   }));
 }
 
-router.get("/posts", async (_req: Request, res: Response) => {
+router.get("/posts", requireAuth, async (_req: Request, res: Response) => {
   try {
-    const { data, error } = await getSupabaseClient()
+    const supabase = getSupabaseClientForAccessToken(res.locals.accessToken as string);
+    const { data, error } = await supabase
       .from("community_posts")
       .select(postFields)
       .order("created_at", { ascending: false })
@@ -106,13 +107,13 @@ router.get("/posts", async (_req: Request, res: Response) => {
   }
 });
 
-router.get("/posts/:postId", async (req: Request, res: Response) => {
+router.get("/posts/:postId", requireAuth, async (req: Request, res: Response) => {
   if (!isCommunityPostId(req.params.postId)) {
     res.status(400).json({ success: false, message: "Invalid post ID." });
     return;
   }
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseClientForAccessToken(res.locals.accessToken as string);
     const { data: post, error } = await supabase
       .from("community_posts")
       .select(postFields)
@@ -160,7 +161,7 @@ router.get("/posts/:postId", async (req: Request, res: Response) => {
   }
 });
 
-router.get("/comments", async (req: Request, res: Response) => {
+router.get("/comments", requireAuth, async (req: Request, res: Response) => {
   const rawPostIds = req.query.postIds;
   const postIds = typeof rawPostIds === "string"
     ? [...new Set(rawPostIds.split(","))]
@@ -174,7 +175,8 @@ router.get("/comments", async (req: Request, res: Response) => {
     return;
   }
   try {
-    const { data, error } = await getSupabaseClient()
+    const supabase = getSupabaseClientForAccessToken(res.locals.accessToken as string);
+    const { data, error } = await supabase
       .from("community_post_comments")
       .select("id, post_id, author_display_name, content, created_at")
       .in("post_id", postIds)
