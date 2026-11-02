@@ -21,28 +21,7 @@ import {
   TransitMapStatus,
   useTransitMap,
 } from "@/components/transit-map";
-import type { SavedKind } from "@/lib/savedItems";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function getSavedSelection(
-  state: unknown
-): { kind: SavedKind; targetId: number } | null {
-  if (!isRecord(state) || !isRecord(state.savedSelection)) return null;
-
-  const { kind, targetId } = state.savedSelection;
-  if (
-    (kind === "route" || kind === "stop" || kind === "terminal") &&
-    typeof targetId === "number" &&
-    Number.isSafeInteger(targetId)
-  ) {
-    return { kind, targetId };
-  }
-
-  return null;
-}
+import { parseSavedMapSelection } from "@/lib/routeMap";
 
 const navItems = [
   { label: "Recents", icon: HomeIcon },
@@ -57,7 +36,7 @@ interface HomeProps {
 }
 
 export default function Home({ currentUserId, onLogout }: HomeProps) {
-  const map = useTransitMap();
+  const map = useTransitMap(currentUserId);
   const location = useLocation();
   const navigate = useNavigate();
   const handledSavedSelection = useRef<string | null>(null);
@@ -66,7 +45,7 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
   const [showSignInPrompt, setShowSignInPrompt] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
-  const savedSelection = getSavedSelection(location.state);
+  const savedSelection = parseSavedMapSelection(location.state);
   const savedSelectionKey = savedSelection
     ? `${savedSelection.kind}:${savedSelection.targetId}`
     : null;
@@ -93,6 +72,11 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
   ]);
 
   const handleNavigation = (name: string) => {
+    if (name === "Recents") {
+      navigate("/recents");
+      return;
+    }
+
     if (name === "Saved") {
       navigate("/saved");
       return;

@@ -91,6 +91,12 @@
       "skillPath": "skills/caveman-stats/SKILL.md",
       "computedHash": "cc9fcd21f2a30cff5596b3cbb197fe0f4b1b30b58084a864350853c217ad301a"
     },
+    "codeql": {
+      "source": "trailofbits/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/static-analysis/skills/codeql/SKILL.md",
+      "computedHash": "f45a721e180cae73db966b8d1dbd4e00c449eb2230b3029cdb12bec9af96a316"
+    },
     "defuddle": {
       "source": "kepano/obsidian-skills",
       "sourceType": "github",
@@ -192,6 +198,24 @@
       "sourceType": "github",
       "skillPath": "skills/safe-refactor/SKILL.md",
       "computedHash": "9df34a21a7a2c18ce13dbbe4a3f66b4e91df9e4bc33c1c9da8a80261583367ec"
+    },
+    "sarif-parsing": {
+      "source": "trailofbits/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/static-analysis/skills/sarif-parsing/SKILL.md",
+      "computedHash": "4255335a605a915fb326f7f08cc6b08bad903e8c4849b6363a1cd3e903eea855"
+    },
+    "security-audit": {
+      "source": "cloudflare/security-audit-skill",
+      "sourceType": "github",
+      "skillPath": "skills/security-audit/SKILL.md",
+      "computedHash": "e6b2e317de75da97e9de18d842982994803f3a67a4a6d8154a82323dc3de8528"
+    },
+    "semgrep": {
+      "source": "trailofbits/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/static-analysis/skills/semgrep/SKILL.md",
+      "computedHash": "05a1e1c6aa2213399ded6094e7a2fc393567c81511d3ce1cece4cc10da4739a6"
     },
     "stop-slop": {
       "source": "hardikpandya/stop-slop",

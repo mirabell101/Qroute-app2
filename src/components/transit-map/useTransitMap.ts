@@ -25,6 +25,10 @@ import type {
 } from "@/lib/routeMap";
 import type { SavedKind } from "@/lib/savedItems";
 import {
+  recordRecentSearchSelection,
+} from "@/lib/recentSearches";
+import type { RecentSearchSelectionSource } from "@/lib/recentSearches";
+import {
   buildFareCards,
   calculateFareOptionEstimates,
 } from "@/lib/fareCalculations";
@@ -78,7 +82,7 @@ function getDistanceMeters(from: Coordinates, to: Coordinates): number {
   return earthRadius * c;
 }
 
-export function useTransitMap() {
+export function useTransitMap(recentSearchUserId?: string | null) {
   const geolocation =
     typeof navigator === "undefined" ? null : navigator.geolocation;
 
@@ -696,7 +700,11 @@ export function useTransitMap() {
     setSelectedRouteId(nextRouteId);
   };
 
-  const handleSearchResultSelect = (result: RouteMapSearchResult) => {
+  const applySearchResultSelection = (
+    result: RouteMapSearchResult,
+    source: RecentSearchSelectionSource
+  ) => {
+    recordRecentSearchSelection(recentSearchUserId, result, source);
     setSearchQuery("");
     setShowSearchResults(false);
     setActiveSearchIndex(0);
@@ -714,6 +722,10 @@ export function useTransitMap() {
     handlePlaceSelect(result.point);
   };
 
+  const handleSearchResultSelect = (result: RouteMapSearchResult) => {
+    applySearchResultSelection(result, "search");
+  };
+
   const handleSavedItemSelect = (kind: SavedKind, targetId: number) => {
     const result = resolveSavedMapSelection(
       routeMapIndex,
@@ -723,7 +735,7 @@ export function useTransitMap() {
     );
     if (!result) return false;
 
-    handleSearchResultSelect(result);
+    applySearchResultSelection(result, "restore");
     return true;
   };
 

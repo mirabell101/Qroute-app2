@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveSavedMapSelection } from "./routeMap";
+import {
+  parseSavedMapSelection,
+  resolveSavedMapSelection,
+} from "./routeMap";
 
 const route = {
   id: 20,
@@ -57,6 +60,44 @@ describe("saved map selection", () => {
         "stop",
         11
       )
+    ).toBeNull();
+    expect(
+      resolveSavedMapSelection(
+        { routes: [], points: [] },
+        [],
+        "terminal",
+        9
+      )
+    ).toBeNull();
+  });
+});
+
+describe("saved map selection router state", () => {
+  it("parses valid kind and ID pairs", () => {
+    expect(
+      parseSavedMapSelection({
+        savedSelection: { kind: "terminal", targetId: 9 },
+      })
+    ).toEqual({ kind: "terminal", targetId: 9 });
+  });
+
+  it("rejects missing, invalid, and unsafe selection state", () => {
+    expect(parseSavedMapSelection(null)).toBeNull();
+    expect(parseSavedMapSelection({})).toBeNull();
+    expect(
+      parseSavedMapSelection({
+        savedSelection: { kind: "route", targetId: 1.5 },
+      })
+    ).toBeNull();
+    expect(
+      parseSavedMapSelection({
+        savedSelection: { kind: "unknown", targetId: 1 },
+      })
+    ).toBeNull();
+    expect(
+      parseSavedMapSelection({
+        savedSelection: { kind: "stop", targetId: Number.MAX_SAFE_INTEGER + 1 },
+      })
     ).toBeNull();
   });
 });

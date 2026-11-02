@@ -49,6 +49,28 @@ export type RouteMapSearchResult =
   | { kind: "route"; route: RouteMapRoute }
   | { kind: "point"; point: RouteMapPoint };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+export function parseSavedMapSelection(
+  state: unknown
+): { kind: SavedKind; targetId: number } | null {
+  if (!isRecord(state) || !isRecord(state.savedSelection)) return null;
+
+  const { kind, targetId } = state.savedSelection;
+  if (
+    (kind === "route" || kind === "stop" || kind === "terminal") &&
+    typeof targetId === "number" &&
+    Number.isSafeInteger(targetId) &&
+    targetId > 0
+  ) {
+    return { kind, targetId };
+  }
+
+  return null;
+}
+
 export function resolveSavedMapSelection(
   routeMapIndex: RouteMapIndex,
   mapPoints: RouteMapPoint[],

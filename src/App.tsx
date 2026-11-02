@@ -26,6 +26,7 @@ import Contribution from "./pages/registered-user/contribution/contribution";
 import Community from "./pages/registered-user/community/community";
 import PointsBadges from "./pages/registered-user/points-badges/points-badges";
 import Saved from "./pages/registered-user/saved/saved";
+import RecentSearches from "./pages/registered-user/recent-searches/recent-searches";
 import AdminBase from "./pages/admin/base/base";
 import Dashboard from "./pages/admin/dashboard/dashboard";
 import RouteManagement from "./pages/admin/route-management/route-management";
@@ -225,6 +226,18 @@ function App() {
         <Route
           path="/saved"
           element={protectedPage(() => <Saved />)}
+        />
+
+        <Route
+          path="/recents"
+          element={
+            authLoading ? null : (
+              <RecentSearches
+                key={currentUserId ?? "anonymous"}
+                currentUserId={currentUserId}
+              />
+            )
+          }
         />
 
         <Route

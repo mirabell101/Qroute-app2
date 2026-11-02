@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Bell,
   Bus,
@@ -20,6 +20,7 @@ import {
   TransitMapStatus,
   useTransitMap,
 } from "@/components/transit-map";
+import { parseSavedMapSelection } from "@/lib/routeMap";
 
 // ==================================================
 // NAVIGATION
@@ -61,15 +62,42 @@ export default function Landing({
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   // Shared map state (search, routes, trip selection, fares).
-  const map = useTransitMap();
+  const map = useTransitMap(currentUserId);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const handledSavedSelection = useRef<string | null>(null);
 
   const refreshPage = () => {
     window.location.reload();
   };
 
-  const navigate = useNavigate();
+  const savedSelection = parseSavedMapSelection(location.state);
+  const savedSelectionKey = savedSelection
+    ? `${savedSelection.kind}:${savedSelection.targetId}`
+    : null;
+
+  useEffect(() => {
+    if (
+      !savedSelection ||
+      !savedSelectionKey ||
+      handledSavedSelection.current === savedSelectionKey ||
+      map.routesLoading ||
+      map.terminalsLoading
+    ) {
+      return;
+    }
+
+    handledSavedSelection.current = savedSelectionKey;
+    map.handleSavedItemSelect(savedSelection.kind, savedSelection.targetId);
+    navigate("/", { replace: true, state: null });
+  }, [map, navigate, savedSelection, savedSelectionKey]);
 
   const handleClick = (name: string) => {
+    if (name === "Recents") {
+      navigate("/recents");
+      return;
+    }
+
     // Community is accessible to both guests and logged-in users.
     if (name === "Community") {
       navigate("/community");
