@@ -1,16 +1,10 @@
-import { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import {
-  clearRecentSearches,
-  getRecentSearches,
-  removeRecentSearch,
-} from "@/lib/recentSearches";
 import type {
-  RecentSearch,
   RecentSearchKind,
 } from "@/lib/recentSearches";
+import { useRecentSearches } from "@/components/recent-searches/recentSearchesStore";
 
 interface RecentSearchesProps {
   currentUserId: string | null;
@@ -29,11 +23,10 @@ export default function RecentSearches({
   currentUserId,
 }: RecentSearchesProps) {
   const navigate = useNavigate();
-  const [items, setItems] = useState<RecentSearch[]>(() =>
-    getRecentSearches(currentUserId)
-  );
+  const { items, loading, error, remove, clear, retrySync } =
+    useRecentSearches();
 
-  const handleSelect = (item: RecentSearch) => {
+  const handleSelect = (item: (typeof items)[number]) => {
     navigate(currentUserId ? "/home" : "/", {
       state: {
         savedSelection: {
@@ -44,10 +37,8 @@ export default function RecentSearches({
     });
   };
 
-  const handleRemove = (item: RecentSearch) => {
-    setItems(
-      removeRecentSearch(currentUserId, item.kind, item.targetId)
-    );
+  const handleRemove = (item: (typeof items)[number]) => {
+    void remove(item.kind, item.targetId);
   };
 
   const handleClearAll = () => {
@@ -55,8 +46,7 @@ export default function RecentSearches({
       return;
     }
 
-    clearRecentSearches(currentUserId);
-    setItems([]);
+    void clear();
   };
 
   return (
@@ -79,6 +69,11 @@ export default function RecentSearches({
             <p className="mt-1 text-sm text-gray-500">
               Reopen routes, stops, and terminals you recently selected.
             </p>
+            <p className="mt-2 text-sm text-gray-500">
+              {currentUserId
+                ? "Showing up to 25 recent searches. Your search history is kept for 30 days only and saved to your account."
+                : "Showing up to 25 recent searches. Your search history is kept for 30 days only. Clearing your browser or website data will permanently remove your search history."}
+            </p>
           </div>
           {items.length > 0 && (
             <button
@@ -91,7 +86,29 @@ export default function RecentSearches({
           )}
         </header>
 
-        {items.length === 0 ? (
+        {error && (
+          <div
+            role="alert"
+            className="mb-4 flex flex-wrap items-center gap-3 rounded-lg bg-red-50 p-4 text-sm text-red-800"
+          >
+            <span>{error}</span>
+            {currentUserId && (
+              <button
+                type="button"
+                onClick={() => void retrySync()}
+                className="font-semibold underline"
+              >
+                Retry sync
+              </button>
+            )}
+          </div>
+        )}
+
+        {loading ? (
+          <p role="status" className="rounded-xl bg-white p-6 text-sm text-gray-500 shadow-sm">
+            Loading recent searches...
+          </p>
+        ) : items.length === 0 ? (
           <p className="rounded-xl bg-white p-6 text-sm text-gray-500 shadow-sm">
             Search for a route, stop, or terminal and select a result to see it
             here.

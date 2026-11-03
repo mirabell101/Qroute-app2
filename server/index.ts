@@ -1,7 +1,9 @@
 
 import "dotenv/config";
 import authRoutes from './routes/authRoutes.ts';
+import accountRoutes from "./routes/accountRoutes.ts";
 import communityRoutes from "./routes/communityRoutes.ts";
+import recentSearchesRoutes from "./routes/recentSearchesRoutes.ts";
 import express, {
   type Request,
   type Response,
@@ -90,7 +92,9 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use("/api/auth", authRoutes);
+app.use("/api/account", accountRoutes);
 app.use("/api/community", communityRoutes);
+app.use("/api/recent-searches", recentSearchesRoutes);
 
 // Express server health check
 app.get("/api/health", (_req: Request, res: Response) => {

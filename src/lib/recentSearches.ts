@@ -11,14 +11,20 @@ export interface RecentSearch {
 
 export type RecentSearchSelectionSource = "search" | "restore";
 
-const storageKeyPrefix = "qroute_recent_searches_v1";
-const maxHistorySize = 100;
+const storageKey = "qroute_recent_searches";
+const maxHistorySize = 25;
 const maxHistoryAgeMs = 30 * 24 * 60 * 60 * 1000;
 
 interface StoredHistory {
   raw: string | null;
   entries: unknown[];
   canWrite: boolean;
+}
+
+export interface RecentSearchHistorySnapshot {
+  entries: RecentSearch[];
+  raw: string | null;
+  canClear: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -43,22 +49,15 @@ function isRecentSearchItem(
   );
 }
 
-function getStorageKey(userId: string | null): string {
-  const owner = userId === null
-    ? "anonymous"
-    : `user:${encodeURIComponent(userId)}`;
-  return `${storageKeyPrefix}:${owner}`;
-}
-
 function warnStorageFailure(action: string, error: unknown): void {
   console.warn(`Could not ${action} recent searches in localStorage.`, error);
 }
 
-function readStoredHistory(userId: string | null): StoredHistory {
+function readStoredHistory(): StoredHistory {
   let raw: string | null;
 
   try {
-    raw = localStorage.getItem(getStorageKey(userId));
+    raw = localStorage.getItem(storageKey);
   } catch (error) {
     warnStorageFailure("read", error);
     return { raw: null, entries: [], canWrite: false };
@@ -102,7 +101,10 @@ function parseStoredEntry(value: unknown, now: number): RecentSearch | null {
   };
 }
 
-function normalizeHistory(entries: unknown[], now: number): RecentSearch[] {
+export function normalizeRecentSearchHistory(
+  entries: unknown[],
+  now = Date.now(),
+): RecentSearch[] {
   const seen = new Set<string>();
 
   return entries
@@ -119,13 +121,14 @@ function normalizeHistory(entries: unknown[], now: number): RecentSearch[] {
 }
 
 function writeHistory(
-  userId: string | null,
   entries: RecentSearch[]
-): void {
+): boolean {
   try {
-    localStorage.setItem(getStorageKey(userId), JSON.stringify(entries));
+    localStorage.setItem(storageKey, JSON.stringify(entries));
+    return true;
   } catch (error) {
     warnStorageFailure("write", error);
+    return false;
   }
 }
 
@@ -145,9 +148,9 @@ export function getRecentSearchItem(
       };
 }
 
-export function getRecentSearches(userId: string | null): RecentSearch[] {
-  const stored = readStoredHistory(userId);
-  const history = normalizeHistory(stored.entries, Date.now());
+export function getRecentSearches(): RecentSearch[] {
+  const stored = readStoredHistory();
+  const history = normalizeRecentSearchHistory(stored.entries, Date.now());
   const serialized = JSON.stringify(history);
 
   if (
@@ -155,23 +158,69 @@ export function getRecentSearches(userId: string | null): RecentSearch[] {
     stored.raw !== null &&
     stored.raw !== serialized
   ) {
-    writeHistory(userId, history);
+    writeHistory(history);
   }
 
   return history;
 }
 
+export function getRecentSearchesSnapshot(
+  now = Date.now(),
+): RecentSearchHistorySnapshot {
+  const stored = readStoredHistory();
+  const entries = normalizeRecentSearchHistory(stored.entries, now);
+  const serialized = JSON.stringify(entries);
+  let raw = stored.raw;
+
+  if (
+    stored.canWrite &&
+    stored.raw !== null &&
+    stored.raw !== serialized &&
+    writeHistory(entries)
+  ) {
+    raw = serialized;
+  }
+
+  return { entries, raw, canClear: stored.canWrite };
+}
+
+export type ClearRecentSearchSnapshotResult =
+  | "cleared"
+  | "changed"
+  | "unavailable";
+
+export function clearRecentSearchesIfUnchanged(
+  expectedRaw: string | null,
+): ClearRecentSearchSnapshotResult {
+  let current: string | null;
+  try {
+    current = localStorage.getItem(storageKey);
+  } catch (error) {
+    warnStorageFailure("read", error);
+    return "unavailable";
+  }
+
+  if (current !== expectedRaw) return "changed";
+
+  try {
+    localStorage.removeItem(storageKey);
+    return "cleared";
+  } catch (error) {
+    warnStorageFailure("clear", error);
+    return "unavailable";
+  }
+}
+
 export function recordRecentSearch(
-  userId: string | null,
   item: Pick<RecentSearch, "kind" | "targetId" | "name">
 ): RecentSearch[] {
-  const history = getRecentSearches(userId);
+  const history = getRecentSearches();
   if (!isRecentSearchItem(item)) {
     console.warn("Ignoring invalid recent search item.");
     return history;
   }
 
-  const next = normalizeHistory(
+  const next = normalizeRecentSearchHistory(
     [
       {
         ...item,
@@ -186,36 +235,34 @@ export function recordRecentSearch(
     Date.now()
   );
 
-  writeHistory(userId, next);
+  writeHistory(next);
   return next;
 }
 
 export function recordRecentSearchSelection(
-  userId: string | null | undefined,
   result: RouteMapSearchResult,
   source: RecentSearchSelectionSource
 ): void {
-  if (source !== "search" || userId === undefined) return;
+  if (source !== "search") return;
 
-  recordRecentSearch(userId, getRecentSearchItem(result));
+  recordRecentSearch(getRecentSearchItem(result));
 }
 
 export function removeRecentSearch(
-  userId: string | null,
   kind: RecentSearchKind,
   targetId: number
 ): RecentSearch[] {
-  const next = getRecentSearches(userId).filter(
+  const next = getRecentSearches().filter(
     (entry) => entry.kind !== kind || entry.targetId !== targetId
   );
 
-  writeHistory(userId, next);
+  writeHistory(next);
   return next;
 }
 
-export function clearRecentSearches(userId: string | null): void {
+export function clearRecentSearches(): void {
   try {
-    localStorage.removeItem(getStorageKey(userId));
+    localStorage.removeItem(storageKey);
   } catch (error) {
     warnStorageFailure("clear", error);
   }

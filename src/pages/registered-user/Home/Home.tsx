@@ -36,7 +36,7 @@ interface HomeProps {
 }
 
 export default function Home({ currentUserId, onLogout }: HomeProps) {
-  const map = useTransitMap(currentUserId);
+  const map = useTransitMap();
   const location = useLocation();
   const navigate = useNavigate();
   const handledSavedSelection = useRef<string | null>(null);

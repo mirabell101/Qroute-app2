@@ -10,6 +10,7 @@ import {
 
 import { supabase } from "./lib/supabase";
 import { SavedItemsProvider } from "./components/saved/SavedItemsContext";
+import { RecentSearchesProvider } from "./components/recent-searches/RecentSearchesContext";
 
 import Landing from "./pages/visitor/Landing/Landing";
 import Home from "./pages/registered-user/Home/Home";
@@ -186,11 +187,15 @@ function App() {
 
   return (
     <BrowserRouter>
-      <SavedItemsProvider
+      <RecentSearchesProvider
         key={currentUserId ?? "anonymous"}
         userId={currentUserId}
       >
-        <Routes>
+        <SavedItemsProvider
+          key={currentUserId ?? "anonymous"}
+          userId={currentUserId}
+        >
+          <Routes>
         {/* Public routes */}
         <Route
           path="/"
@@ -262,12 +267,7 @@ function App() {
 
         <Route
           path="/points-badges"
-          element={protectedPage((userId) => (
-            <PointsBadges
-              currentUserId={userId}
-              onLogout={handleLogout}
-            />
-          ))}
+          element={protectedPage(() => <PointsBadges />)}
         />
 
         <Route
@@ -338,8 +338,9 @@ function App() {
           path="*"
           element={<Navigate to="/" replace />}
         />
-        </Routes>
-      </SavedItemsProvider>
+          </Routes>
+        </SavedItemsProvider>
+      </RecentSearchesProvider>
     </BrowserRouter>
   );
 }

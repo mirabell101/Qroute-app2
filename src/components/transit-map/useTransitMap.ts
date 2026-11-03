@@ -24,10 +24,9 @@ import type {
   RouteMapSearchResult,
 } from "@/lib/routeMap";
 import type { SavedKind } from "@/lib/savedItems";
-import {
-  recordRecentSearchSelection,
-} from "@/lib/recentSearches";
+import { getRecentSearchItem } from "@/lib/recentSearches";
 import type { RecentSearchSelectionSource } from "@/lib/recentSearches";
+import { useRecentSearches } from "@/components/recent-searches/recentSearchesStore";
 import {
   buildFareCards,
   calculateFareOptionEstimates,
@@ -41,8 +40,9 @@ import {
 } from "@/lib/mapIcons";
 import { getPointImages } from "@/lib/mapImages";
 import type { PointImage } from "@/lib/mapImages";
+import { createCurrentLocationRequester } from "@/lib/currentLocation";
 
-export type LocationStatus = "loading" | "success" | "error";
+export type LocationStatus = "idle" | "loading" | "success" | "error";
 export type Coordinates = [number, number];
 
 export interface RouteLayerState {
@@ -66,35 +66,24 @@ export const stopTypeLabel = (stop: Pick<RouteStop, "stop_type">) =>
       ? "Train station"
       : "Bus / jeepney stop";
 
-// Haversine distance in meters between two [lat, lng] coordinates.
-function getDistanceMeters(from: Coordinates, to: Coordinates): number {
-  const toRadians = (value: number) => (value * Math.PI) / 180;
-  const earthRadius = 6371000;
-  const dLat = toRadians(to[0] - from[0]);
-  const dLng = toRadians(to[1] - from[1]);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRadians(from[0])) *
-      Math.cos(toRadians(to[0])) *
-      Math.sin(dLng / 2) *
-      Math.sin(dLng / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return earthRadius * c;
-}
-
-export function useTransitMap(recentSearchUserId?: string | null) {
+export function useTransitMap() {
+  const { record: recordRecentSearch } = useRecentSearches();
   const geolocation =
     typeof navigator === "undefined" ? null : navigator.geolocation;
+  const requestLocation = useMemo(
+    () => createCurrentLocationRequester(geolocation),
+    [geolocation]
+  );
 
   const [currentPosition, setCurrentPosition] =
     useState<Coordinates | null>(null);
-  const [locationStatus, setLocationStatus] = useState<LocationStatus>(
-    geolocation ? "loading" : "error"
-  );
+  const [locationStatus, setLocationStatus] = useState<LocationStatus>("idle");
   const [locationError, setLocationError] = useState<string | null>(
-    geolocation ? null : "Your browser does not support location access."
+    null
   );
-  const [showLocationPopup, setShowLocationPopup] = useState(true);
+  const [showLocationPopup, setShowLocationPopup] = useState(false);
+  const locationRequestInFlight = useRef(false);
+  const locationPopupTimer = useRef<number | null>(null);
 
   // Terminal data.
   const [terminals, setTerminals] = useState<Terminal[]>([]);
@@ -123,6 +112,7 @@ export function useTransitMap(recentSearchUserId?: string | null) {
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
   const pendingBoardingPoint = useRef<Pick<
     RouteMapPoint,
     "kind" | "ref_id"
@@ -204,73 +194,45 @@ export function useTransitMap(recentSearchUserId?: string | null) {
     {}
   );
 
-  // Watch the device's current location.
-  useEffect(() => {
-    if (!geolocation) return;
+  const requestCurrentLocation = useCallback(async () => {
+    if (locationRequestInFlight.current) return;
 
-    let bestAccuracy = Number.POSITIVE_INFINITY;
-    let hasReceivedPosition = false;
-    let lastPosition: Coordinates | null = null;
+    locationRequestInFlight.current = true;
+    if (locationPopupTimer.current !== null) {
+      window.clearTimeout(locationPopupTimer.current);
+      locationPopupTimer.current = null;
+    }
+    setShowLocationPopup(true);
+    setLocationStatus("loading");
+    setLocationError(null);
 
-    const watchId = geolocation.watchPosition(
-      (position) => {
-        const accuracy = position.coords.accuracy;
-        const next: Coordinates = [
-          position.coords.latitude,
-          position.coords.longitude,
-        ];
+    try {
+      setCurrentPosition(await requestLocation());
+      setLocationStatus("success");
+    } catch (cause: unknown) {
+      setLocationStatus("error");
+      setLocationError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to determine your current location."
+      );
+    } finally {
+      locationRequestInFlight.current = false;
+      locationPopupTimer.current = window.setTimeout(() => {
+        setShowLocationPopup(false);
+        locationPopupTimer.current = null;
+      }, 4000);
+    }
+  }, [requestLocation]);
 
-        // Keep the best (most accurate) fix, but also refresh when the
-        // device has actually moved so a shifted location retriggers routing.
-        const movedEnough =
-          lastPosition === null || getDistanceMeters(lastPosition, next) >= 15;
-        const betterAccuracy = !hasReceivedPosition || accuracy < bestAccuracy;
-
-        if (hasReceivedPosition && !movedEnough && !betterAccuracy) return;
-
-        hasReceivedPosition = true;
-        bestAccuracy = Math.min(bestAccuracy, accuracy);
-        lastPosition = next;
-
-        setCurrentPosition(next);
-        setLocationStatus("success");
-        setLocationError(null);
-      },
-      (error) => {
-        if (hasReceivedPosition) return;
-
-        let message: string;
-
-        switch (error.code) {
-          case error.PERMISSION_DENIED:
-            message =
-              "Location permission denied. Enable it in your browser settings.";
-            break;
-          case error.POSITION_UNAVAILABLE:
-            message = "Your current location is unavailable.";
-            break;
-          case error.TIMEOUT:
-            message = "Location request timed out. Please try again.";
-            break;
-          default:
-            message = "Unable to determine your current location.";
-        }
-
-        setLocationStatus("error");
-        setLocationError(message);
-      },
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
-    );
-
-    const popupTimer = window.setTimeout(() => {
-      setShowLocationPopup(false);
-    }, 4000);
-
-    return () => {
-      geolocation.clearWatch(watchId);
-      window.clearTimeout(popupTimer);
-    };
-  }, [geolocation]);
+  useEffect(
+    () => () => {
+      if (locationPopupTimer.current !== null) {
+        window.clearTimeout(locationPopupTimer.current);
+      }
+    },
+    []
+  );
 
   // Load active terminals.
   useEffect(() => {
@@ -647,6 +609,7 @@ export function useTransitMap(recentSearchUserId?: string | null) {
   };
 
   const handlePlaceSelect = (point: RouteMapPoint) => {
+    setSelectionError(null);
     setSelectedPlacePoint(point);
     loadVisibleRouteLayers(point.routes.map(({ route }) => route.id));
     setShowSearchResults(false);
@@ -693,6 +656,7 @@ export function useTransitMap(recentSearchUserId?: string | null) {
   };
 
   const handleRouteLineSelect = (routeId: number) => {
+    setSelectionError(null);
     setRouteLinesVisible(true);
     const nextRouteId = String(routeId);
     if (selectedRouteId === nextRouteId) return;
@@ -704,7 +668,10 @@ export function useTransitMap(recentSearchUserId?: string | null) {
     result: RouteMapSearchResult,
     source: RecentSearchSelectionSource
   ) => {
-    recordRecentSearchSelection(recentSearchUserId, result, source);
+    if (source === "search") {
+      recordRecentSearch(getRecentSearchItem(result));
+    }
+    setSelectionError(null);
     setSearchQuery("");
     setShowSearchResults(false);
     setActiveSearchIndex(0);
@@ -733,7 +700,10 @@ export function useTransitMap(recentSearchUserId?: string | null) {
       kind,
       targetId
     );
-    if (!result) return false;
+    if (!result) {
+      setSelectionError("This item is no longer available on the map.");
+      return false;
+    }
 
     applySearchResultSelection(result, "restore");
     return true;
@@ -788,12 +758,14 @@ export function useTransitMap(recentSearchUserId?: string | null) {
     locationStatus,
     locationError,
     showLocationPopup,
+    requestCurrentLocation,
     // loading / errors
     terminalsLoading,
     terminalError,
     routesLoading,
     routeMapError,
     routeError,
+    selectionError,
     routeStopsLoading,
     roadRouteLoading,
     routeMapIndex,

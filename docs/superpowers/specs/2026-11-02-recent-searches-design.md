@@ -1,5 +1,7 @@
 # Recent Searches Design
 
+> Superseded for current Stage 1 requirements by [2026-11-03-recent-searches-stage1-design.md](./2026-11-03-recent-searches-stage1-design.md). This earlier draft specified per-user keys and a 100-entry cap.
+
 ## Intent
 
 Let visitors and signed-in QRoute users revisit routes, stops, and terminals they selected in map search, without server-side search tracking.
