@@ -1,153 +1,534 @@
-import { useState, type FormEvent } from "react";
-import { Eye, EyeOff } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Eye, EyeOff, User, Mail, Lock } from "lucide-react";
+
 import { Input } from "@/components/ui/input";
-import { supabase } from "@/lib/supabase";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
+import { API_BASE_URL } from "@/lib/api";
 
-type SignUpProps = {
-  onSignIn: () => void;
-};
+import qrouteLogo from "@/assets/logoboi.png";
+import appLogo from "@/assets/APP VER (1).png";
 
-function SignUp({ onSignIn }: SignUpProps) {
+function SignUp() {
+  const navigate = useNavigate();
+
+  // Password visibility
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  // Form values
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [termsAccepted, setTermsAccepted] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [isError, setIsError] = useState(false);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage("");
-    setIsError(false);
+  // Validation errors
+  const [usernameError, setUsernameError] = useState("");
+  const [emailError, setEmailError] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [confirmPasswordError, setConfirmPasswordError] = useState("");
+  const [termsError, setTermsError] = useState("");
 
-    if (!termsAccepted) {
-      setMessage("Please accept the Terms and Conditions to continue.");
-      setIsError(true);
+  // Server request status
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [serverError, setServerError] = useState("");
+
+  // Validate username
+  const validateUsername = (value: string) => {
+    if (!value.trim()) {
+      return "Username is required.";
+    }
+
+    if (!/^[a-zA-Z0-9_]{3,30}$/.test(value.trim())) {
+      return "Username must be 3–30 characters and contain only letters, numbers, or underscores.";
+    }
+
+    return "";
+  };
+
+  // Validate email
+  const validateEmail = (value: string) => {
+    if (!value.trim()) {
+      return "Email address is required.";
+    }
+
+    if (!/^[^\s@]+@gmail\.com$/i.test(value.trim())) {
+      return "Please enter a valid Gmail address.";
+    }
+
+    return "";
+  };
+
+  // Validate password
+  const validatePassword = (value: string) => {
+    if (!value) {
+      return "Password is required.";
+    }
+
+    if (value.length < 8) {
+      return "Password must be at least 8 characters.";
+    }
+
+    if (!/[A-Z]/.test(value)) {
+      return "Password must contain at least one uppercase letter.";
+    }
+
+    if (!/[a-z]/.test(value)) {
+      return "Password must contain at least one lowercase letter.";
+    }
+
+    if (!/[0-9]/.test(value)) {
+      return "Password must contain at least one number.";
+    }
+
+    if (!/[!@#$%^&*(),.?":{}|<>_\-]/.test(value)) {
+      return "Password must contain at least one special character.";
+    }
+
+    return "";
+  };
+
+  // Validate password confirmation
+  const validateConfirmPassword = (value: string) => {
+    if (!value) {
+      return "Please confirm your password.";
+    }
+
+    if (value !== password) {
+      return "Passwords do not match.";
+    }
+
+    return "";
+  };
+
+  // Submit registration to Express
+  const handleSignUp = async () => {
+    if (isSubmitting) return;
+
+    const normalizedUsername = username.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const usernameValidation =
+      validateUsername(normalizedUsername);
+    const emailValidation =
+      validateEmail(normalizedEmail);
+    const passwordValidation =
+      validatePassword(password);
+    const confirmPasswordValidation =
+      validateConfirmPassword(confirmPassword);
+    const termsValidation = termsAccepted
+      ? ""
+      : "You must accept the Terms and Conditions and Privacy Policy.";
+
+    setUsernameError(usernameValidation);
+    setEmailError(emailValidation);
+    setPasswordError(passwordValidation);
+    setConfirmPasswordError(confirmPasswordValidation);
+    setTermsError(termsValidation);
+    setServerError("");
+
+    if (
+      usernameValidation ||
+      emailValidation ||
+      passwordValidation ||
+      confirmPasswordValidation ||
+      termsValidation
+    ) {
       return;
     }
 
-    setIsLoading(true);
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { emailRedirectTo: window.location.origin },
-    });
-    setIsLoading(false);
+    try {
+      setIsSubmitting(true);
 
-    if (error) {
-      setMessage(error.message);
-      setIsError(true);
-      return;
+      const response = await fetch(
+        `${API_BASE_URL}/api/auth/register`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            username: normalizedUsername,
+            displayName: normalizedUsername,
+            email: normalizedEmail,
+            password,
+          }),
+        }
+      );
+
+      // Handle responses that may not contain valid JSON
+      const result = await response.json().catch(() => null);
+
+      if (!response.ok || !result?.success) {
+        setServerError(
+          result?.message ||
+            "Registration failed. Please try again."
+        );
+        return;
+      }
+
+      // Clear sensitive form values after successful registration
+      setPassword("");
+      setConfirmPassword("");
+
+      if (result.requiresEmailVerification && result.user) {
+        navigate("/otp", {
+          state: {
+            userId: result.user.id,
+            email: result.user.email || normalizedEmail,
+            mode: "signup",
+          },
+        });
+      } else {
+        // For configurations that do not require email confirmation
+        navigate("/login", {
+          state: {
+            message:
+              result.message ||
+              "Your account was created successfully.",
+            email: normalizedEmail,
+          },
+        });
+      }
+    } catch (error) {
+      console.error("Registration request failed:", error);
+
+      setServerError(
+        "Unable to connect to the server. Make sure the Express backend is running."
+      );
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setMessage(
-      data.session
-        ? "Your account has been created."
-        : "Check your email to confirm your account.",
-    );
-  }
+  };
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-white px-4 py-4">
-      <div className="w-full max-w-[580px] rounded-[8px] border border-[#333] px-8 py-10 sm:px-[75px] sm:py-[45px]">
-        <div className="text-center">
-          <h1 className="text-[40px] font-bold leading-tight text-black sm:text-[48px]">
-            WELCOME
-          </h1>
-          <p className="mt-1 text-[19px] text-black sm:text-[21px]">
-            Create your account
-          </p>
+    <main className="relative flex min-h-screen w-screen items-center justify-center overflow-x-hidden bg-white px-4 py-8">
+      {/* TOP-LEFT LOGO */}
+      <img
+        src={qrouteLogo}
+        alt="Qroute"
+        className="absolute left-6 top-6 h-auto w-[130px] object-contain sm:left-15 sm:top-10 sm:w-[160px]"
+      />
+
+      {/* SIGN UP CARD */}
+      <div className="w-full max-w-[450px] rounded-[6px] border border-[#e1e1e1] bg-white px-6 py-6 shadow-[0_1px_6px_rgba(0,0,0,0.08)] sm:px-10">
+        {/* HEADER */}
+        <div className="flex items-center justify-center">
+          <img
+            src={appLogo}
+            alt="Qroute app logo"
+            className="mr-2 h-[50px] w-[50px] shrink-0 object-contain"
+          />
+
+          <div className="flex flex-col justify-center">
+            <h1 className="text-[31px] font-bold leading-[1] tracking-[-0.5px] text-black">
+              WELCOME
+            </h1>
+
+            <p className="mt-1 translate-x-5 text-[12px] leading-none text-black">
+              Create your Account
+            </p>
+          </div>
         </div>
 
-        <form onSubmit={handleSubmit}>
-          <div className="mt-12 relative sm:mt-[84px]">
-            <label
-              htmlFor="signup-email"
-              className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 bg-white pr-2 text-[17px] text-black sm:text-[19px]"
-            >
-              Email:
-            </label>
+        {/* USERNAME */}
+        <div className="mt-5">
+          <label
+            htmlFor="username"
+            className="text-[12px] font-medium text-black"
+          >
+            Username <span className="text-red-500">*</span>
+          </label>
+
+          <div className="relative mt-1.5">
+            <User
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            />
+
             <Input
-              id="signup-email"
-              type="email"
-              autoComplete="email"
-              placeholder="Enter your Email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-              disabled={isLoading}
-              className="h-[47px] rounded-full border-[#999] pl-[84px] text-[17px] shadow-[0_3px_4px_rgba(0,0,0,0.25)] placeholder:text-[#777] focus-visible:ring-1 sm:text-[19px]"
+              id="username"
+              type="text"
+              autoComplete="username"
+              placeholder="Enter your username"
+              value={username}
+              maxLength={30}
+              disabled={isSubmitting}
+              onChange={(e) => {
+                setUsername(e.target.value);
+                setUsernameError("");
+                setServerError("");
+              }}
+              className={`h-9 rounded-[5px] border pl-9 pr-3 text-[12px] shadow-none ${
+                usernameError
+                  ? "border-red-500 focus-visible:ring-red-500"
+                  : "border-[#b8b8b8]"
+              }`}
             />
           </div>
 
-          <div className="relative mt-7 sm:mt-[36px]">
-            <label
-              htmlFor="signup-password"
-              className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 bg-white pr-2 text-[17px] text-black sm:text-[19px]"
-            >
-              Password:
-            </label>
+          {usernameError && (
+            <p className="mt-1 px-1 text-[10px] leading-tight text-red-500">
+              {usernameError}
+            </p>
+          )}
+        </div>
+
+        {/* EMAIL */}
+        <div className="mt-3">
+          <label
+            htmlFor="email"
+            className="text-[12px] font-medium text-black"
+          >
+            Email <span className="text-red-500">*</span>
+          </label>
+
+          <div className="relative mt-1.5">
+            <Mail
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            />
+
             <Input
-              id="signup-password"
+              id="email"
+              type="email"
+              autoComplete="email"
+              placeholder="Enter your email"
+              value={email}
+              disabled={isSubmitting}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setEmailError("");
+                setServerError("");
+              }}
+              className={`h-9 rounded-[5px] border pl-9 pr-3 text-[12px] shadow-none ${
+                emailError
+                  ? "border-red-500 focus-visible:ring-red-500"
+                  : "border-[#b8b8b8]"
+              }`}
+            />
+          </div>
+
+          {emailError && (
+            <p className="mt-1 px-1 text-[10px] leading-tight text-red-500">
+              {emailError}
+            </p>
+          )}
+        </div>
+
+        {/* PASSWORD */}
+        <div className="mt-3">
+          <label
+            htmlFor="password"
+            className="text-[12px] font-medium text-black"
+          >
+            Password <span className="text-red-500">*</span>
+          </label>
+
+          <div className="relative mt-1.5">
+            <Lock
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            />
+
+            <Input
+              id="password"
               type={showPassword ? "text" : "password"}
               autoComplete="new-password"
-              placeholder="Enter your Password"
+              placeholder="Enter your password"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-              disabled={isLoading}
-              className="h-[47px] rounded-full border-[#999] py-1 pl-[112px] pr-12 text-[17px] shadow-[0_3px_4px_rgba(0,0,0,0.25)] placeholder:text-[#777] focus-visible:ring-1 sm:text-[19px]"
+              disabled={isSubmitting}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setPasswordError("");
+                setConfirmPasswordError("");
+                setServerError("");
+              }}
+              className={`h-9 rounded-[5px] border pl-9 pr-10 text-[12px] shadow-none ${
+                passwordError
+                  ? "border-red-500 focus-visible:ring-red-500"
+                  : "border-[#b8b8b8]"
+              }`}
             />
+
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-5 top-1/2 -translate-y-1/2 text-black"
-              aria-label={showPassword ? "Hide password" : "Show password"}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black"
+              aria-label={
+                showPassword ? "Hide password" : "Show password"
+              }
             >
-              {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              {showPassword ? (
+                <EyeOff size={15} />
+              ) : (
+                <Eye size={15} />
+              )}
             </button>
           </div>
 
-          <div className="mt-7 flex items-center gap-3">
+          {passwordError && (
+            <p className="mt-1 px-1 text-[10px] leading-tight text-red-500">
+              {passwordError}
+            </p>
+          )}
+        </div>
+
+        {/* CONFIRM PASSWORD */}
+        <div className="mt-3">
+          <label
+            htmlFor="confirmPassword"
+            className="text-[12px] font-medium text-black"
+          >
+            Confirm Password{" "}
+            <span className="text-red-500">*</span>
+          </label>
+
+          <div className="relative mt-1.5">
+            <Lock
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            />
+
+            <Input
+              id="confirmPassword"
+              type={showConfirmPassword ? "text" : "password"}
+              autoComplete="new-password"
+              placeholder="Enter your password again"
+              value={confirmPassword}
+              disabled={isSubmitting}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value);
+                setConfirmPasswordError("");
+                setServerError("");
+              }}
+              className={`h-9 rounded-[5px] border pl-9 pr-10 text-[12px] shadow-none ${
+                confirmPasswordError
+                  ? "border-red-500 focus-visible:ring-red-500"
+                  : "border-[#b8b8b8]"
+              }`}
+            />
+
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() =>
+                setShowConfirmPassword(!showConfirmPassword)
+              }
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black"
+              aria-label={
+                showConfirmPassword
+                  ? "Hide confirm password"
+                  : "Show confirm password"
+              }
+            >
+              {showConfirmPassword ? (
+                <EyeOff size={15} />
+              ) : (
+                <Eye size={15} />
+              )}
+            </button>
+          </div>
+
+          {confirmPasswordError && (
+            <p className="mt-1 px-1 text-[10px] leading-tight text-red-500">
+              {confirmPasswordError}
+            </p>
+          )}
+        </div>
+
+        {/* TERMS AND CONDITIONS */}
+        <div className="mt-3">
+          <div className="flex items-start gap-1.5">
             <Checkbox
               id="terms"
               checked={termsAccepted}
-              onCheckedChange={(checked) => setTermsAccepted(checked === true)}
-              className="h-[18px] w-[18px] rounded-[4px]"
+              disabled={isSubmitting}
+              onCheckedChange={(checked) => {
+                setTermsAccepted(checked === true);
+
+                if (checked === true) {
+                  setTermsError("");
+                }
+
+                setServerError("");
+              }}
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-[2px]"
             />
-            <label htmlFor="terms" className="cursor-pointer text-[16px] text-black">
-              I accept the Terms and Conditions
+
+            <label
+              htmlFor="terms"
+              className="cursor-pointer text-[10px] leading-tight text-gray-700"
+            >
+              I agree to{" "}
+              <button
+                type="button"
+                onClick={() =>
+                  navigate("/terms-and-condition", {
+                    state: { from: "/signup" },
+                  })
+                }
+                className="font-medium text-[#6C3FF5] hover:underline"
+              >
+                Terms and Conditions
+              </button>{" "}
+              and acknowledge the{" "}
+              <button
+                type="button"
+                onClick={() =>
+                  navigate("/privacy-policy", {
+                    state: { from: "/signup" },
+                  })
+                }
+                className="font-medium text-[#6C3FF5] hover:underline"
+              >
+                Privacy Policy
+              </button>
+              . <span className="text-red-500">*</span>
             </label>
           </div>
 
-          {message && (
-            <p
-              className={`mt-4 text-sm ${isError ? "text-red-600" : "text-green-700"}`}
-              role={isError ? "alert" : "status"}
-            >
-              {message}
+          {termsError && (
+            <p className="mt-1 px-1 text-[10px] leading-tight text-red-500">
+              {termsError}
             </p>
           )}
+        </div>
 
-          <Button
-            type="submit"
-            disabled={isLoading}
-            className="mt-6 h-[47px] w-full rounded-full bg-[#6255F5] text-[21px] font-normal text-white shadow-[0_3px_4px_rgba(0,0,0,0.25)] hover:bg-[#5548E8]"
+        {/* SERVER ERROR */}
+        {serverError && (
+          <p
+            role="alert"
+            className="mt-3 text-center text-[11px] leading-relaxed text-red-500"
           >
-            {isLoading ? "Please wait..." : "Sign Up"}
-          </Button>
-        </form>
+            {serverError}
+          </p>
+        )}
 
-        <div className="mt-10 text-center text-[16px] sm:mt-[54px]">
-          <span className="text-black">Already have an account? </span>
+        {/* SIGN UP */}
+        <Button
+          type="button"
+          onClick={handleSignUp}
+          disabled={isSubmitting}
+          className="mt-4 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isSubmitting ? "Creating Account..." : "Sign Up"}
+        </Button>
+
+        {/* SIGN IN */}
+        <div className="mt-4 text-center text-[10px]">
+          <span className="text-gray-600">
+            Already have an account?{" "}
+          </span>
+
           <button
             type="button"
-            onClick={onSignIn}
-            className="text-[#6255F5] underline underline-offset-2"
+            onClick={() => navigate("/login")}
+            className="font-semibold text-[#6C3FF5] hover:underline"
           >
             Sign In
           </button>

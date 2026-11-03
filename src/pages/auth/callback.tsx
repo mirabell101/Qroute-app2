@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 
 type AuthCallbackProps = {
-  onComplete: () => void;
+  onComplete?: () => void;
 };
 
 /**
@@ -19,6 +20,7 @@ type AuthCallbackProps = {
  * and displays any errors that occur during the process.
  */
 function AuthCallback({ onComplete }: AuthCallbackProps) {
+  const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -39,8 +41,6 @@ function AuthCallback({ onComplete }: AuthCallbackProps) {
       }
 
       // If there's a code parameter, Supabase needs to exchange it for a session.
-      // The Supabase client's `onAuthStateChange` listener (set up in App.tsx)
-      // will automatically detect the new session once the exchange completes.
       // For the PKCE flow, we call exchangeCodeForSession explicitly.
       const code = params.get("code");
       if (code) {
@@ -54,17 +54,26 @@ function AuthCallback({ onComplete }: AuthCallbackProps) {
         }
       }
 
-      // For the implicit flow (hash fragment), the Supabase client detects
-      // the tokens automatically. We just need to wait for the auth state
-      // change listener to fire, which will call onComplete.
-
       // Clean the URL
       window.history.replaceState(null, "", window.location.pathname);
-      onComplete();
+
+      if (onComplete) {
+        onComplete();
+      } else {
+        navigate("/home", { replace: true });
+      }
     }
 
     handleCallback();
-  }, [onComplete]);
+  }, [navigate, onComplete]);
+
+  const handleReturnToSignIn = () => {
+    if (onComplete) {
+      onComplete();
+    } else {
+      navigate("/login", { replace: true });
+    }
+  };
 
   if (error) {
     return (
@@ -78,7 +87,7 @@ function AuthCallback({ onComplete }: AuthCallbackProps) {
           </p>
           <button
             type="button"
-            onClick={onComplete}
+            onClick={handleReturnToSignIn}
             className="mt-6 text-sm font-semibold text-[#6C3FF5] hover:underline"
           >
             Return to Sign In

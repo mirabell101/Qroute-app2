@@ -1,91 +1,345 @@
-import { useCallback, useEffect, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 
-import { supabase } from "@/lib/supabase";
-import AuthCallback from "./pages/auth/callback";
-import Dashboard from "./pages/dashboard/dashboard";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+} from "react-router-dom";
+
+import { supabase } from "./lib/supabase";
+import { SavedItemsProvider } from "./components/saved/SavedItemsContext";
+
+import Landing from "./pages/visitor/Landing/Landing";
+import Home from "./pages/registered-user/Home/Home";
 import Login from "./pages/visitor/login/login";
 import SignUp from "./pages/visitor/signup/signup";
-
-type Page = "login" | "signup";
-
-/**
- * Returns true when the current URL looks like it contains an OAuth callback.
- * Supabase may use the PKCE flow (code in query string) or the implicit flow
- * (access_token in the hash fragment).
- */
-function isOAuthCallback(): boolean {
-  const params = new URLSearchParams(window.location.search);
-  const hash = window.location.hash;
-
-  return (
-    params.has("code") ||
-    params.has("error") ||
-    hash.includes("access_token") ||
-    hash.includes("error")
-  );
-}
+import OTP from "./pages/visitor/OTP/OTP";
+import Forgotpassword from "./pages/visitor/Forgotpassword/Forgotpassword";
+import Resetpassword from "./pages/visitor/Resetpassword/Resetpassword";
+import ResetOTP from "./pages/visitor/ResetOTP/ResetOTP";
+import TermsAndConditions from "./pages/visitor/Legal/TermsAndCondition";
+import PrivacyPolicy from "./pages/visitor/Legal/PrivacyPolicy";
+import Profile from "./pages/registered-user/Profile/Profile";
+import Contribution from "./pages/registered-user/contribution/contribution";
+import Community from "./pages/registered-user/community/community";
+import PointsBadges from "./pages/registered-user/points-badges/points-badges";
+import Saved from "./pages/registered-user/saved/saved";
+import RecentSearches from "./pages/registered-user/recent-searches/recent-searches";
+import AdminBase from "./pages/admin/base/base";
+import Dashboard from "./pages/admin/dashboard/dashboard";
+import RouteManagement from "./pages/admin/route-management/route-management";
+import PostManagement from "./pages/admin/post-management/post-management";
+import Reports from "./pages/admin/reports/reports";
+import UserManagement from "./pages/admin/user-management/user-management";
+import AuthCallback from "./pages/auth/callback";
 
 function App() {
-  const [session, setSession] = useState<Session | null>(null);
-  const [page, setPage] = useState<Page>("login");
-  const [isLoading, setIsLoading] = useState(true);
-  const [isProcessingCallback, setIsProcessingCallback] = useState(
-    isOAuthCallback,
-  );
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
+  // Restore and validate the existing Supabase session.
   useEffect(() => {
-    // 1. Retrieve any existing session on initial load
-    supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
-      setSession(currentSession);
-      setIsLoading(false);
-    });
+    let active = true;
+    let validationInProgress = false;
 
-    // 2. Listen for all auth state changes (sign-in, sign-out, token refresh,
-    //    OAuth callback completion, password recovery, etc.)
+    const validateSession = async () => {
+      if (validationInProgress) return;
+      validationInProgress = true;
+
+      try {
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
+
+        if (!active) return;
+
+        if (sessionError) {
+          console.error(
+            "Could not restore Supabase session:",
+            sessionError.message
+          );
+        }
+
+        if (sessionError || !session) {
+          setCurrentUserId(null);
+          setAuthLoading(false);
+          return;
+        }
+
+        // Ask Supabase Auth to verify the current user.
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser(session.access_token);
+
+        if (!active) return;
+
+        if (userError || !user) {
+          console.warn(
+            "Session is invalid or the account no longer exists.",
+            userError?.message
+          );
+
+          await supabase.auth.signOut({ scope: "local" });
+
+          if (!active) return;
+
+          setCurrentUserId(null);
+        } else {
+          setCurrentUserId(user.id);
+        }
+
+        setAuthLoading(false);
+      } catch (error) {
+        if (!active) return;
+
+        console.error("Session validation failed:", error);
+        setCurrentUserId(null);
+        setAuthLoading(false);
+      } finally {
+        validationInProgress = false;
+      }
+    };
+
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, currentSession) => {
-      setSession(currentSession);
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
 
-      // If the callback component is still showing and a session arrived,
-      // it means the OAuth exchange completed successfully.
-      if (currentSession && isProcessingCallback) {
-        setIsProcessingCallback(false);
+      if (event === "SIGNED_OUT") {
+        setCurrentUserId(null);
+        setAuthLoading(false);
+        return;
       }
+
+      // Initial sessions are verified by validateSession().
+      if (event === "INITIAL_SESSION") return;
+
+      setCurrentUserId(session?.user.id ?? null);
+      setAuthLoading(false);
     });
 
-    return () => subscription.unsubscribe();
-  }, [isProcessingCallback]);
+    // Validate on startup and when the user returns to this tab.
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void validateSession();
+      }
+    };
 
-  const handleCallbackComplete = useCallback(() => {
-    setIsProcessingCallback(false);
+    void validateSession();
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange
+    );
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange
+      );
+    };
   }, []);
 
-  // Show a simple loading screen while the initial session is being retrieved
-  if (isLoading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-white">
-        <p className="text-sm text-gray-500">Loading…</p>
-      </main>
-    );
-  }
+  // Sign out on this device/browser only.
+  const handleLogout = async (): Promise<void> => {
+    const { error } = await supabase.auth.signOut({
+      scope: "local",
+    });
 
-  // Show the callback handler when the URL contains OAuth parameters
-  if (isProcessingCallback) {
-    return <AuthCallback onComplete={handleCallbackComplete} />;
-  }
+    if (error) {
+      console.error("Logout failed:", error.message);
+      throw error;
+    }
 
-  // Authenticated — show the dashboard
-  if (session?.user) {
-    return <Dashboard user={session.user} />;
-  }
+    // Clean up values left by the old local-storage login system.
+    localStorage.removeItem("qroute_current_user");
+    sessionStorage.removeItem("qroute_current_user");
 
-  // Not authenticated — show login / sign-up
-  return page === "login" ? (
-    <Login onSignUp={() => setPage("signup")} />
-  ) : (
-    <SignUp onSignIn={() => setPage("login")} />
+    // The auth listener also updates this state.
+    setCurrentUserId(null);
+  };
+
+  // Render protected pages only after checking the session.
+  // The callback receives a non-null user ID.
+  const protectedPage = (
+    renderPage: (userId: string) => ReactNode
+  ): ReactNode => {
+    if (authLoading) {
+      return null;
+    }
+
+    if (!currentUserId) {
+      return <Navigate to="/login" replace />;
+    }
+
+    return renderPage(currentUserId);
+  };
+
+  return (
+    <BrowserRouter>
+      <SavedItemsProvider
+        key={currentUserId ?? "anonymous"}
+        userId={currentUserId}
+      >
+        <Routes>
+          {/* Public routes */}
+          <Route
+            path="/"
+            element={
+              <Landing
+                currentUserId={currentUserId}
+                onLogout={handleLogout}
+              />
+            }
+          />
+
+          <Route
+            path="/base"
+            element={
+              <Landing
+                currentUserId={currentUserId}
+                onLogout={handleLogout}
+              />
+            }
+          />
+
+          {/* Registered-user routes */}
+          <Route
+            path="/home"
+            element={protectedPage((userId) => (
+              <Home
+                currentUserId={userId}
+                onLogout={handleLogout}
+              />
+            ))}
+          />
+
+          <Route
+            path="/saved"
+            element={protectedPage(() => <Saved />)}
+          />
+
+          <Route
+            path="/recents"
+            element={
+              authLoading ? null : (
+                <RecentSearches
+                  key={currentUserId ?? "anonymous"}
+                  currentUserId={currentUserId}
+                />
+              )
+            }
+          />
+
+          <Route
+            path="/contribution"
+            element={protectedPage((userId) => (
+              <Contribution
+                currentUserId={userId}
+                onLogout={handleLogout}
+              />
+            ))}
+          />
+
+          <Route
+            path="/profile"
+            element={protectedPage((userId) => (
+              <Profile
+                currentUserId={userId}
+                onLogout={handleLogout}
+              />
+            ))}
+          />
+
+          <Route
+            path="/points-badges"
+            element={protectedPage((userId) => (
+              <PointsBadges
+                currentUserId={userId}
+                onLogout={handleLogout}
+              />
+            ))}
+          />
+
+          <Route
+            path="/community"
+            element={
+              <Community
+                currentUserId={currentUserId}
+                onLogout={handleLogout}
+              />
+            }
+          />
+
+          {/* Visitor routes */}
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<SignUp />} />
+          <Route path="/otp" element={<OTP />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
+
+          <Route
+            path="/forgot-password"
+            element={<Forgotpassword />}
+          />
+
+          <Route
+            path="/reset-password"
+            element={<Resetpassword />}
+          />
+          <Route path="/reset-otp" element={<ResetOTP />} />
+          <Route
+            path="/terms-and-condition"
+            element={<TermsAndConditions />}
+          />
+
+          <Route
+            path="/privacy-policy"
+            element={<PrivacyPolicy />}
+          />
+
+          {/* Admin routes: authorization still needs to be enforced */}
+          <Route path="/admin" element={<AdminBase />} />
+
+          <Route
+            path="/admin/dashboard"
+            element={<Dashboard />}
+          />
+
+          <Route
+            path="/admin/routes"
+            element={<RouteManagement />}
+          />
+
+          <Route
+            path="/admin/post-management"
+            element={<PostManagement />}
+          />
+
+          <Route
+            path="/admin/reports"
+            element={<Reports />}
+          />
+
+          <Route
+            path="/admin/users"
+            element={<UserManagement />}
+          />
+
+          {/* Unknown routes */}
+          <Route
+            path="*"
+            element={<Navigate to="/" replace />}
+          />
+        </Routes>
+      </SavedItemsProvider>
+    </BrowserRouter>
   );
 }
 
