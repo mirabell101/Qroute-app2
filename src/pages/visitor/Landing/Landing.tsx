@@ -62,7 +62,7 @@ export default function Landing({
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   // Shared map state (search, routes, trip selection, fares).
-  const map = useTransitMap(currentUserId);
+  const map = useTransitMap();
   const location = useLocation();
   const navigate = useNavigate();
   const handledSavedSelection = useRef<string | null>(null);

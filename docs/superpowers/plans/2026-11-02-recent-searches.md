@@ -1,5 +1,7 @@
 # Recent Searches Implementation Plan
 
+> Superseded for current Stage 1 requirements by [2026-11-03-recent-searches-stage1.md](./2026-11-03-recent-searches-stage1.md). This earlier plan specifies per-user keys and a 100-entry cap.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add private, persistent recent route/stop/terminal searches and a page that reopens them through the current map-selection flow.

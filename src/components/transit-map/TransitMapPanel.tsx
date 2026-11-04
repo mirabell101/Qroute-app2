@@ -53,6 +53,7 @@ export function TransitMapPanel({
     roadRouteLoading,
     routeMapError,
     routeError,
+    selectionError,
     routeMapIndex,
     routeDistanceMeters,
     routeDurationSeconds,
@@ -136,6 +137,7 @@ export function TransitMapPanel({
   const visible =
     selectedPlace ||
     selectedRoute ||
+    selectionError ||
     routesLoading ||
     routeStopsLoading ||
     routeMapError ||
@@ -179,6 +181,12 @@ export function TransitMapPanel({
       {routeError && (
         <p role="alert" className="mt-2 text-sm text-red-600">
           {routeError}
+        </p>
+      )}
+
+      {selectionError && (
+        <p role="alert" className="mt-2 text-sm text-red-600">
+          {selectionError}
         </p>
       )}
 

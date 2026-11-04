@@ -10,6 +10,7 @@ import {
 
 import { supabase } from "./lib/supabase";
 import { SavedItemsProvider } from "./components/saved/SavedItemsContext";
+import { RecentSearchesProvider } from "./components/recent-searches/RecentSearchesContext";
 
 import Landing from "./pages/visitor/Landing/Landing";
 import Home from "./pages/registered-user/Home/Home";
@@ -184,161 +185,161 @@ function App() {
 
   return (
     <BrowserRouter>
-      <SavedItemsProvider
+      <RecentSearchesProvider
         key={currentUserId ?? "anonymous"}
         userId={currentUserId}
       >
-        <Routes>
-          {/* Public routes */}
-          <Route
-            path="/"
-            element={
-              <Landing
+        <SavedItemsProvider
+          key={currentUserId ?? "anonymous"}
+          userId={currentUserId}
+        >
+          <Routes>
+        {/* Public routes */}
+        <Route
+          path="/"
+          element={
+            <Landing
+              currentUserId={currentUserId}
+              onLogout={handleLogout}
+            />
+          }
+        />
+
+        <Route
+          path="/base"
+          element={
+            <Landing
+              currentUserId={currentUserId}
+              onLogout={handleLogout}
+            />
+          }
+        />
+
+        {/* Registered-user routes */}
+        <Route
+          path="/home"
+          element={protectedPage((userId) => (
+            <Home
+              currentUserId={userId}
+              onLogout={handleLogout}
+            />
+          ))}
+        />
+
+        <Route
+          path="/saved"
+          element={protectedPage(() => <Saved />)}
+        />
+
+        <Route
+          path="/recents"
+          element={
+            authLoading ? null : (
+              <RecentSearches
+                key={currentUserId ?? "anonymous"}
                 currentUserId={currentUserId}
                 onLogout={handleLogout}
               />
-            }
-          />
+            )
+          }
+        />
 
-          <Route
-            path="/base"
-            element={
-              <Landing
-                currentUserId={currentUserId}
-                onLogout={handleLogout}
-              />
-            }
-          />
+        <Route
+          path="/contribution"
+          element={protectedPage((userId) => (
+            <Contribution
+              currentUserId={userId}
+              onLogout={handleLogout}
+            />
+          ))}
+        />
 
-          {/* Registered-user routes */}
-          <Route
-            path="/home"
-            element={protectedPage((userId) => (
-              <Home
-                currentUserId={userId}
-                onLogout={handleLogout}
-              />
-            ))}
-          />
+        <Route
+          path="/profile"
+          element={protectedPage((userId) => (
+            <Profile
+              currentUserId={userId}
+              onLogout={handleLogout}
+            />
+          ))}
+        />
 
-          <Route
-            path="/saved"
-            element={protectedPage(() => <Saved />)}
-          />
+        <Route
+          path="/points-badges"
+          element={protectedPage(() => <PointsBadges />)}
+        />
 
-          <Route
-            path="/recents"
-            element={
-              authLoading ? null : (
-                <RecentSearches
-                  key={currentUserId ?? "anonymous"}
-                  currentUserId={currentUserId}
-                />
-              )
-            }
-          />
+        <Route
+          path="/community"
+          element={
+            <Community
+              currentUserId={currentUserId}
+              onLogout={handleLogout}
+            />
+          }
+        />
 
-          <Route
-            path="/contribution"
-            element={protectedPage((userId) => (
-              <Contribution
-                currentUserId={userId}
-                onLogout={handleLogout}
-              />
-            ))}
-          />
+        {/* Visitor routes */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<SignUp />} />
+        <Route path="/otp" element={<OTP />} />
 
-          <Route
-            path="/profile"
-            element={protectedPage((userId) => (
-              <Profile
-                currentUserId={userId}
-                onLogout={handleLogout}
-              />
-            ))}
-          />
+        <Route
+          path="/forgot-password"
+          element={<Forgotpassword />}
+        />
 
-          <Route
-            path="/points-badges"
-            element={protectedPage((userId) => (
-              <PointsBadges
-                currentUserId={userId}
-                onLogout={handleLogout}
-              />
-            ))}
-          />
+        <Route
+          path="/reset-password"
+          element={<Resetpassword />}
+        />
+        <Route path="/reset-otp" element={<ResetOTP />} />
+        <Route
+          path="/terms-and-condition"
+          element={<TermsAndConditions />}
+        />
 
-          <Route
-            path="/community"
-            element={
-              <Community
-                currentUserId={currentUserId}
-                onLogout={handleLogout}
-              />
-            }
-          />
+        <Route
+          path="/privacy-policy"
+          element={<PrivacyPolicy />}
+        />
 
-          {/* Visitor routes */}
-          <Route path="/login" element={<Login />} />
-          <Route path="/signup" element={<SignUp />} />
-          <Route path="/otp" element={<OTP />} />
-          <Route path="/auth/callback" element={<AuthCallback />} />
+        {/* Admin routes: authorization still needs to be enforced */}
+        <Route path="/admin" element={<AdminBase />} />
 
-          <Route
-            path="/forgot-password"
-            element={<Forgotpassword />}
-          />
+        <Route
+          path="/admin/dashboard"
+          element={<Dashboard />}
+        />
 
-          <Route
-            path="/reset-password"
-            element={<Resetpassword />}
-          />
-          <Route path="/reset-otp" element={<ResetOTP />} />
-          <Route
-            path="/terms-and-condition"
-            element={<TermsAndConditions />}
-          />
+        <Route
+          path="/admin/routes"
+          element={<RouteManagement />}
+        />
 
-          <Route
-            path="/privacy-policy"
-            element={<PrivacyPolicy />}
-          />
+        <Route
+          path="/admin/post-management"
+          element={<PostManagement />}
+        />
 
-          {/* Admin routes: authorization still needs to be enforced */}
-          <Route path="/admin" element={<AdminBase />} />
+        <Route
+          path="/admin/reports"
+          element={<Reports />}
+        />
 
-          <Route
-            path="/admin/dashboard"
-            element={<Dashboard />}
-          />
+        <Route
+          path="/admin/users"
+          element={<UserManagement />}
+        />
 
-          <Route
-            path="/admin/routes"
-            element={<RouteManagement />}
-          />
-
-          <Route
-            path="/admin/post-management"
-            element={<PostManagement />}
-          />
-
-          <Route
-            path="/admin/reports"
-            element={<Reports />}
-          />
-
-          <Route
-            path="/admin/users"
-            element={<UserManagement />}
-          />
-
-          {/* Unknown routes */}
-          <Route
-            path="*"
-            element={<Navigate to="/" replace />}
-          />
-        </Routes>
-      </SavedItemsProvider>
+        {/* Unknown routes */}
+        <Route
+          path="*"
+          element={<Navigate to="/" replace />}
+        />
+          </Routes>
+        </SavedItemsProvider>
+      </RecentSearchesProvider>
     </BrowserRouter>
   );
 }

@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-
-interface Account {
-  id: string;
-  username: string;
-  email: string;
-  password: string;
-  profilePicture?: string | null;
-}
+import {
+  getAccount,
+  updateAccountPassword,
+  updateAccountUsername,
+  uploadAccountPhoto,
+  type AccountData,
+} from "@/lib/accountApi";
+import { getLegacyProfilePhotoFile } from "@/lib/legacyAccountPhoto";
 
 interface ProfileProps {
   currentUserId: string;
@@ -15,205 +15,153 @@ interface ProfileProps {
 
 const ACCOUNTS_KEY = "qroute_accounts";
 
-function getStoredAccounts(): Account[] {
+function getLegacyProfilePhoto(userId: string): File | null {
   try {
     const stored = localStorage.getItem(ACCOUNTS_KEY);
-    return stored ? (JSON.parse(stored) as Account[]) : [];
+    if (!stored) return null;
+
+    const accounts: unknown = JSON.parse(stored);
+    if (!Array.isArray(accounts)) return null;
+
+    const account = accounts.find(
+      (candidate) =>
+        typeof candidate === "object" &&
+        candidate !== null &&
+        "id" in candidate &&
+        candidate.id === userId,
+    );
+    return getLegacyProfilePhotoFile(account, userId);
   } catch {
-    return [];
+    return null;
   }
 }
 
-const SUBMITTED_KEY = "qroute_submitted_contributions";
-
-interface SubmittedContribution {
-  id: string;
-  userId: string;
-  status: "Pending" | "Approved" | "Needs Revision";
-  submittedAt: string;
-}
-
-interface RewardRecord {
-  totalPoints: number;
-  awardedContributionIds: string[];
-}
-
-const getRewardsStorageKey = (userId: string) =>
-  `qroute_rewards_${userId}`;
-
-function getStoredRewards(userId: string): RewardRecord {
+function clearLegacyAccountData(): boolean {
   try {
-    const stored = localStorage.getItem(getRewardsStorageKey(userId));
-
-    if (stored) {
-      const parsed = JSON.parse(stored) as Partial<RewardRecord>;
-
-      return {
-        totalPoints:
-          typeof parsed.totalPoints === "number" ? parsed.totalPoints : 0,
-        awardedContributionIds: Array.isArray(
-          parsed.awardedContributionIds,
-        )
-          ? parsed.awardedContributionIds
-          : [],
-      };
-    }
+    localStorage.removeItem(ACCOUNTS_KEY);
+    return true;
   } catch {
-    // Use the default rewards record if storage cannot be read.
+    return false;
   }
-
-  return {
-    totalPoints: 0,
-    awardedContributionIds: [],
-  };
 }
-
-const BADGE_MILESTONES = [
-  { name: "First Contributor", required: 1, emoji: "🌱" },
-  { name: "Route Explorer", required: 5, emoji: "🧭" },
-  { name: "Fare Guide", required: 10, emoji: "💡" },
-  { name: "Commuter Champion", required: 25, emoji: "🏆" },
-  { name: "QRoute Legend", required: 50, emoji: "⭐" },
-];
 
 function Profile({ currentUserId, onLogout }: ProfileProps) {
-  const [accounts, setAccounts] = useState<Account[]>(getStoredAccounts);
+  const [accountState, setAccountState] = useState<{
+    userId: string;
+    account: AccountData | null;
+    error: string | null;
+  }>({ userId: "", account: null, error: null });
   const [editingUsername, setEditingUsername] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
-
-  const [username, setUsername] = useState(
-    accounts.find((account) => account.id === currentUserId)?.username ?? ""
-  );
-
+  const [username, setUsername] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error">("error");
+  const [savingUsername, setSavingUsername] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const currentAccount =
+    accountState.userId === currentUserId ? accountState.account : null;
+  const loadError =
+    accountState.userId === currentUserId ? accountState.error : null;
 
-  const [rewards, setRewards] = useState<RewardRecord>(() =>
-  getStoredRewards(currentUserId),
-);
+  useEffect(() => {
+    let cancelled = false;
 
-useEffect(() => {
-  if (!currentUserId) return;
+    void (async () => {
+      try {
+        let loadedAccount = await getAccount(currentUserId);
+        const legacyPhoto = getLegacyProfilePhoto(currentUserId);
+        let migrationMessage = "";
 
-  let submittedContributions: SubmittedContribution[] = [];
+        if (legacyPhoto && loadedAccount.profilePhotoUrl === null) {
+          try {
+            loadedAccount = await uploadAccountPhoto(
+              currentUserId,
+              legacyPhoto,
+            );
+          } catch (error) {
+            migrationMessage = `Account loaded, but the old profile photo could not be migrated: ${
+              error instanceof Error ? error.message : "Please try again."
+            }`;
+          }
+        }
 
-  try {
-    const stored = localStorage.getItem(SUBMITTED_KEY);
-    submittedContributions = stored
-      ? (JSON.parse(stored) as SubmittedContribution[])
-      : [];
-  } catch {
-    return;
-  }
+        if (cancelled) return;
+        const legacyDataCleared = clearLegacyAccountData();
+        setAccountState({
+          userId: currentUserId,
+          account: loadedAccount,
+          error: null,
+        });
+        setUsername(loadedAccount.username);
+        setEditingUsername(false);
+        setChangingPassword(false);
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+        setMessage(
+          [
+            migrationMessage,
+            !legacyDataCleared
+              ? "Saved account data could not be removed from this browser."
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
+        setMessageType("error");
+      } catch (error) {
+        if (cancelled) return;
+        setAccountState({
+          userId: currentUserId,
+          account: null,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to load account information.",
+        });
+      }
+    })();
 
-  const approvedContributions = submittedContributions
-    .filter(
-      (post) =>
-        post.userId === currentUserId && post.status === "Approved",
-    )
-    .sort(
-      (a, b) =>
-        new Date(a.submittedAt).getTime() -
-        new Date(b.submittedAt).getTime(),
-    );
-
-  const currentRewards = getStoredRewards(currentUserId);
-  const awardedIds = new Set(currentRewards.awardedContributionIds);
-
-  const newlyApproved = approvedContributions.filter(
-    (post) => !awardedIds.has(post.id),
-  );
-
-  if (newlyApproved.length === 0) {
-    setRewards(currentRewards);
-    return;
-  }
-
-  let totalPoints = currentRewards.totalPoints;
-  const updatedIds = [...currentRewards.awardedContributionIds];
-
-  newlyApproved.forEach((post) => {
-    totalPoints += updatedIds.length === 0 ? 75 : 50;
-    updatedIds.push(post.id);
-  });
-
-  const updatedRewards: RewardRecord = {
-    totalPoints,
-    awardedContributionIds: updatedIds,
-  };
-
-  try {
-    localStorage.setItem(
-      getRewardsStorageKey(currentUserId),
-      JSON.stringify(updatedRewards),
-    );
-
-    setRewards(updatedRewards);
-  } catch {
-    // Keep the current rewards if the browser cannot save the update.
-    setRewards(currentRewards);
-  }
-}, [currentUserId]);
-
-  const currentAccount = accounts.find(
-    (account) => account.id === currentUserId
-  );
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserId]);
 
   const showMessage = (text: string, type: "success" | "error" = "error") => {
     setMessage(text);
     setMessageType(type);
   };
 
-  const saveAccounts = (updatedAccounts: Account[]) => {
-    localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(updatedAccounts));
-    setAccounts(updatedAccounts);
-  };
-
-  const handleProfilePhotoChange = (
+  const handleProfilePhotoChange = async (
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = event.target.files?.[0];
 
     if (!file || !currentAccount) return;
-
-    if (!file.type.startsWith("image/")) {
-      showMessage("Please select a valid image file.");
-      event.target.value = "";
-      return;
-    }
-
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      if (typeof reader.result !== "string") {
-        showMessage("Unable to read the selected image.");
-        return;
-      }
-
-      const latestAccounts = getStoredAccounts();
-
-      const updatedAccounts = latestAccounts.map((account) =>
-        account.id === currentUserId
-          ? { ...account, profilePicture: reader.result as string }
-          : account
-      );
-
-      saveAccounts(updatedAccounts);
+    setUploadingPhoto(true);
+    try {
+      const updatedAccount = await uploadAccountPhoto(currentUserId, file);
+      setAccountState({
+        userId: currentUserId,
+        account: updatedAccount,
+        error: null,
+      });
       showMessage("Profile photo updated successfully.", "success");
-    };
-
-    reader.onerror = () => {
-      showMessage("Unable to read the selected image.");
-    };
-
-    reader.readAsDataURL(file);
-    event.target.value = "";
+    } catch (error) {
+      showMessage(
+        error instanceof Error ? error.message : "Unable to update profile photo.",
+      );
+    } finally {
+      setUploadingPhoto(false);
+      event.target.value = "";
+    }
   };
 
-  const handleUsernameSave = () => {
+  const handleUsernameSave = async () => {
     const trimmedUsername = username.trim();
 
     if (!trimmedUsername) {
@@ -226,42 +174,32 @@ useEffect(() => {
       return;
     }
 
-    const latestAccounts = getStoredAccounts();
-    const updatedAccounts = latestAccounts.map((account) =>
-      account.id === currentUserId
-        ? { ...account, username: trimmedUsername }
-        : account
-    );
-
-    if (!latestAccounts.some((account) => account.id === currentUserId)) {
-      showMessage("Account not found.");
-      return;
+    setSavingUsername(true);
+    try {
+      const updatedAccount = await updateAccountUsername(
+        currentUserId,
+        trimmedUsername,
+      );
+      setAccountState({
+        userId: currentUserId,
+        account: updatedAccount,
+        error: null,
+      });
+      setUsername(updatedAccount.username);
+      setEditingUsername(false);
+      showMessage("Username updated successfully.", "success");
+    } catch (error) {
+      showMessage(
+        error instanceof Error ? error.message : "Unable to update username.",
+      );
+    } finally {
+      setSavingUsername(false);
     }
-
-    saveAccounts(updatedAccounts);
-    setUsername(trimmedUsername);
-    setEditingUsername(false);
-    showMessage("Username updated successfully.", "success");
   };
 
-  const handlePasswordSave = () => {
-    const latestAccounts = getStoredAccounts();
-    const account = latestAccounts.find(
-      (item) => item.id === currentUserId
-    );
-
-    if (!account) {
-      showMessage("Account not found.");
-      return;
-    }
-
+  const handlePasswordSave = async () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
       showMessage("Please complete all password fields.");
-      return;
-    }
-
-    if (currentPassword !== account.password) {
-      showMessage("Your current password is incorrect.");
       return;
     }
 
@@ -270,7 +208,7 @@ useEffect(() => {
       /[A-Z]/.test(newPassword) &&
       /[a-z]/.test(newPassword) &&
       /\d/.test(newPassword) &&
-      /[!@#$%^&*(),.?":{}|<>_\-]/.test(newPassword);
+      /[!@#$%^&*(),.?":{}|<>_-]/.test(newPassword);
 
     if (!strongPassword) {
       showMessage(
@@ -289,25 +227,41 @@ useEffect(() => {
       return;
     }
 
-    const updatedAccounts = latestAccounts.map((item) =>
-      item.id === currentUserId
-        ? { ...item, password: newPassword }
-        : item
-    );
-
-    saveAccounts(updatedAccounts);
-    setCurrentPassword("");
-    setNewPassword("");
-    setConfirmPassword("");
-    setChangingPassword(false);
-    showMessage("Password updated successfully.", "success");
+    setSavingPassword(true);
+    try {
+      await updateAccountPassword(
+        currentUserId,
+        currentPassword,
+        newPassword,
+      );
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setChangingPassword(false);
+      showMessage("Password updated successfully.", "success");
+    } catch (error) {
+      showMessage(
+        error instanceof Error ? error.message : "Unable to update password.",
+      );
+    } finally {
+      setSavingPassword(false);
+    }
   };
 
   if (!currentAccount) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <p className="text-sm text-gray-500">Account not found.</p>
-      </div>
+      <main className="flex min-h-screen flex-col items-center justify-center gap-4">
+        <p className="text-sm text-gray-500" role={loadError ? "alert" : undefined}>
+          {loadError || "Loading account..."}
+        </p>
+        <button
+          type="button"
+          onClick={onLogout}
+          className="text-sm font-medium text-gray-600 transition-colors hover:text-black"
+        >
+          Log Out
+        </button>
+      </main>
     );
   }
 
@@ -338,9 +292,9 @@ useEffect(() => {
       <div className="mx-auto mt-16 flex w-full max-w-[500px] flex-col items-center">
         {/* PROFILE PICTURE */}
         <div className="flex h-[130px] w-[130px] items-center justify-center overflow-hidden rounded-full border border-[#d9d9d9] bg-[#eeeeee]">
-          {currentAccount.profilePicture ? (
+          {currentAccount.profilePhotoUrl ? (
             <img
-              src={currentAccount.profilePicture}
+              src={currentAccount.profilePhotoUrl}
               alt="Profile"
               className="h-full w-full object-cover"
             />
@@ -368,74 +322,25 @@ useEffect(() => {
         </p>
 
         {/* POINTS AND BADGES */}
-<section className="mt-8 w-full rounded-xl border border-gray-200 bg-white p-5 shadow-[0_2px_8px_rgba(0,0,0,0.05)]">
-  <h2 className="text-base font-semibold text-gray-900">
-    Points and Badges
-  </h2>
+        <section className="mt-8 w-full rounded-xl border border-gray-200 bg-white p-5 shadow-[0_2px_8px_rgba(0,0,0,0.05)]">
+          <h2 className="text-base font-semibold text-gray-900">
+            Points and Badges
+          </h2>
 
-  <div className="mt-4 rounded-lg bg-[#f4f2ff] p-4">
-    <p className="text-sm font-medium text-gray-600">Total QPoints</p>
-
-    <p className="mt-1 text-3xl font-bold text-[#6355F5]">
-      {rewards.totalPoints.toLocaleString()}
-    </p>
-
-    <p className="mt-1 text-xs text-gray-500">
-      Earn points from approved contributions.
-    </p>
-  </div>
-
-  <div className="mt-5">
-    <div className="flex items-center justify-between gap-3">
-      <h3 className="text-sm font-semibold text-gray-900">
-        Earned Badges
-      </h3>
-
-      <span className="text-xs text-gray-500">
-        {
-          BADGE_MILESTONES.filter(
-            (badge) =>
-              rewards.awardedContributionIds.length >= badge.required,
-          ).length
-        } / {BADGE_MILESTONES.length}
-      </span>
-    </div>
-
-    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-      {BADGE_MILESTONES.map((badge) => {
-        const earned =
-          rewards.awardedContributionIds.length >= badge.required;
-
-        return (
-          <div
-            key={badge.name}
-            className={`flex items-center gap-3 rounded-lg border p-3 ${
-              earned
-                ? "border-[#d8d2ff] bg-[#faf9ff]"
-                : "border-gray-200 bg-gray-50 opacity-65"
-            }`}
-          >
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-xl">
-              {earned ? badge.emoji : "🔒"}
-            </div>
-
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-gray-900">
-                {badge.name}
-              </p>
-
-              <p className="mt-0.5 text-xs text-gray-500">
-                {earned
-                  ? "Badge earned"
-                  : `${badge.required} approved contributions required`}
-              </p>
-            </div>
+          <div className="mt-4 rounded-lg bg-[#f4f2ff] p-4">
+            <p className="text-sm font-medium text-gray-600">Total QPoints</p>
+            <p className="mt-1 text-sm font-medium text-[#6355F5]">
+              Not available yet
+            </p>
           </div>
-        );
-      })}
-    </div>
-  </div>
-</section>
+
+          <div className="mt-5">
+            <h3 className="text-sm font-semibold text-gray-900">
+              Earned Badges
+            </h3>
+            <p className="mt-3 text-sm text-gray-500">Not available yet</p>
+          </div>
+        </section>
 
         {message && (
           <p
@@ -452,16 +357,17 @@ useEffect(() => {
         <input
           id="profile-photo"
           type="file"
-          accept="image/*"
+          accept="image/jpeg,image/png,image/webp"
           className="hidden"
           onChange={handleProfilePhotoChange}
+          disabled={uploadingPhoto}
         />
 
         <label
           htmlFor="profile-photo"
           className="mt-6 cursor-pointer rounded-[6px] bg-[#6355F5] px-6 py-2.5 text-[12px] font-medium text-white transition-colors hover:bg-[#5547E8]"
         >
-          Change Photo
+          {uploadingPhoto ? "Uploading Photo..." : "Change Photo"}
         </label>
 
         {/* EDIT USERNAME */}
@@ -501,10 +407,11 @@ useEffect(() => {
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={handleUsernameSave}
+                  onClick={() => void handleUsernameSave()}
+                  disabled={savingUsername}
                   className="rounded-md bg-[#6355F5] px-4 py-2 text-sm font-medium text-white hover:bg-[#5547E8]"
                 >
-                  Save Username
+                  {savingUsername ? "Saving..." : "Save Username"}
                 </button>
 
                 <button
@@ -588,10 +495,11 @@ useEffect(() => {
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={handlePasswordSave}
+                  onClick={() => void handlePasswordSave()}
+                  disabled={savingPassword}
                   className="rounded-md bg-[#6355F5] px-4 py-2 text-sm font-medium text-white hover:bg-[#5547E8]"
                 >
-                  Save Password
+                  {savingPassword ? "Saving..." : "Save Password"}
                 </button>
 
                 <button

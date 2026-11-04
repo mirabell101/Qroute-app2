@@ -1,6 +1,6 @@
 import { Fragment, useEffect } from "react";
 
-import { MapPin } from "lucide-react";
+import { LocateFixed, MapPin } from "lucide-react";
 
 import {
   MapContainer,
@@ -23,6 +23,7 @@ import { findRouteStopIndex, getNextOverlappingRouteId } from "@/lib/routeMap";
 import { getMapIcon, getMapVehicleType, getVehicleMapIcon } from "@/lib/mapIcons";
 import type { MapVehicleType } from "@/lib/mapIcons";
 
+import { moveToCurrentLocation } from "./currentLocationViewport";
 import { defaultPosition } from "./useTransitMap";
 import type { Coordinates, TransitMapController } from "./useTransitMap";
 
@@ -43,7 +44,7 @@ function CurrentLocationMarker({ position }: { position: Coordinates | null }) {
 
   useEffect(() => {
     if (position) {
-      map.flyTo(position, 16);
+      moveToCurrentLocation(map, position);
     }
   }, [map, position]);
 
@@ -100,6 +101,8 @@ function PlaceViewport({ position }: { position: Coordinates | null }) {
 export function TransitMapCanvas({ map }: { map: TransitMapController }) {
   const {
     currentPosition,
+    locationStatus,
+    requestCurrentLocation,
     selectedPlace,
     displayedRouteLayers,
     displayedRoutePositions,
@@ -291,6 +294,17 @@ export function TransitMapCanvas({ map }: { map: TransitMapController }) {
           });
         })}
       </MapContainer>
+
+      <button
+        type="button"
+        aria-label="Show my location"
+        title="Show my location"
+        disabled={locationStatus === "loading"}
+        onClick={() => void requestCurrentLocation()}
+        className="absolute right-4 top-4 z-[1000] flex h-11 w-11 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-md transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <LocateFixed size={20} aria-hidden="true" />
+      </button>
     </section>
   );
 }
