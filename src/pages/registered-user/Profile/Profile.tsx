@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  getAccount,
   updateAccountPassword,
   updateAccountUsername,
   uploadAccountPhoto,
-  type AccountData,
 } from "@/lib/accountApi";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
 import { getLegacyProfilePhotoFile } from "@/lib/legacyAccountPhoto";
 
 interface ProfileProps {
@@ -46,11 +45,16 @@ function clearLegacyAccountData(): boolean {
 }
 
 function Profile({ currentUserId, onLogout }: ProfileProps) {
-  const [accountState, setAccountState] = useState<{
-    userId: string;
-    account: AccountData | null;
-    error: string | null;
-  }>({ userId: "", account: null, error: null });
+  const {
+    userId: profileUserId,
+    account,
+    error: profileError,
+    setAccount,
+  } = useAccountProfile();
+  const currentAccount = profileUserId === currentUserId ? account : null;
+  const loadError =
+    profileUserId === currentUserId ? profileError : null;
+  const initializedUserId = useRef<string | null>(null);
   const [editingUsername, setEditingUsername] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [username, setUsername] = useState("");
@@ -62,74 +66,64 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
   const [savingUsername, setSavingUsername] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
-  const currentAccount =
-    accountState.userId === currentUserId ? accountState.account : null;
-  const loadError =
-    accountState.userId === currentUserId ? accountState.error : null;
+  const [profileInitializationPending, setProfileInitializationPending] =
+    useState(true);
 
   useEffect(() => {
+    if (
+      profileUserId !== currentUserId ||
+      !currentAccount ||
+      initializedUserId.current === currentUserId
+    ) {
+      return;
+    }
+
+    initializedUserId.current = currentUserId;
     let cancelled = false;
 
     void (async () => {
-      try {
-        let loadedAccount = await getAccount(currentUserId);
-        const legacyPhoto = getLegacyProfilePhoto(currentUserId);
-        let migrationMessage = "";
+      let loadedAccount = currentAccount;
+      const legacyPhoto = getLegacyProfilePhoto(currentUserId);
+      let migrationMessage = "";
 
-        if (legacyPhoto && loadedAccount.profilePhotoUrl === null) {
-          try {
-            loadedAccount = await uploadAccountPhoto(
-              currentUserId,
-              legacyPhoto,
-            );
-          } catch (error) {
-            migrationMessage = `Account loaded, but the old profile photo could not be migrated: ${
-              error instanceof Error ? error.message : "Please try again."
-            }`;
-          }
+      if (legacyPhoto && loadedAccount.profilePhotoUrl === null) {
+        try {
+          loadedAccount = await uploadAccountPhoto(currentUserId, legacyPhoto);
+          if (cancelled) return;
+          setAccount(loadedAccount);
+        } catch (error) {
+          migrationMessage = `Account loaded, but the old profile photo could not be migrated: ${
+            error instanceof Error ? error.message : "Please try again."
+          }`;
         }
-
-        if (cancelled) return;
-        const legacyDataCleared = clearLegacyAccountData();
-        setAccountState({
-          userId: currentUserId,
-          account: loadedAccount,
-          error: null,
-        });
-        setUsername(loadedAccount.username ?? "");
-        setEditingUsername(false);
-        setChangingPassword(false);
-        setCurrentPassword("");
-        setNewPassword("");
-        setConfirmPassword("");
-        setMessage(
-          [
-            migrationMessage,
-            !legacyDataCleared
-              ? "Saved account data could not be removed from this browser."
-              : "",
-          ]
-            .filter(Boolean)
-            .join(" "),
-        );
-        setMessageType("error");
-      } catch (error) {
-        if (cancelled) return;
-        setAccountState({
-          userId: currentUserId,
-          account: null,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Unable to load account information.",
-        });
       }
+
+      if (cancelled) return;
+      const legacyDataCleared = clearLegacyAccountData();
+      setProfileInitializationPending(false);
+      setUsername(loadedAccount.username ?? "");
+      setEditingUsername(false);
+      setChangingPassword(false);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setMessage(
+        [
+          migrationMessage,
+          !legacyDataCleared
+            ? "Saved account data could not be removed from this browser."
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      setMessageType("error");
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [currentUserId]);
+  }, [currentAccount, currentUserId, profileUserId, setAccount]);
 
   const showMessage = (text: string, type: "success" | "error" = "error") => {
     setMessage(text);
@@ -145,11 +139,7 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
     setUploadingPhoto(true);
     try {
       const updatedAccount = await uploadAccountPhoto(currentUserId, file);
-      setAccountState({
-        userId: currentUserId,
-        account: updatedAccount,
-        error: null,
-      });
+      setAccount(updatedAccount);
       showMessage("Profile photo updated successfully.", "success");
     } catch (error) {
       showMessage(
@@ -180,11 +170,7 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
         currentUserId,
         trimmedUsername,
       );
-      setAccountState({
-        userId: currentUserId,
-        account: updatedAccount,
-        error: null,
-      });
+      setAccount(updatedAccount);
       setUsername(updatedAccount.username ?? "");
       setEditingUsername(false);
       showMessage("Username updated successfully.", "success");
@@ -362,14 +348,23 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
           accept="image/jpeg,image/png,image/webp"
           className="hidden"
           onChange={handleProfilePhotoChange}
-          disabled={uploadingPhoto}
+          disabled={profileInitializationPending || uploadingPhoto}
         />
 
         <label
           htmlFor="profile-photo"
-          className="mt-6 cursor-pointer rounded-[6px] bg-[#6355F5] px-6 py-2.5 text-[12px] font-medium text-white transition-colors hover:bg-[#5547E8]"
+          aria-disabled={profileInitializationPending || uploadingPhoto}
+          className={`mt-6 rounded-[6px] bg-[#6355F5] px-6 py-2.5 text-[12px] font-medium text-white transition-colors ${
+            profileInitializationPending || uploadingPhoto
+              ? "cursor-not-allowed opacity-60"
+              : "cursor-pointer hover:bg-[#5547E8]"
+          }`}
         >
-          {uploadingPhoto ? "Uploading Photo..." : "Change Photo"}
+          {profileInitializationPending
+            ? "Preparing Profile..."
+            : uploadingPhoto
+              ? "Uploading Photo..."
+              : "Change Photo"}
         </label>
 
         {/* EDIT USERNAME */}

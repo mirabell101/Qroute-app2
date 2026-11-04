@@ -11,10 +11,12 @@ import {
 import { supabase } from "./lib/supabase";
 import { SavedItemsProvider } from "./components/saved/SavedItemsContext";
 import { RecentSearchesProvider } from "./components/recent-searches/RecentSearchesContext";
+import { AccountProfileProvider } from "./components/account/AccountProfileContext";
 
 import Landing from "./pages/visitor/Landing/Landing";
 import Home from "./pages/registered-user/Home/Home";
 import Login from "./pages/visitor/login/login";
+import AuthCallback from "./pages/auth/callback";
 import SignUp from "./pages/visitor/signup/signup";
 import OTP from "./pages/visitor/OTP/OTP";
 import Forgotpassword from "./pages/visitor/Forgotpassword/Forgotpassword";
@@ -192,6 +194,10 @@ function App() {
           key={currentUserId ?? "anonymous"}
           userId={currentUserId}
         >
+          <AccountProfileProvider
+            key={currentUserId ?? "anonymous"}
+            userId={currentUserId}
+          >
           <Routes>
         {/* Public routes */}
         <Route
@@ -278,6 +284,15 @@ function App() {
         />
 
         {/* Visitor routes */}
+        <Route
+          path="/auth/callback"
+          element={
+            <AuthCallback
+              authLoading={authLoading}
+              currentUserId={currentUserId}
+            />
+          }
+        />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<SignUp />} />
         <Route path="/otp" element={<OTP />} />
@@ -336,6 +351,7 @@ function App() {
           element={<Navigate to="/" replace />}
         />
           </Routes>
+          </AccountProfileProvider>
         </SavedItemsProvider>
       </RecentSearchesProvider>
     </BrowserRouter>

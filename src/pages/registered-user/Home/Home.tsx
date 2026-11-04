@@ -9,7 +9,6 @@ import {
   MapPin,
   MessageSquare,
   TrainFront,
-  UserCircle,
 } from "lucide-react";
 
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
@@ -21,6 +20,8 @@ import {
   TransitMapStatus,
   useTransitMap,
 } from "@/components/transit-map";
+import AccountAvatar from "@/components/account/AccountAvatar";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
 import { parseSavedMapSelection } from "@/lib/routeMap";
 
 const navItems = [
@@ -37,6 +38,8 @@ interface HomeProps {
 
 export default function Home({ currentUserId, onLogout }: HomeProps) {
   const map = useTransitMap();
+  const { account, userId: profileUserId } = useAccountProfile();
+  const profileAccount = profileUserId === currentUserId ? account : null;
   const location = useLocation();
   const navigate = useNavigate();
   const handledSavedSelection = useRef<string | null>(null);
@@ -292,7 +295,12 @@ export default function Home({ currentUserId, onLogout }: HomeProps) {
               hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]
             "
           >
-            <UserCircle size={21} strokeWidth={2} />
+            <AccountAvatar
+              key={currentUserId}
+              account={profileAccount}
+              className="h-full w-full"
+              iconSize={21}
+            />
           </button>
 
           {showProfileMenu && (

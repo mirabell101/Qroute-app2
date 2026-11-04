@@ -1,78 +1,54 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { supabase } from "@/lib/supabase";
+import { useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import {
+  getOAuthCallbackDestination,
+  getOAuthCallbackError,
+} from "@/lib/authCallback";
 
 type AuthCallbackProps = {
-  onComplete?: () => void;
+  authLoading: boolean;
+  currentUserId: string | null;
 };
 
 /**
  * Handles the OAuth callback after a user is redirected back from Google.
  *
- * When Supabase uses the PKCE flow (default for SPAs), the redirect URL
- * contains a `code` query parameter. The Supabase client automatically
- * exchanges this code for a session via `exchangeCodeForSession`.
- *
- * When using the implicit flow, the redirect URL contains tokens in the
- * hash fragment, which the Supabase client detects automatically.
- *
- * This component shows a loading state while the session exchange happens
- * and displays any errors that occur during the process.
+ * The Supabase client detects the callback URL and establishes the session.
+ * This component waits for App's session validation before navigating.
  */
-function AuthCallback({ onComplete }: AuthCallbackProps) {
+function AuthCallback({
+  authLoading,
+  currentUserId,
+}: AuthCallbackProps) {
   const navigate = useNavigate();
-  const [error, setError] = useState<string | null>(null);
+  const location = useLocation();
+  const error = getOAuthCallbackError(location.search, location.hash);
 
   useEffect(() => {
-    async function handleCallback() {
-      // Check for error parameters in the URL (e.g. user denied consent)
-      const params = new URLSearchParams(window.location.search);
-      const hashParams = new URLSearchParams(window.location.hash.substring(1));
-
-      const errorParam = params.get("error") || hashParams.get("error");
-      const errorDescription =
-        params.get("error_description") || hashParams.get("error_description");
-
-      if (errorParam) {
-        setError(errorDescription || `Authentication failed: ${errorParam}`);
-        // Clean the URL without reloading the page
-        window.history.replaceState(null, "", window.location.pathname);
-        return;
-      }
-
-      // If there's a code parameter, Supabase needs to exchange it for a session.
-      // For the PKCE flow, we call exchangeCodeForSession explicitly.
-      const code = params.get("code");
-      if (code) {
-        const { error: exchangeError } =
-          await supabase.auth.exchangeCodeForSession(code);
-
-        if (exchangeError) {
-          setError(exchangeError.message);
-          window.history.replaceState(null, "", window.location.pathname);
-          return;
-        }
-      }
-
-      // Clean the URL
+    if (error) {
       window.history.replaceState(null, "", window.location.pathname);
-
-      if (onComplete) {
-        onComplete();
-      } else {
-        navigate("/home", { replace: true });
-      }
+      return;
     }
 
-    handleCallback();
-  }, [navigate, onComplete]);
+    const destination = getOAuthCallbackDestination(
+      authLoading,
+      currentUserId,
+    );
+    if (!destination) return;
+
+    window.history.replaceState(null, "", window.location.pathname);
+    navigate(destination, { replace: true });
+  }, [
+    authLoading,
+    currentUserId,
+    error,
+    location.hash,
+    location.search,
+    navigate,
+  ]);
 
   const handleReturnToSignIn = () => {
-    if (onComplete) {
-      onComplete();
-    } else {
-      navigate("/login", { replace: true });
-    }
+    navigate("/login", { replace: true });
   };
 
   if (error) {

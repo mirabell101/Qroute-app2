@@ -17,6 +17,8 @@ import {
 import { useNavigate } from "react-router-dom";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 import { CommunityPostMap } from "@/components/map/CommunityPostMap";
+import AccountAvatar from "@/components/account/AccountAvatar";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
   createCommunityComment,
   createCommunityPost,
@@ -82,6 +84,8 @@ export default function Community({
   onLogout,
 }: CommunityProps) {
   const navigate = useNavigate();
+  const { account, userId: profileUserId } = useAccountProfile();
+  const profileAccount = profileUserId === currentUserId ? account : null;
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const postsRef = useRef(posts);
   const [votes, setVotes] = useState<Record<string, CommunityVoteType>>({});
@@ -799,7 +803,12 @@ export default function Community({
           <div className="relative flex items-center gap-3">
             <Bell size={19} className="text-gray-500" />
             <button type="button" onClick={() => setProfileMenu((open) => !open)} aria-label="Profile menu" className="flex h-10 w-10 items-center justify-center rounded-full bg-[#e8eef3] text-[#12395A]">
-              <UserCircle size={23} />
+              <AccountAvatar
+                key={currentUserId ?? "anonymous"}
+                account={profileAccount}
+                className="h-full w-full"
+                iconSize={23}
+              />
             </button>
             {profileMenu && (
               <div className="absolute right-0 top-12 z-[3000] w-36 rounded-xl bg-white p-2 shadow-lg">

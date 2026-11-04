@@ -8,7 +8,6 @@ import {
   MapPin,
   MessageSquare,
   TrainFront,
-  UserCircle,
 } from "lucide-react";
 
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
@@ -20,6 +19,8 @@ import {
   TransitMapStatus,
   useTransitMap,
 } from "@/components/transit-map";
+import AccountAvatar from "@/components/account/AccountAvatar";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
 import { parseSavedMapSelection } from "@/lib/routeMap";
 
 // ==================================================
@@ -58,6 +59,8 @@ export default function Landing({
   currentUserId,
   onLogout,
 }: LandingProps) {
+  const { account, userId: profileUserId } = useAccountProfile();
+  const profileAccount = profileUserId === currentUserId ? account : null;
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
@@ -556,14 +559,11 @@ export default function Landing({
               hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]
             "
           >
-            <UserCircle
-              size={21}
-              strokeWidth={2}
-              className="
-                transition-transform
-                duration-200
-                group-hover:scale-105
-              "
+            <AccountAvatar
+              key={currentUserId ?? "anonymous"}
+              account={profileAccount}
+              className="h-full w-full transition-transform duration-200 group-hover:scale-105"
+              iconSize={21}
             />
           </button>
 
