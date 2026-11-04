@@ -34,12 +34,11 @@ import RouteManagement from "./pages/admin/route-management/route-management";
 import PostManagement from "./pages/admin/post-management/post-management";
 import Reports from "./pages/admin/reports/reports";
 import UserManagement from "./pages/admin/user-management/user-management";
+import AuthCallback from "./pages/auth/callback";
 
 function App() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-
-  // Restore the existing session and listen for authentication changes.
 
   // Restore and validate the existing Supabase session.
   useEffect(() => {
@@ -149,7 +148,6 @@ function App() {
     };
   }, []);
 
-
   // Sign out on this device/browser only.
   const handleLogout = async (): Promise<void> => {
     const { error } = await supabase.auth.signOut({
@@ -240,6 +238,7 @@ function App() {
               <RecentSearches
                 key={currentUserId ?? "anonymous"}
                 currentUserId={currentUserId}
+                onLogout={handleLogout}
               />
             )
           }
