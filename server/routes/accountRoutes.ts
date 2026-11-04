@@ -9,7 +9,6 @@ import {
   AccountRequestError,
   getAccount,
   type AuthenticatedAccountUser,
-  getProfilePhotoUrl,
   isStrongAccountPassword,
   isValidAccountUsername,
   updateAccountPassword,
@@ -31,7 +30,7 @@ const profilePhotoBody = express.raw({
 
 function getVerifiedUser(res: Response): AuthenticatedAccountUser | null {
   const user = res.locals.user as
-    | { id?: unknown; email?: unknown }
+    | { id?: unknown; email?: unknown; user_metadata?: unknown }
     | undefined;
   if (
     typeof user?.id !== "string" ||
@@ -41,7 +40,11 @@ function getVerifiedUser(res: Response): AuthenticatedAccountUser | null {
   ) {
     return null;
   }
-  return { id: user.id, email: user.email };
+  return {
+    id: user.id,
+    email: user.email,
+    userMetadata: isRecord(user.user_metadata) ? user.user_metadata : null,
+  };
 }
 
 function getAccountClient(res: Response) {
@@ -125,16 +128,9 @@ router.patch("/", async (req: Request, res: Response) => {
 
   try {
     const client = getAccountClient(res);
-    const savedUsername = await updateAccountUsername(client, user.id, username);
-    const profilePhotoUrl = await getProfilePhotoUrl(client, user.id);
-    res.json({
-      success: true,
-      account: {
-        email: user.email,
-        username: savedUsername,
-        profilePhotoUrl,
-      },
-    });
+    await updateAccountUsername(client, user.id, username);
+    const account = await getAccount(client, user);
+    res.json({ success: true, account });
   } catch (error: unknown) {
     sendAccountError(res, error);
   }

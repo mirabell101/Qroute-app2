@@ -1,12 +1,25 @@
 import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const authUsers: Record<string, { id: string; email: string }> = {
-  "token-user-1": { id: "user-1", email: "one@example.com" },
-  "token-user-2": { id: "user-2", email: "two@example.com" },
+type TestProfile = {
+  username: string | null;
+  display_name?: string | null;
 };
 
-const profiles: Record<string, { username: string }> = {
+const authUsers: Record<
+  string,
+  { id: string; email: string; user_metadata?: Record<string, unknown> }
+> = {
+  "token-user-1": { id: "user-1", email: "one@example.com" },
+  "token-user-2": { id: "user-2", email: "two@example.com" },
+  "google-token": {
+    id: "google-user",
+    email: "google@example.com",
+    user_metadata: { full_name: "Google Rider" },
+  },
+};
+
+const profiles: Record<string, TestProfile> = {
   "user-1": { username: "commuter_one" },
   "user-2": { username: "commuter_two" },
 };
@@ -47,6 +60,7 @@ describe("authenticated account routes", () => {
   beforeEach(async () => {
     profiles["user-1"] = { username: "commuter_one" };
     profiles["user-2"] = { username: "commuter_two" };
+    delete profiles["google-user"];
     uploadedPhotos.length = 0;
     profilePhotos.clear();
     let accountRoutes: express.Router | undefined;
@@ -95,7 +109,7 @@ describe("authenticated account routes", () => {
             eq: (column: string, value: string) => typeof query;
             select: (columns: string) => typeof query;
             maybeSingle: () => Promise<{
-              data: { username: string } | null;
+              data: TestProfile | null;
               error: { code: string; message: string } | null;
             }>;
           } = {
@@ -117,7 +131,8 @@ describe("authenticated account routes", () => {
           const selectProfile = () => ({
             maybeSingle: async () =>
               table === "profiles" &&
-              selectedColumns === "username" &&
+              (selectedColumns === "username" ||
+                selectedColumns === "username, display_name") &&
               selectedId === user?.id
                 ? { data: profiles[selectedId] ?? null, error: null }
                 : { data: null, error: null },
@@ -247,8 +262,47 @@ describe("authenticated account routes", () => {
       account: {
         email: "one@example.com",
         username: "commuter_one",
+        displayName: null,
         profilePhotoUrl: null,
       },
+    });
+  });
+
+  it("loads a Google profile with no username and falls back to Google display metadata", async () => {
+    profiles["google-user"] = { username: null, display_name: null };
+    const response = await fetch(`${baseUrl}/api/account`, {
+      headers: { Authorization: "Bearer google-token" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      account: {
+        email: "google@example.com",
+        username: null,
+        displayName: "Google Rider",
+        profilePhotoUrl: null,
+      },
+    });
+    expect(profiles["google-user"]).toEqual({
+      username: null,
+      display_name: null,
+    });
+  });
+
+  it("prefers the stored display name over Google metadata", async () => {
+    profiles["google-user"] = {
+      username: null,
+      display_name: "Saved Display Name",
+    };
+
+    const response = await fetch(`${baseUrl}/api/account`, {
+      headers: { Authorization: "Bearer google-token" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      account: { displayName: "Saved Display Name" },
     });
   });
 

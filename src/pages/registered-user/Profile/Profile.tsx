@@ -96,7 +96,7 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
           account: loadedAccount,
           error: null,
         });
-        setUsername(loadedAccount.username);
+        setUsername(loadedAccount.username ?? "");
         setEditingUsername(false);
         setChangingPassword(false);
         setCurrentPassword("");
@@ -185,7 +185,7 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
         account: updatedAccount,
         error: null,
       });
-      setUsername(updatedAccount.username);
+      setUsername(updatedAccount.username ?? "");
       setEditingUsername(false);
       showMessage("Username updated successfully.", "success");
     } catch (error) {
@@ -314,7 +314,9 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
 
         {/* ACCOUNT INFORMATION */}
         <h1 className="mt-6 text-[24px] font-semibold text-black">
-          {currentAccount.username}
+          {currentAccount.displayName ||
+            currentAccount.username ||
+            currentAccount.email}
         </h1>
 
         <p className="mt-1 text-[13px] text-gray-500">
@@ -381,7 +383,7 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
               <button
                 type="button"
                 onClick={() => {
-                  setUsername(currentAccount.username);
+                  setUsername(currentAccount.username ?? "");
                   setEditingUsername(true);
                   setMessage("");
                 }}
@@ -417,7 +419,7 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
                 <button
                   type="button"
                   onClick={() => {
-                    setUsername(currentAccount.username);
+                    setUsername(currentAccount.username ?? "");
                     setEditingUsername(false);
                     setMessage("");
                   }}
@@ -429,7 +431,7 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
             </div>
           ) : (
             <p className="mt-2 text-sm text-gray-600">
-              {currentAccount.username}
+              {currentAccount.username ?? "Not set"}
             </p>
           )}
         </section>

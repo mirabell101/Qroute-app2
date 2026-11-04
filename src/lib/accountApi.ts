@@ -3,7 +3,8 @@ import { supabase } from "@/lib/supabase";
 
 export interface AccountData {
   email: string;
-  username: string;
+  username: string | null;
+  displayName: string | null;
   profilePhotoUrl: string | null;
 }
 
@@ -22,7 +23,14 @@ function parseAccount(value: unknown): AccountData {
   if (
     !isRecord(value) ||
     typeof value.email !== "string" ||
-    typeof value.username !== "string" ||
+    !(
+      value.username === null ||
+      typeof value.username === "string"
+    ) ||
+    !(
+      value.displayName === null ||
+      typeof value.displayName === "string"
+    ) ||
     !(
       value.profilePhotoUrl === null ||
       typeof value.profilePhotoUrl === "string"
@@ -33,6 +41,7 @@ function parseAccount(value: unknown): AccountData {
   return {
     email: value.email,
     username: value.username,
+    displayName: value.displayName,
     profilePhotoUrl: value.profilePhotoUrl,
   };
 }

@@ -34,7 +34,6 @@ import RouteManagement from "./pages/admin/route-management/route-management";
 import PostManagement from "./pages/admin/post-management/post-management";
 import Reports from "./pages/admin/reports/reports";
 import UserManagement from "./pages/admin/user-management/user-management";
-import AuthCallback from "./pages/auth/callback";
 
 function App() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -238,7 +237,6 @@ function App() {
               <RecentSearches
                 key={currentUserId ?? "anonymous"}
                 currentUserId={currentUserId}
-                onLogout={handleLogout}
               />
             )
           }

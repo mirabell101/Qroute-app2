@@ -7,11 +7,13 @@ const PROFILE_PHOTO_URL_TTL_SECONDS = 60 * 60;
 export interface AuthenticatedAccountUser {
   id: string;
   email: string;
+  userMetadata?: Record<string, unknown> | null;
 }
 
 export interface AccountResponse {
   email: string;
-  username: string;
+  username: string | null;
+  displayName: string | null;
   profilePhotoUrl: string | null;
 }
 
@@ -46,18 +48,32 @@ export async function getAccount(
 ): Promise<AccountResponse> {
   const { data: profile, error: profileError } = await client
     .from("profiles")
-    .select("username")
+    .select("username, display_name")
     .eq("id", user.id)
     .maybeSingle();
 
   if (profileError) throw profileError;
-  if (!profile || typeof profile.username !== "string") {
+  if (!profile) {
     throw new AccountRequestError(404, "Account profile not found.");
   }
 
+  const storedDisplayName =
+    typeof profile.display_name === "string" && profile.display_name.trim()
+      ? profile.display_name
+      : null;
+  const metadataDisplayName = [
+    user.userMetadata?.display_name,
+    user.userMetadata?.full_name,
+    user.userMetadata?.name,
+  ].find(
+    (value): value is string =>
+      typeof value === "string" && value.trim().length > 0,
+  ) ?? null;
+
   return {
     email: user.email,
-    username: profile.username,
+    username: typeof profile.username === "string" ? profile.username : null,
+    displayName: storedDisplayName ?? metadataDisplayName,
     profilePhotoUrl: await getProfilePhotoUrl(client, user.id),
   };
 }

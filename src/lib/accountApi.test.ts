@@ -51,7 +51,7 @@ describe("account API client", () => {
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
-  it("loads the account through Express using the verified session token", async () => {
+  it("loads a profile with no username through Express using the verified session token", async () => {
     mocks.fetch.mockResolvedValue({
       ok: true,
       status: 200,
@@ -59,7 +59,8 @@ describe("account API client", () => {
         success: true,
         account: {
           email: "one@example.com",
-          username: "commuter_one",
+          username: null,
+          displayName: "Google Rider",
           profilePhotoUrl: null,
         },
       }),
@@ -67,7 +68,8 @@ describe("account API client", () => {
 
     await expect(accountApi?.getAccount("user-1")).resolves.toEqual({
       email: "one@example.com",
-      username: "commuter_one",
+      username: null,
+      displayName: "Google Rider",
       profilePhotoUrl: null,
     });
     const [url, options] = mocks.fetch.mock.calls[0] as [
