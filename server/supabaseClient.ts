@@ -50,6 +50,36 @@ export function getSupabaseClientForAccessToken(accessToken: string) {
   });
 }
 
+export class SupabaseUserUpdateError extends Error {
+  constructor(public readonly status: number) {
+    super("Supabase Auth user update failed.");
+    this.name = "SupabaseUserUpdateError";
+  }
+}
+
+export async function updateSupabaseUserPassword(
+  accessToken: string,
+  password: string,
+): Promise<void> {
+  if (!supabaseUrl || !supabasePublishableKey) {
+    throw new Error("Missing Supabase Auth configuration.");
+  }
+
+  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    method: "PUT",
+    headers: {
+      apikey: supabasePublishableKey,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ password }),
+  });
+
+  if (!response.ok) {
+    throw new SupabaseUserUpdateError(response.status);
+  }
+}
+
 // Privileged client for trusted backend operations only.
 export function getSupabaseAdminClient() {
   if (!supabaseUrl || !supabaseSecretKey) {

@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import qrouteLogo from "@/assets/logoboi.png";
 import { API_BASE_URL } from "@/lib/api";
+import { validateRecoveryEmail } from "@/lib/passwordRecovery";
 
 function Forgotpassword() {
   const navigate = useNavigate();
@@ -12,21 +13,30 @@ function Forgotpassword() {
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  const isSubmitting = useRef(false);
 
-  const validateEmail = (value: string) => {
-    if (!value.trim()) {
-      return "Email address is required.";
-    }
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return;
 
-    if (!/^[^\s@]+@gmail\.com$/i.test(value.trim())) {
-      return "Please enter a valid Gmail address.";
-    }
+    const timeout = window.setTimeout(() => {
+      setCooldownSeconds((remaining) => Math.max(0, remaining - 1));
+    }, 1000);
 
-    return "";
-  };
+    return () => window.clearTimeout(timeout);
+  }, [cooldownSeconds]);
 
   const handleContinue = async () => {
-    const emailValidation = validateEmail(email);
+    if (
+      isSubmitting.current ||
+      hasSubmitted ||
+      cooldownSeconds > 0
+    ) {
+      return;
+    }
+
+    const emailValidation = validateRecoveryEmail(email);
 
     setEmailError(emailValidation);
 
@@ -36,6 +46,7 @@ function Forgotpassword() {
 
     const normalizedEmail = email.trim().toLowerCase();
 
+    isSubmitting.current = true;
     setIsLoading(true);
 
     try {
@@ -52,26 +63,48 @@ function Forgotpassword() {
         }
       );
 
-      const data = await response.json();
+      const data: unknown = await response.json().catch(() => null);
 
-      if (!response.ok || !data.success) {
+      if (response.status === 429) {
+        const responseBody =
+          typeof data === "object" && data !== null ? data : null;
+        const retryAfterSeconds =
+          responseBody &&
+          "retryAfterSeconds" in responseBody &&
+          typeof responseBody.retryAfterSeconds === "number" &&
+          Number.isInteger(responseBody.retryAfterSeconds) &&
+          responseBody.retryAfterSeconds > 0
+            ? Math.min(responseBody.retryAfterSeconds, 15 * 60)
+            : 60;
+
+        setCooldownSeconds(retryAfterSeconds);
         setEmailError(
-          data.message ||
-            "Unable to process your request. Please try again."
+          responseBody &&
+            "message" in responseBody &&
+            typeof responseBody.message === "string"
+            ? responseBody.message
+            : "Password recovery requests are temporarily limited. Please wait before trying again.",
         );
         return;
       }
 
-      navigate("/reset-otp", {
-        state: {
-          email: normalizedEmail,
-        },
-      });
+      if (
+        !response.ok ||
+        typeof data !== "object" ||
+        data === null ||
+        !("success" in data) ||
+        data.success !== true
+      ) {
+        setEmailError("Unable to process your request. Please try again.");
+        return;
+      }
+
+      setEmailError("");
+      setHasSubmitted(true);
     } catch {
-      setEmailError(
-        "Unable to connect to the server. Please try again."
-      );
+      setEmailError("Unable to process your request. Please try again.");
     } finally {
+      isSubmitting.current = false;
       setIsLoading(false);
     }
   };
@@ -100,73 +133,104 @@ function Forgotpassword() {
           </div>
         </div>
 
-        {/* EMAIL */}
-        <div className="mt-6">
-          <label
-            htmlFor="email"
-            className="text-[12px] font-medium text-black"
-          >
-            Gmail
-          </label>
-
-          <div className="relative mt-1.5">
-            <Input
-              id="email"
-              type="email"
-              placeholder="Enter your Gmail address"
-              value={email}
-              disabled={isLoading}
-              onChange={(event) => {
-                setEmail(event.target.value);
-
-                if (emailError) {
-                  setEmailError("");
-                }
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  void handleContinue();
-                }
-              }}
-              className={`h-9 rounded-[5px] border px-3 text-[12px] shadow-none ${
-                emailError
-                  ? "border-red-500 focus-visible:ring-red-500"
-                  : "border-[#b8b8b8]"
-              }`}
-            />
-          </div>
-
-          {emailError && (
-            <p className="mt-1 px-1 text-[10px] leading-tight text-red-500">
-              {emailError}
+        {hasSubmitted ? (
+          <div className="mt-6 text-center">
+            <p role="status" className="text-[12px] leading-relaxed text-gray-700">
+              If an account exists for that email, a password reset link will
+              be sent. Check your inbox.
             </p>
-          )}
-        </div>
+            <Button
+              type="button"
+              onClick={() => navigate("/login")}
+              className="mt-5 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8]"
+            >
+              Return to Sign In
+            </Button>
+          </div>
+        ) : (
+          <>
+            {/* EMAIL */}
+            <div className="mt-6">
+              <label
+                htmlFor="email"
+                className="text-[12px] font-medium text-black"
+              >
+                Gmail
+              </label>
 
-        {/* CONTINUE */}
-        <Button
-          type="button"
-          disabled={isLoading}
-          onClick={() => void handleContinue()}
-          className="mt-5 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8]"
-        >
-          {isLoading ? "Sending code..." : "Continue"}
-        </Button>
+              <div className="relative mt-1.5">
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  maxLength={254}
+                  placeholder="Enter your Gmail address"
+                  value={email}
+                  disabled={isLoading}
+                  onChange={(event) => {
+                    setEmail(event.target.value);
+
+                    if (emailError) {
+                      setEmailError("");
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      void handleContinue();
+                    }
+                  }}
+                  className={`h-9 rounded-[5px] border px-3 text-[12px] shadow-none ${
+                    emailError
+                      ? "border-red-500 focus-visible:ring-red-500"
+                      : "border-[#b8b8b8]"
+                  }`}
+                />
+              </div>
+
+              {emailError && (
+                <p
+                  role="alert"
+                  className="mt-1 px-1 text-[10px] leading-tight text-red-500"
+                >
+                  {emailError}
+                </p>
+              )}
+            </div>
+
+            {/* CONTINUE */}
+            <Button
+              type="button"
+              disabled={isLoading || cooldownSeconds > 0}
+              onClick={() => void handleContinue()}
+              className="mt-5 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8]"
+            >
+              {isLoading
+                ? "Sending link..."
+                : cooldownSeconds > 0
+                  ? `Try again in ${Math.floor(cooldownSeconds / 60)}:${String(
+                      cooldownSeconds % 60,
+                    ).padStart(2, "0")}`
+                  : "Send Reset Link"}
+            </Button>
+          </>
+        )}
 
         {/* BACK TO LOGIN */}
-        <div className="mt-4 text-center text-[10px]">
-          <span className="text-gray-600">
-            Remember your password?{" "}
-          </span>
+        {!hasSubmitted && (
+          <div className="mt-4 text-center text-[10px]">
+            <span className="text-gray-600">
+              Remember your password?{" "}
+            </span>
 
-          <button
-            type="button"
-            onClick={() => navigate("/login")}
-            className="font-semibold text-[#6C3FF5] hover:underline"
-          >
-            Sign In
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => navigate("/login")}
+              className="font-semibold text-[#6C3FF5] hover:underline"
+            >
+              Sign In
+            </button>
+          </div>
+        )}
       </div>
     </main>
   );

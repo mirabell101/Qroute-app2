@@ -1,7 +1,12 @@
 
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
-import { getSupabaseClient } from "../../supabaseClient.ts";
+import requireAuth from "../../middleware/requireAuth.ts";
+import { isStrongAccountPassword } from "../../account.ts";
+import {
+  SupabaseUserUpdateError,
+  updateSupabaseUserPassword,
+} from "../../supabaseClient.ts";
 
 const router = Router();
 
@@ -12,67 +17,44 @@ const resetPasswordLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-function isStrongPassword(password: string): boolean {
-  return (
-    password.length >= 8 &&
-    /[A-Z]/.test(password) &&
-    /[a-z]/.test(password) &&
-    /[0-9]/.test(password) &&
-    /[!@#$%^&*(),.?":{}|<>_\-\\]/.test(password)
-  );
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-router.post("/", resetPasswordLimiter, async (req, res) => {
+router.post("/", resetPasswordLimiter, requireAuth, async (req, res) => {
   try {
-    const { access_token, refresh_token, password } = req.body ?? {};
-
     if (
-      typeof access_token !== "string" ||
-      !access_token ||
-      typeof refresh_token !== "string" ||
-      !refresh_token ||
-      typeof password !== "string" ||
-      !isStrongPassword(password)
+      !isRecord(req.body) ||
+      Object.keys(req.body).length !== 1 ||
+      typeof req.body.password !== "string" ||
+      !isStrongAccountPassword(req.body.password)
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Provide a valid recovery session and a password that meets all requirements.",
+        message: "Provide a password that meets all requirements.",
       });
     }
 
-    const supabase = getSupabaseClient();
-
-    // Supabase must validate the recovery session.
-    const { data: sessionData, error: sessionError } =
-      await supabase.auth.setSession({
-        access_token,
-        refresh_token,
-      });
-
-    if (sessionError || !sessionData.session || !sessionData.user) {
+    const accessToken = res.locals.accessToken;
+    if (typeof accessToken !== "string" || !accessToken) {
       return res.status(401).json({
         success: false,
         message:
-          "Your recovery session is invalid or expired. Please request a new recovery code.",
+          "Your recovery session is invalid or expired. Please request a new recovery link.",
       });
     }
 
-    const { error: updateError } = await supabase.auth.updateUser({
-      password,
-    });
-
-    if (updateError) {
-      console.error("Password update failed:", {
-        code: updateError.code,
-        message: updateError.message,
-      });
-
-      return res.status(400).json({
-        success: false,
-        message:
-          "Unable to update your password. Please try again.",
-      });
+    try {
+      await updateSupabaseUserPassword(accessToken, req.body.password);
+    } catch (error) {
+      if (error instanceof SupabaseUserUpdateError && error.status === 401) {
+        return res.status(401).json({
+          success: false,
+          message:
+            "Your recovery session is invalid or expired. Please request a new recovery link.",
+        });
+      }
+      throw error;
     }
 
     return res.status(200).json({
@@ -80,11 +62,12 @@ router.post("/", resetPasswordLimiter, async (req, res) => {
       message: "Password updated successfully. Please sign in.",
     });
   } catch (error) {
-    console.error("Password reset failed.");
+    console.error("Password update failed.");
 
-    return res.status(500).json({
+    return res.status(502).json({
       success: false,
-      message: "An unexpected error occurred. Please try again.",
+      message:
+        "Unable to update your password. Please try again.",
     });
   }
 });

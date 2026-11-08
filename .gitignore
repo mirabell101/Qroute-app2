@@ -27,8 +27,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-*.test.ts
-*.test.tsx
 
 # Environment variables
 .env

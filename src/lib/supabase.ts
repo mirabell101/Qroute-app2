@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { shouldPersistSupabaseSession } from "./passwordRecovery";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabasePublishableKey =
@@ -13,7 +14,10 @@ export const supabase = createClient(
   supabasePublishableKey,
   {
     auth: {
-      persistSession: true,
+      persistSession:
+        typeof window === "undefined"
+          ? true
+          : shouldPersistSupabaseSession(window.location.pathname),
       autoRefreshToken: true,
       detectSessionInUrl: true,
     },
