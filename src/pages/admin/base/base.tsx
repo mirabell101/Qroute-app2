@@ -10,6 +10,7 @@ import {
   TrainFront,
   UserCircle,
 } from "lucide-react";
+import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
 
 import {
   TransitMapCanvas,
@@ -40,6 +41,10 @@ const navItems = [
     label: "Community",
     icon: MessageSquare,
   },
+  {
+    label: "Profile",
+    icon: UserCircle,
+  },
 ];
 
 // ==================================================
@@ -52,8 +57,9 @@ export default function Base() {
   // Shared map state (search, routes, trip selection, fares).
   const map = useTransitMap();
 
-  const handleClick = (name: string) => {
-    console.log(`${name} clicked`);
+  const navigateTo = (label: string) => {
+    const destination = getAdminNavigationDestination(label);
+    if (destination) navigate(destination);
   };
 
   const refreshPage = () => {
@@ -158,7 +164,7 @@ export default function Base() {
               <button
                 key={item.label}
                 type="button"
-                onClick={() => handleClick(item.label)}
+                onClick={() => navigateTo(item.label)}
                 className="
                   group
                   flex
@@ -303,9 +309,12 @@ export default function Base() {
 
           <button
             type="button"
-            onClick={() => handleClick("Jeep")}
+            disabled
+            title="Map filters are unavailable because the map controller has no filter action."
             className="
               group
+              cursor-not-allowed
+              opacity-50
               flex
               h-[52px]
               w-[52px]
@@ -348,9 +357,12 @@ export default function Base() {
 
           <button
             type="button"
-            onClick={() => handleClick("Bus")}
+            disabled
+            title="Map filters are unavailable because the map controller has no filter action."
             className="
               group
+              cursor-not-allowed
+              opacity-50
               flex
               h-[52px]
               w-[52px]
@@ -393,9 +405,12 @@ export default function Base() {
 
           <button
             type="button"
-            onClick={() => handleClick("Train")}
+            disabled
+            title="Map filters are unavailable because the map controller has no filter action."
             className="
               group
+              cursor-not-allowed
+              opacity-50
               flex
               h-[52px]
               w-[52px]
@@ -453,10 +468,12 @@ export default function Base() {
 
           <button
             type="button"
-            onClick={() => handleClick("Notifications")}
-            title="Notifications"
+            disabled
+            title="Notifications are unavailable because no notification destination exists."
             className="
               group
+              cursor-not-allowed
+              opacity-50
               flex
               h-[45px]
               w-[45px]
@@ -487,7 +504,7 @@ export default function Base() {
 
           <button
             type="button"
-            onClick={() => handleClick("Profile")}
+            onClick={() => navigateTo("Profile")}
             title="Profile"
             className="
               group

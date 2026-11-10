@@ -2,6 +2,7 @@
 import "dotenv/config";
 import authRoutes from './routes/authRoutes.ts';
 import accountRoutes from "./routes/accountRoutes.ts";
+import adminRoutes from "./routes/adminRoutes.ts";
 import communityRoutes from "./routes/communityRoutes.ts";
 import recentSearchesRoutes from "./routes/recentSearchesRoutes.ts";
 import express, {
@@ -93,6 +94,7 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/account", accountRoutes);
+app.use("/api/admin", adminRoutes);
 app.use("/api/community", communityRoutes);
 app.use("/api/recent-searches", recentSearchesRoutes);
 

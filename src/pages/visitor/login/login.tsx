@@ -4,6 +4,8 @@ import { Eye, EyeOff } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
 import { API_BASE_URL } from "@/lib/api";
+import { completeSignIn } from "@/lib/authSession";
+import { getOAuthCallbackUrl } from "@/lib/authRedirect";
 
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -122,8 +124,32 @@ function Login() {
         return;
       }
 
+      // Both password and Google sign-in complete through the same trusted
+      // role check. A new account receives only the registered-user role.
+      const requestedPath = new URLSearchParams(
+        window.location.search
+      ).get("next");
+      let destination: string;
+
+      try {
+        destination = await completeSignIn(
+          result.session.access_token,
+          requestedPath
+        );
+      } catch (error) {
+        // Do not leave a half-authenticated session without a verified role.
+        await supabase.auth.signOut({ scope: "local" });
+
+        setLoginError(
+          error instanceof Error
+            ? error.message
+            : "Unable to verify your account permissions."
+        );
+        return;
+      }
+
       // Continue the existing successful-login flow.
-      navigate("/home", {
+      navigate(destination, {
         replace: true,
         state: {
           user: result.user,
@@ -144,19 +170,36 @@ function Login() {
     setLoginError("");
     setIsSubmitting(true);
 
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-        queryParams: {
-          prompt: "select_account",
-        },
-      },
-    });
+    try {
+      // Only the configured QRoute origin is used. Supabase must also have
+      // this exact callback URL in Authentication -> URL Configuration.
+      const redirectTo = getOAuthCallbackUrl({
+        configuredAppUrl: import.meta.env.VITE_APP_URL,
+        currentOrigin: window.location.origin,
+        allowLoopback: import.meta.env.DEV,
+      });
 
-    if (error) {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo,
+          queryParams: {
+            prompt: "select_account",
+          },
+        },
+      });
+
+      if (error) {
+        setIsSubmitting(false);
+        setLoginError(error.message);
+      }
+    } catch (error) {
       setIsSubmitting(false);
-      setLoginError(error.message);
+      setLoginError(
+        error instanceof Error
+          ? error.message
+          : "Google sign-in is not configured."
+      );
     }
   };
 

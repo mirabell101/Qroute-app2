@@ -1,5 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
+import {
+  getAdminRoutes,
+  type AdminRouteRecord,
+} from "@/lib/adminApi";
+import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
 import {
   LayoutDashboard,
   Route as RouteIcon,
@@ -9,131 +15,119 @@ import {
   Settings,
   Bell,
   Search,
-  Plus,
   UserRound,
-  Pencil,
   Eye,
   X,
   Bus,
   TrainFront,
   CarFront,
-  MapPin,
-  ArrowLeftRight,
 } from "lucide-react";
 
-type TransportType = "Jeep" | "Bus" | "Train";
-type TransportRoute = {
-  id: number;
-  type: TransportType;
-  name: string;
-  origin: string;
-  destination: string;
-  fare: number;
-};
-
-const filters = ["All", "Jeep", "Bus", "Train"] as const;
-type Filter = (typeof filters)[number];
-
 const navigationItems = [
-  { label: "Dashboard", icon: LayoutDashboard, path: "/admin/dashboard" },
-  { label: "Route Management", icon: RouteIcon, path: "/admin/routes" },
-  { label: "Post Management", icon: FileText, path: "/admin/post-management" },
-  { label: "Reports", icon: Flag, path: "/admin/reports" },
-  { label: "User Management", icon: Users, path: "/admin/users" },
-  { label: "Settings", icon: Settings, path: "/admin/settings" },
+  { label: "Dashboard", icon: LayoutDashboard },
+  { label: "Route Management", icon: RouteIcon },
+  { label: "Post Management", icon: FileText },
+  { label: "Reports", icon: Flag },
+  { label: "User Management", icon: Users },
+  { label: "Settings", icon: Settings },
 ];
+
+function routeTransportType(route: AdminRouteRecord): string {
+  return (
+    route.transport_types?.name ??
+    route.transport_variants?.name ??
+    "Transport type unavailable"
+  );
+}
+
+function routeStatus(route: AdminRouteRecord): string {
+  if (route.is_deleted) return "Deleted";
+  if (route.is_banned) return "Banned";
+  if (!route.is_active) return "Inactive";
+  return route.moderation_status;
+}
 
 export default function RouteManagement() {
   const navigate = useNavigate();
-  const [routes, setRoutes] = useState<TransportRoute[]>([]);
-  const [activeFilter, setActiveFilter] = useState<Filter>("All");
+  const { userId } = useAccountProfile();
+  const [routes, setRoutes] = useState<AdminRouteRecord[]>([]);
+  const [activeFilter, setActiveFilter] = useState("All");
   const [searchTerm, setSearchTerm] = useState("");
-  const [modalMode, setModalMode] = useState<"add" | "edit" | "view" | null>(null);
-  const [selectedRoute, setSelectedRoute] = useState<TransportRoute | null>(null);
-  const [form, setForm] = useState({
-    type: "Jeep" as TransportType,
-    name: "",
-    origin: "",
-    destination: "",
-    fare: "",
-  });
+  const [selectedRoute, setSelectedRoute] = useState<AdminRouteRecord | null>(
+    null,
+  );
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+
+    void getAdminRoutes(userId ?? "")
+      .then((data) => {
+        if (active) {
+          setRoutes(data);
+          setErrorMessage(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setRoutes([]);
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load routes.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [userId, retryCount]);
+
+  const filters = useMemo(
+    () => [
+      "All",
+      ...new Set(
+        routes
+          .map(
+            (route) =>
+              route.transport_types?.name ??
+              route.transport_variants?.name ??
+              "",
+          )
+          .filter(Boolean),
+      ),
+    ],
+    [routes],
+  );
 
   const filteredRoutes = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
     return routes.filter((route) => {
-      const matchesFilter = activeFilter === "All" || route.type === activeFilter;
-      const matchesSearch =
-        !query ||
-        route.name.toLowerCase().includes(query) ||
-        route.origin.toLowerCase().includes(query) ||
-        route.destination.toLowerCase().includes(query) ||
-        route.type.toLowerCase().includes(query);
+      const transportType = routeTransportType(route);
+      const stopNames = route.route_stops
+        .map((stop) => stop.terminals?.name ?? stop.stops?.name ?? "")
+        .join(" ");
+      const matchesFilter =
+        activeFilter === "All" || transportType === activeFilter;
+      const matchesSearch = `${route.name} ${transportType} ${stopNames}`
+        .toLowerCase()
+        .includes(query);
       return matchesFilter && matchesSearch;
     });
   }, [routes, activeFilter, searchTerm]);
 
-  const resetForm = () =>
-    setForm({ type: "Jeep", name: "", origin: "", destination: "", fare: "" });
-
-  const openAddModal = () => {
-    setSelectedRoute(null);
-    resetForm();
-    setModalMode("add");
-  };
-
-  const openEditModal = (route: TransportRoute) => {
-    setSelectedRoute(route);
-    setForm({
-      type: route.type,
-      name: route.name,
-      origin: route.origin,
-      destination: route.destination,
-      fare: String(route.fare),
-    });
-    setModalMode("edit");
-  };
-
-  const closeModal = () => {
-    setModalMode(null);
-    setSelectedRoute(null);
-  };
-
-  const saveRoute = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const fare = Number(form.fare);
-    if (
-      !form.name.trim() ||
-      !form.origin.trim() ||
-      !form.destination.trim() ||
-      form.fare.trim() === "" ||
-      !Number.isFinite(fare) ||
-      fare < 0
-    ) return;
-
-    const values = {
-      type: form.type,
-      name: form.name.trim(),
-      origin: form.origin.trim(),
-      destination: form.destination.trim(),
-      fare,
-    };
-
-    if (modalMode === "edit" && selectedRoute) {
-      setRoutes((current) =>
-        current.map((route) =>
-          route.id === selectedRoute.id ? { ...route, ...values } : route
-        )
-      );
-    } else {
-      setRoutes((current) => [...current, { id: Date.now(), ...values }]);
-    }
-    closeModal();
-  };
-
-  const transportIcon = (type: TransportType) => {
-    if (type === "Jeep") return <CarFront size={16} />;
-    if (type === "Bus") return <Bus size={16} />;
-    return <TrainFront size={16} />;
+  const transportIcon = (type: string) => {
+    const normalized = type.toLowerCase();
+    if (normalized.includes("bus")) return <Bus size={16} />;
+    if (normalized.includes("train")) return <TrainFront size={16} />;
+    if (normalized.includes("jeep")) return <CarFront size={16} />;
+    return <RouteIcon size={16} />;
   };
 
   return (
@@ -163,25 +157,30 @@ export default function RouteManagement() {
             {navigationItems.map((item) => {
               const Icon = item.icon;
               const active = item.label === "Route Management";
+              const destination = getAdminNavigationDestination(item.label);
               return (
                 <button
                   key={item.label}
                   type="button"
-                  onClick={() => {
-                    if (item.path !== "/admin/routes") navigate(item.path);
-                  }}
+                  disabled={!destination}
+                  title={
+                    destination
+                      ? undefined
+                      : `${item.label} is unavailable in the current system.`
+                  }
+                  onClick={() => destination && navigate(destination)}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${
                     active
                       ? "bg-[#CFD5DB] font-semibold text-[#102E4D]"
-                      : "text-slate-200 hover:bg-white/10 hover:text-white"
+                      : destination
+                        ? "text-slate-200 hover:bg-white/10 hover:text-white"
+                        : "cursor-not-allowed text-slate-400"
                   }`}
                 >
                   <Icon size={19} strokeWidth={1.8} />
                   <span>{item.label}</span>
-                  {item.label === "Reports" && (
-                    <span className="ml-auto rounded-full bg-orange-500 px-2 py-0.5 text-[10px] font-bold text-white">
-                      12
-                    </span>
+                  {!destination && (
+                    <span className="ml-auto text-[10px]">Unavailable</span>
                   )}
                 </button>
               );
@@ -203,7 +202,11 @@ export default function RouteManagement() {
           </div>
           <button
             type="button"
-            onClick={() => navigate("/")}
+            onClick={() => {
+              const destination =
+                getAdminNavigationDestination("Switch to User Mode");
+              if (destination) navigate(destination);
+            }}
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-4 py-3 text-sm font-medium transition hover:bg-white/10"
           >
             <UserRound size={17} />
@@ -219,7 +222,7 @@ export default function RouteManagement() {
               Route Management
             </h2>
             <p className="mt-1 text-xs text-slate-500 sm:text-sm">
-              Manage transport routes and information
+              Review route and ordered-stop records
             </p>
           </div>
           <div className="flex items-center gap-3 sm:gap-5">
@@ -227,10 +230,11 @@ export default function RouteManagement() {
             <button
               type="button"
               aria-label="Notifications"
-              className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white transition hover:bg-slate-100"
+              disabled
+              title="Notifications are unavailable because no notification destination exists."
+              className="relative flex h-10 w-10 cursor-not-allowed items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-slate-400"
             >
-              <Bell size={19} className="text-slate-600" />
-              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+                <Bell size={19} />
             </button>
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
             <div className="flex items-center gap-2.5">
@@ -253,17 +257,13 @@ export default function RouteManagement() {
                 Transport Routes
               </h3>
               <p className="mt-2 text-sm text-slate-500">
-                Add, review, and maintain the transport routes available in QRoute.
+                Review routes, transport types, and their ordered stops.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={openAddModal}
-              className="inline-flex w-fit items-center gap-2 rounded-lg bg-[#102E4D] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#19476D]"
-            >
-              <Plus size={17} />
-              Add Route
-            </button>
+            <p className="max-w-md rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Route changes are unavailable because the existing route form
+              does not match QRoute&apos;s multi-stop and fare model.
+            </p>
           </section>
 
           <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_3px_14px_rgba(15,23,42,0.035)] sm:p-6">
@@ -273,7 +273,7 @@ export default function RouteManagement() {
                 <input
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Search route, origin, or destination..."
+                  placeholder="Search route, stop, or transport type..."
                   aria-label="Search routes"
                   className="w-full border-0 bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
                 />
@@ -326,8 +326,8 @@ export default function RouteManagement() {
                     <tr>
                       <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Type</th>
                       <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Route Name</th>
-                      <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Origin to Destination</th>
-                      <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Fare</th>
+                      <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Ordered Stops</th>
+                      <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Status</th>
                       <th className="px-5 py-4 text-center text-xs font-semibold uppercase tracking-wide">Actions</th>
                     </tr>
                   </thead>
@@ -337,32 +337,29 @@ export default function RouteManagement() {
                         <tr key={route.id} className="transition hover:bg-slate-50">
                           <td className="px-5 py-4">
                             <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700">
-                              {transportIcon(route.type)}
-                              {route.type}
+                              {transportIcon(routeTransportType(route))}
+                              {routeTransportType(route)}
                             </span>
                           </td>
                           <td className="px-5 py-4 font-semibold text-slate-800">{route.name}</td>
                           <td className="px-5 py-4 text-slate-600">
-                            <span className="inline-flex items-center gap-2">
-                              <MapPin size={15} className="text-slate-400" />
-                              {route.origin}
-                              <ArrowLeftRight size={14} className="text-slate-400" />
-                              {route.destination}
-                            </span>
+                            {route.route_stops
+                              .map(
+                                (stop) =>
+                                  stop.terminals?.name ??
+                                  stop.stops?.name ??
+                                  "Point unavailable",
+                              )
+                              .join(" → ") || "No stops recorded"}
                           </td>
-                          <td className="px-5 py-4 font-medium text-slate-700">₱{route.fare.toFixed(2)}</td>
+                          <td className="px-5 py-4 text-slate-600">
+                            {routeStatus(route)}
+                          </td>
                           <td className="px-5 py-4">
                             <div className="flex justify-center gap-2">
                               <button
                                 type="button"
-                                onClick={() => openEditModal(route)}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:text-[#102E4D]"
-                              >
-                                <Pencil size={13} /> Edit
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => { setSelectedRoute(route); setModalMode("view"); }}
+                                onClick={() => setSelectedRoute(route)}
                                 className="inline-flex items-center gap-1.5 rounded-lg bg-[#EAF1F8] px-3 py-2 text-xs font-semibold text-[#102E4D] transition hover:bg-[#DCE9F7]"
                               >
                                 <Eye size={13} /> View
@@ -378,16 +375,33 @@ export default function RouteManagement() {
                             <RouteIcon size={25} />
                           </div>
                           <p className="mt-4 font-semibold text-slate-800">
-                            {searchTerm || activeFilter !== "All" ? "No matching routes found" : "No routes added yet"}
+                            {isLoading
+                              ? "Loading routes..."
+                              : errorMessage
+                                ? "Routes could not be loaded"
+                                : routes.length === 0
+                                  ? "No routes are available"
+                                  : "No matching routes found"}
                           </p>
                           <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500">
-                            {searchTerm || activeFilter !== "All"
-                              ? "Try another search term or choose a different transport filter."
-                              : "Add a transport route to start building the QRoute route directory."}
+                            {errorMessage ??
+                              (isLoading
+                                ? "Loading route records from the database."
+                                : routes.length === 0
+                                  ? "The database returned no route records."
+                                  : "Try another search term or transport filter.")}
                           </p>
-                          {!searchTerm && activeFilter === "All" && (
-                            <button type="button" onClick={openAddModal} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#19476D]">
-                              <Plus size={16} /> Add your first route
+                          {errorMessage && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setErrorMessage(null);
+                                setIsLoading(true);
+                                setRetryCount((count) => count + 1);
+                              }}
+                              className="mt-4 rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#19476D]"
+                            >
+                              Retry
                             </button>
                           )}
                         </td>
@@ -398,7 +412,8 @@ export default function RouteManagement() {
               </div>
             </div>
             <p className="mt-4 text-xs text-slate-400">
-              Route information shown here is managed by the admin.
+              Route add, edit, and delete operations are unavailable in this
+              schema-verified scope.
             </p>
           </section>
 
@@ -408,104 +423,89 @@ export default function RouteManagement() {
         </div>
       </main>
 
-      {modalMode && (
+      {selectedRoute && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]">
-          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="route-details-title"
+            className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+          >
             <div className="mb-6 flex items-start justify-between">
               <div>
-                <h2 className="text-xl font-bold text-[#102E4D]">
-                  {modalMode === "add" ? "Add Route" : modalMode === "edit" ? "Edit Route" : "Route Details"}
+                <h2
+                  id="route-details-title"
+                  className="text-xl font-bold text-[#102E4D]"
+                >
+                  Route Details
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  {modalMode === "view" ? "Review the route information below." : "Enter the transport route details."}
+                  Review the stored route information and stop sequence.
                 </p>
               </div>
-              <button type="button" onClick={closeModal} aria-label="Close dialog" className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100">
+              <button
+                type="button"
+                onClick={() => setSelectedRoute(null)}
+                aria-label="Close dialog"
+                className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100"
+              >
                 <X size={19} />
               </button>
             </div>
 
-            {modalMode === "view" && selectedRoute ? (
-              <div className="space-y-4">
-                <Detail label="Transport type" value={selectedRoute.type} />
-                <Detail label="Route name" value={selectedRoute.name} />
-                <Detail label="Origin" value={selectedRoute.origin} />
-                <Detail label="Destination" value={selectedRoute.destination} />
-                <Detail label="Fare" value={`₱${selectedRoute.fare.toFixed(2)}`} />
-                <button type="button" onClick={closeModal} className="mt-3 w-full rounded-lg bg-[#102E4D] px-4 py-3 text-sm font-semibold text-white hover:bg-[#19476D]">
-                  Close
-                </button>
+            <div className="space-y-4">
+              <Detail label="Route name" value={selectedRoute.name} />
+              <Detail
+                label="Transport type"
+                value={routeTransportType(selectedRoute)}
+              />
+              <Detail
+                label="Transport variant"
+                value={
+                  selectedRoute.transport_variants?.code ??
+                  "Variant unavailable"
+                }
+              />
+              <Detail label="Status" value={routeStatus(selectedRoute)} />
+              <div>
+                <h3 className="mb-2 text-sm font-semibold text-slate-700">
+                  Ordered stops
+                </h3>
+                {selectedRoute.route_stops.length ? (
+                  <ol className="space-y-2">
+                    {selectedRoute.route_stops.map((stop) => (
+                      <li
+                        key={`${stop.route_id}-${stop.stop_order}`}
+                        className="flex items-center gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm"
+                      >
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#EAF1F8] text-xs font-semibold text-[#102E4D]">
+                          {stop.stop_order}
+                        </span>
+                        <span>
+                          {stop.terminals?.name ??
+                            stop.stops?.name ??
+                            "Point unavailable"}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="text-sm text-slate-500">
+                    No stops are associated with this route.
+                  </p>
+                )}
               </div>
-            ) : (
-              <form onSubmit={saveRoute} className="space-y-4">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Transport Type</label>
-                  <select
-                    value={form.type}
-                    onChange={(event) => setForm({ ...form, type: event.target.value as TransportType })}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
-                  >
-                    <option value="Jeep">Jeep</option>
-                    <option value="Bus">Bus</option>
-                    <option value="Train">Train</option>
-                  </select>
-                </div>
-                <Field label="Route Name" value={form.name} onChange={(value) => setForm({ ...form, name: value })} placeholder="e.g. Route 1" />
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <Field label="Origin" value={form.origin} onChange={(value) => setForm({ ...form, origin: value })} placeholder="Starting point" />
-                  <Field label="Destination" value={form.destination} onChange={(value) => setForm({ ...form, destination: value })} placeholder="End point" />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Fare (₱)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    required
-                    value={form.fare}
-                    onChange={(event) => setForm({ ...form, fare: event.target.value })}
-                    placeholder="0.00"
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
-                  />
-                </div>
-                <div className="flex justify-end gap-3 border-t border-slate-100 pt-5">
-                  <button type="button" onClick={closeModal} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
-                    Cancel
-                  </button>
-                  <button type="submit" className="rounded-lg bg-[#102E4D] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#19476D]">
-                    {modalMode === "edit" ? "Save Changes" : "Add Route"}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
+              <button
+                type="button"
+                onClick={() => setSelectedRoute(null)}
+                className="mt-3 w-full rounded-lg bg-[#102E4D] px-4 py-3 text-sm font-semibold text-white hover:bg-[#19476D]"
+              >
+                Close
+              </button>
+            </div>
+          </section>
         </div>
       )}
-    </div>
-  );
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <div>
-      <label className="mb-1.5 block text-sm font-medium text-slate-700">{label}</label>
-      <input
-        required
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
-      />
     </div>
   );
 }

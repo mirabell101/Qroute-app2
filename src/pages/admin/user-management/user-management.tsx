@@ -1,5 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
+import {
+  getAdminUsers,
+  type AdminUserRecord,
+} from "@/lib/adminApi";
+import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
 import {
   LayoutDashboard,
   Route as RouteIcon,
@@ -11,145 +17,90 @@ import {
   MapPinned,
   Menu,
   X,
-  ChevronDown,
   Eye,
-  Ban as BanIcon,
-  ShieldCheck,
   UserRound,
 } from "lucide-react";
 
-type AccountStatus = "Active" | "Banned";
-
-type UserAccount = {
-  id: number;
-  username: string;
-  email: string;
-  status: AccountStatus;
-  joinedDate: string;
-  contributions: number;
-};
-
-const initialUsers: UserAccount[] = [
-  {
-    id: 1,
-    username: "sample_user1",
-    email: "sample1@example.com",
-    status: "Active",
-    joinedDate: "Oct 10, 2026",
-    contributions: 8,
-  },
-  {
-    id: 2,
-    username: "commuter02",
-    email: "commuter02@example.com",
-    status: "Active",
-    joinedDate: "Oct 8, 2026",
-    contributions: 12,
-  },
-  {
-    id: 3,
-    username: "sample_user3",
-    email: "sample3@example.com",
-    status: "Banned",
-    joinedDate: "Oct 5, 2026",
-    contributions: 3,
-  },
-  {
-    id: 4,
-    username: "qroute_member",
-    email: "member@example.com",
-    status: "Active",
-    joinedDate: "Oct 2, 2026",
-    contributions: 5,
-  },
-  {
-    id: 5,
-    username: "sample_user5",
-    email: "sample5@example.com",
-    status: "Banned",
-    joinedDate: "Sep 28, 2026",
-    contributions: 1,
-  },
-];
-
 const navigationItems = [
-  { label: "Dashboard", icon: LayoutDashboard, path: "/admin/dashboard" },
-  { label: "Route Management", icon: RouteIcon, path: "/admin/routes" },
+  { label: "Dashboard", icon: LayoutDashboard },
+  { label: "Route Management", icon: RouteIcon },
   {
     label: "Post Management",
     icon: FileText,
-    path: "/admin/post-management",
   },
-  { label: "Reports", icon: Flag, path: "/admin/reports" },
-  { label: "User Management", icon: Users, path: "/admin/users" },
-  { label: "Settings", icon: Settings, path: "/admin/settings" },
+  { label: "Reports", icon: Flag },
+  { label: "User Management", icon: Users },
+  { label: "Settings", icon: Settings },
 ];
+
+function formatCreatedAt(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Date unavailable"
+    : date.toLocaleDateString();
+}
 
 export default function UserManagement() {
   const navigate = useNavigate();
+  const { userId } = useAccountProfile();
 
-  const [users, setUsers] = useState<UserAccount[]>(initialUsers);
+  const [users, setUsers] = useState<AdminUserRecord[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [quickFilter, setQuickFilter] = useState("All");
-  const [selectedUser, setSelectedUser] = useState<UserAccount | null>(null);
+  const [selectedUser, setSelectedUser] = useState<AdminUserRecord | null>(
+    null,
+  );
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [pendingUserId, setPendingUserId] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+
+    void getAdminUsers(userId ?? "")
+      .then((data) => {
+        if (active) {
+          setUsers(data);
+          setErrorMessage(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setUsers([]);
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load registered users.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [userId, retryCount]);
 
   const filteredUsers = useMemo(() => {
     const search = searchTerm.toLowerCase().trim();
 
     return users.filter((user) => {
       const matchesSearch =
-        user.username.toLowerCase().includes(search) ||
-        user.email.toLowerCase().includes(search);
+        (user.username?.toLowerCase().includes(search) ?? false) ||
+        (user.email?.toLowerCase().includes(search) ?? false);
 
-      const matchesStatus =
-        statusFilter === "All" || user.status === statusFilter;
-
-      const matchesQuickFilter =
-        quickFilter === "All" || user.status === quickFilter;
-
-      return matchesSearch && matchesStatus && matchesQuickFilter;
+      return matchesSearch;
     });
-  }, [users, searchTerm, statusFilter, quickFilter]);
+  }, [users, searchTerm]);
 
-  const activeCount = users.filter(
-    (user) => user.status === "Active",
-  ).length;
-
-  const bannedCount = users.filter(
-    (user) => user.status === "Banned",
-  ).length;
-
-  function toggleBanStatus(userId: number) {
-    const targetUser = users.find((user) => user.id === userId);
-
-    if (!targetUser) return;
-
-    const nextStatus: AccountStatus =
-      targetUser.status === "Active" ? "Banned" : "Active";
-
-    setUsers((currentUsers) =>
-      currentUsers.map((user) =>
-        user.id === userId ? { ...user, status: nextStatus } : user,
-      ),
-    );
-
-    setSelectedUser((currentUser) =>
-      currentUser?.id === userId
-        ? { ...currentUser, status: nextStatus }
-        : currentUser,
-    );
-
-    setPendingUserId(null);
-  }
-
-  function getStatusStyle(status: AccountStatus) {
-    return status === "Active"
-      ? "bg-green-50 text-green-700"
-      : "bg-red-50 text-red-700";
-  }
+  const retryLoadingUsers = () => {
+    setUsers([]);
+    setErrorMessage(null);
+    setIsLoading(true);
+    setRetryCount((count) => count + 1);
+  };
 
   return (
     <div className="min-h-screen bg-[#F4F8FC] text-slate-800">
@@ -191,28 +142,34 @@ export default function UserManagement() {
             {navigationItems.map((item) => {
               const Icon = item.icon;
               const active = item.label === "User Management";
+              const destination = getAdminNavigationDestination(item.label);
 
               return (
                 <button
                   key={item.label}
                   type="button"
+                  disabled={!destination}
+                  title={
+                    destination
+                      ? undefined
+                      : `${item.label} is unavailable in the current system.`
+                  }
                   onClick={() => {
                     setSidebarOpen(false);
-                    navigate(item.path);
+                    if (destination) navigate(destination);
                   }}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${
                     active
                       ? "bg-[#CFD5DB] font-semibold text-[#102E4D]"
-                      : "text-slate-200 hover:bg-white/10 hover:text-white"
+                      : destination
+                        ? "text-slate-200 hover:bg-white/10 hover:text-white"
+                        : "cursor-not-allowed text-slate-400"
                   }`}
                 >
                   <Icon size={19} strokeWidth={1.8} />
                   <span>{item.label}</span>
-
-                  {item.label === "Reports" && (
-                    <span className="ml-auto rounded-full bg-orange-500 px-2 py-0.5 text-[10px] font-bold text-white">
-                      !
-                    </span>
+                  {!destination && (
+                    <span className="ml-auto text-[10px]">Unavailable</span>
                   )}
                 </button>
               );
@@ -235,7 +192,11 @@ export default function UserManagement() {
 
           <button
             type="button"
-            onClick={() => navigate("/admin")}
+            onClick={() => {
+              const destination =
+                getAdminNavigationDestination("Preview of the System");
+              if (destination) navigate(destination);
+            }}
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-4 py-3 text-sm font-medium transition hover:bg-white/10"
           >
             <MapPinned size={17} />
@@ -263,7 +224,7 @@ export default function UserManagement() {
                 User Management
               </h2>
               <p className="mt-1 text-xs text-slate-500 sm:text-sm">
-                View and manage user accounts
+                View registered-user accounts
               </p>
             </div>
           </div>
@@ -292,39 +253,12 @@ export default function UserManagement() {
               </h3>
 
               <p className="mt-2 text-sm text-slate-500">
-                Review account details and manage user access.
+                Review accounts with a verified registered-user role.
               </p>
-            </div>
-
-            <div className="flex flex-wrap gap-3">
-              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-50 text-green-700">
-                  <ShieldCheck size={20} />
-                </div>
-                <div>
-                  <p className="text-xs text-slate-500">Active</p>
-                  <p className="text-xl font-bold text-[#102E4D]">
-                    {activeCount}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-50 text-red-600">
-                  <BanIcon size={20} />
-                </div>
-                <div>
-                  <p className="text-xs text-slate-500">Banned</p>
-                  <p className="text-xl font-bold text-[#102E4D]">
-                    {bannedCount}
-                  </p>
-                </div>
-              </div>
             </div>
           </section>
 
-          {/* Search and status filter */}
-          <section className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <section className="mb-7 flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-sm transition focus-within:border-[#102E4D] focus-within:ring-2 focus-within:ring-blue-100">
               <Search size={18} className="shrink-0 text-slate-400" />
 
@@ -332,7 +266,7 @@ export default function UserManagement() {
                 type="text"
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Search username or email"
+                placeholder="Search username or email..."
                 aria-label="Search username or email"
                 className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-slate-400"
               />
@@ -348,50 +282,6 @@ export default function UserManagement() {
                 </button>
               )}
             </div>
-
-            <div className="relative sm:w-[180px]">
-              <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-                aria-label="Filter accounts by status"
-                className="h-12 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm shadow-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
-              >
-                <option value="All">All Status</option>
-                <option value="Active">Active</option>
-                <option value="Banned">Banned</option>
-              </select>
-
-              <ChevronDown
-                size={16}
-                className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-500"
-              />
-            </div>
-          </section>
-
-          {/* Quick status filters */}
-          <section className="mb-7 flex flex-wrap gap-2.5">
-            {[
-              { label: "All", value: "All" },
-              { label: "Active", value: "Active" },
-              { label: "Banned", value: "Banned" },
-            ].map((filter) => {
-              const active = quickFilter === filter.value;
-
-              return (
-                <button
-                  key={filter.value}
-                  type="button"
-                  onClick={() => setQuickFilter(filter.value)}
-                  className={`min-w-[70px] rounded-full border px-5 py-2.5 text-sm font-medium shadow-sm transition ${
-                    active
-                      ? "border-[#102E4D] bg-[#102E4D] text-white"
-                      : "border-slate-200 bg-white text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]"
-                  }`}
-                >
-                  {filter.label}
-                </button>
-              );
-            })}
           </section>
 
           {/* User table */}
@@ -400,7 +290,7 @@ export default function UserManagement() {
               <div>
                 <h4 className="font-bold text-slate-900">User Accounts</h4>
                 <p className="mt-1 text-xs text-slate-500">
-                  View account information and control account access.
+                  Accounts with the registered_user database role.
                 </p>
               </div>
 
@@ -416,7 +306,8 @@ export default function UserManagement() {
                   <tr>
                     <th className="px-5 py-4 font-semibold">Username</th>
                     <th className="px-5 py-4 font-semibold">Email</th>
-                    <th className="px-5 py-4 font-semibold">Status</th>
+                    <th className="px-5 py-4 font-semibold">Joined</th>
+                    <th className="px-5 py-4 font-semibold">Role</th>
                     <th className="px-5 py-4 text-center font-semibold">
                       Action
                     </th>
@@ -435,27 +326,22 @@ export default function UserManagement() {
                             <UserRound size={17} />
                           </div>
                           <span className="font-medium text-slate-700">
-                            @{user.username}
+                            {user.username ? `@${user.username}` : "Not set"}
                           </span>
                         </div>
                       </td>
 
                       <td className="px-5 py-4 text-slate-600">
-                        {user.email}
+                        {user.email ?? "Email unavailable"}
+                      </td>
+
+                      <td className="px-5 py-4 text-slate-600">
+                        {formatCreatedAt(user.createdAt)}
                       </td>
 
                       <td className="px-5 py-4">
-                        <span
-                          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${getStatusStyle(user.status)}`}
-                        >
-                          <span
-                            className={`h-1.5 w-1.5 rounded-full ${
-                              user.status === "Active"
-                                ? "bg-green-500"
-                                : "bg-red-500"
-                            }`}
-                          />
-                          {user.status}
+                        <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                          Registered user
                         </span>
                       </td>
 
@@ -469,23 +355,6 @@ export default function UserManagement() {
                             <Eye size={14} />
                             View
                           </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setPendingUserId(user.id)}
-                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-medium transition ${
-                              user.status === "Active"
-                                ? "border-red-200 bg-white text-red-600 hover:bg-red-50"
-                                : "border-green-200 bg-white text-green-700 hover:bg-green-50"
-                            }`}
-                          >
-                            {user.status === "Active" ? (
-                              <BanIcon size={14} />
-                            ) : (
-                              <ShieldCheck size={14} />
-                            )}
-                            {user.status === "Active" ? "Ban" : "Unban"}
-                          </button>
                         </div>
                       </td>
                     </tr>
@@ -493,27 +362,46 @@ export default function UserManagement() {
 
                   {filteredUsers.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-6 py-16 text-center">
+                      <td colSpan={5} className="px-6 py-16 text-center">
                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                           <Search size={22} />
                         </div>
                         <p className="mt-3 font-semibold text-slate-700">
-                          No users found
+                          {isLoading
+                            ? "Loading registered users..."
+                            : errorMessage
+                              ? "Users could not be loaded"
+                              : users.length === 0
+                                ? "No registered users are available"
+                                : "No users found"}
                         </p>
                         <p className="mt-1 text-sm text-slate-500">
-                          Try another username, email, or status filter.
+                          {errorMessage ??
+                            (isLoading
+                              ? "Loading account records from the server."
+                              : users.length === 0
+                                ? "The database returned no registered-user accounts."
+                                : "Try another username or email search.")}
                         </p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSearchTerm("");
-                            setStatusFilter("All");
-                            setQuickFilter("All");
-                          }}
-                          className="mt-4 text-sm font-semibold text-[#102E4D] underline underline-offset-4"
-                        >
-                          Clear filters
-                        </button>
+                        {errorMessage ? (
+                          <button
+                            type="button"
+                            onClick={retryLoadingUsers}
+                            className="mt-4 rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white"
+                          >
+                            Retry
+                          </button>
+                        ) : (
+                          searchTerm && (
+                            <button
+                              type="button"
+                              onClick={() => setSearchTerm("")}
+                              className="mt-4 text-sm font-semibold text-[#102E4D] underline underline-offset-4"
+                            >
+                              Clear search
+                            </button>
+                          )
+                        )}
                       </td>
                     </tr>
                   )}
@@ -523,7 +411,7 @@ export default function UserManagement() {
 
             <div className="border-t border-slate-100 px-5 py-4 sm:px-6">
               <p className="text-xs text-slate-400">
-                QRoute User Management · UI Preview
+                Ban and unban actions are unavailable in the verified schema.
               </p>
             </div>
           </section>
@@ -571,12 +459,12 @@ export default function UserManagement() {
                 <UserRound size={30} />
               </div>
               <h4 className="mt-3 text-lg font-bold text-slate-800">
-                @{selectedUser.username}
+                {selectedUser.username
+                  ? `@${selectedUser.username}`
+                  : "Username not set"}
               </h4>
-              <span
-                className={`mt-2 rounded-full px-3 py-1 text-xs font-semibold ${getStatusStyle(selectedUser.status)}`}
-              >
-                {selectedUser.status}
+              <span className="mt-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                Registered user
               </span>
             </div>
 
@@ -586,28 +474,19 @@ export default function UserManagement() {
                   Email address
                 </p>
                 <p className="mt-1 break-all font-medium text-slate-800">
-                  {selectedUser.email}
+                  {selectedUser.email ?? "Email unavailable"}
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="rounded-xl bg-[#F4F8FC] p-4">
-                  <p className="text-xs text-slate-500">Date joined</p>
-                  <p className="mt-1 text-sm font-semibold text-[#102E4D]">
-                    {selectedUser.joinedDate}
-                  </p>
-                </div>
-
-                <div className="rounded-xl bg-[#F4F8FC] p-4">
-                  <p className="text-xs text-slate-500">Contributions</p>
-                  <p className="mt-1 text-sm font-semibold text-[#102E4D]">
-                    {selectedUser.contributions}
-                  </p>
-                </div>
+              <div className="rounded-xl bg-[#F4F8FC] p-4">
+                <p className="text-xs text-slate-500">Date joined</p>
+                <p className="mt-1 text-sm font-semibold text-[#102E4D]">
+                  {formatCreatedAt(selectedUser.createdAt)}
+                </p>
               </div>
             </div>
 
-            <div className="mt-6 flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
+            <div className="mt-6 flex justify-end border-t border-slate-100 pt-5">
               <button
                 type="button"
                 onClick={() => setSelectedUser(null)}
@@ -615,98 +494,10 @@ export default function UserManagement() {
               >
                 Close
               </button>
-
-              <button
-                type="button"
-                onClick={() => setPendingUserId(selectedUser.id)}
-                className={`rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition ${
-                  selectedUser.status === "Active"
-                    ? "bg-red-600 hover:bg-red-700"
-                    : "bg-green-700 hover:bg-green-800"
-                }`}
-              >
-                {selectedUser.status === "Active" ? "Ban User" : "Unban User"}
-              </button>
             </div>
           </section>
         </div>
       )}
-
-      {/* Ban / Unban confirmation */}
-      {pendingUserId !== null &&
-        (() => {
-          const targetUser = users.find(
-            (user) => user.id === pendingUserId,
-          );
-
-          if (!targetUser) return null;
-
-          const isBanning = targetUser.status === "Active";
-
-          return (
-            <div
-              className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4"
-              onClick={() => setPendingUserId(null)}
-            >
-              <section
-                role="alertdialog"
-                aria-modal="true"
-                aria-labelledby="confirm-title"
-                onClick={(event) => event.stopPropagation()}
-                className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
-              >
-                <div
-                  className={`flex h-12 w-12 items-center justify-center rounded-xl ${
-                    isBanning
-                      ? "bg-red-50 text-red-600"
-                      : "bg-green-50 text-green-700"
-                  }`}
-                >
-                  {isBanning ? (
-                    <BanIcon size={23} />
-                  ) : (
-                    <ShieldCheck size={23} />
-                  )}
-                </div>
-
-                <h3
-                  id="confirm-title"
-                  className="mt-4 text-xl font-bold text-[#102E4D]"
-                >
-                  {isBanning ? "Ban this user?" : "Unban this user?"}
-                </h3>
-
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  {isBanning
-                    ? `Are you sure you want to ban @${targetUser.username}? This changes the account status in this UI preview.`
-                    : `Are you sure you want to restore access for @${targetUser.username}?`}
-                </p>
-
-                <div className="mt-6 flex justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setPendingUserId(null)}
-                    className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                  >
-                    Cancel
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => toggleBanStatus(targetUser.id)}
-                    className={`rounded-lg px-4 py-2.5 text-sm font-semibold text-white ${
-                      isBanning
-                        ? "bg-red-600 hover:bg-red-700"
-                        : "bg-green-700 hover:bg-green-800"
-                    }`}
-                  >
-                    Confirm {isBanning ? "Ban" : "Unban"}
-                  </button>
-                </div>
-              </section>
-            </div>
-          );
-        })()}
     </div>
   );
 }

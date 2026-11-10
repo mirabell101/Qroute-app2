@@ -29,8 +29,3 @@ dist-ssr
 *.sw?
 *.test.ts
 *.test.tsx
-
-# Environment variables
-.env
-.env.*
-!.env.example

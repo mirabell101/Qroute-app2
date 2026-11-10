@@ -1,5 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
+import { getCommunityPosts, type CommunityPost } from "@/lib/community";
+import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
+import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route as RouteIcon,
@@ -10,139 +14,118 @@ import {
   Search,
   MapPinned,
   Menu,
-  ChevronDown,
-  Eye,
-  EyeOff,
   X,
 } from "lucide-react";
 
-type TransportType = "Jeep" | "Bus" | "Train";
-type PostStatus = "Visible" | "Hidden";
-
-type CommunityPost = {
-  id: number;
-  type: TransportType;
-  route: string;
-  username: string;
-  post: string;
-  date: string;
-  fare: number;
-  reports: number;
-  status: PostStatus;
-};
-
-const initialPosts: CommunityPost[] = [
-  {
-    id: 1,
-    type: "Jeep",
-    route: "Cubao - Fairview",
-    username: "sample_user1",
-    post: "Fare update for today's commute",
-    date: "Oct 15, 2026",
-    fare: 13,
-    reports: 0,
-    status: "Visible",
-  },
-  {
-    id: 2,
-    type: "Bus",
-    route: "SM North - PITX",
-    username: "commuter02",
-    post: "Bus fare and route information",
-    date: "Oct 14, 2026",
-    fare: 25,
-    reports: 2,
-    status: "Visible",
-  },
-  {
-    id: 3,
-    type: "Jeep",
-    route: "Philcoa - Katipunan",
-    username: "qroute_member",
-    post: "Updated jeepney fare information",
-    date: "Oct 13, 2026",
-    fare: 15,
-    reports: 1,
-    status: "Hidden",
-  },
-  {
-    id: 4,
-    type: "Train",
-    route: "North Avenue - Taft Avenue",
-    username: "sample_user4",
-    post: "Train commute information",
-    date: "Oct 12, 2026",
-    fare: 30,
-    reports: 0,
-    status: "Visible",
-  },
-];
-
 const navigationItems = [
-  { label: "Dashboard", icon: LayoutDashboard, path: "/admin/dashboard" },
-  { label: "Route Management", icon: RouteIcon, path: "/admin/routes" },
+  { label: "Dashboard", icon: LayoutDashboard },
+  { label: "Route Management", icon: RouteIcon },
   {
     label: "Post Management",
     icon: FileText,
-    path: "/admin/post-management",
   },
-  { label: "Reports", icon: Flag, path: "/admin/reports" },
-  { label: "User Management", icon: Users, path: "/admin/users" },
-  { label: "Settings", icon: Settings, path: "/admin/settings" },
+  { label: "Reports", icon: Flag },
+  { label: "User Management", icon: Users },
+  { label: "Settings", icon: Settings },
 ];
+
+function formatPostDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Date unavailable"
+    : date.toLocaleString();
+}
 
 export default function PostManagement() {
   const navigate = useNavigate();
+  const { userId } = useAccountProfile();
 
-  const [posts, setPosts] = useState<CommunityPost[]>(initialPosts);
+  const [posts, setPosts] = useState<CommunityPost[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [transportFilter, setTransportFilter] = useState("All");
-  const [statusFilter, setStatusFilter] = useState("All");
   const [selectedPost, setSelectedPost] =
     useState<CommunityPost | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadPosts = async () => {
+      if (!userId) {
+        throw new Error("The active admin account could not be verified.");
+      }
+
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession();
+      if (sessionError) throw new Error(sessionError.message);
+      if (sessionData.session?.user.id !== userId) {
+        throw new Error("The active account changed. Please try again.");
+      }
+
+      return getCommunityPosts();
+    };
+
+    void loadPosts()
+      .then((data) => {
+        if (active) {
+          setPosts(data);
+          setErrorMessage(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setPosts([]);
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load community posts.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [retryCount, userId]);
+
+  const transportFilters = useMemo(
+    () => [
+      "All",
+      ...new Set(
+        posts
+          .map((post) => post.transport_type ?? "Unknown")
+          .filter(Boolean),
+      ),
+    ],
+    [posts],
+  );
 
   const filteredPosts = useMemo(() => {
     const search = searchTerm.toLowerCase().trim();
 
     return posts.filter((post) => {
-      const matchesSearch =
-        post.route.toLowerCase().includes(search) ||
-        post.username.toLowerCase().includes(search) ||
-        post.post.toLowerCase().includes(search) ||
-        post.type.toLowerCase().includes(search);
+      const route = `${post.start_name} ${post.destination_name}`;
+      const matchesSearch = [
+        route,
+        post.author_display_name,
+        post.title,
+        post.content,
+        post.transport_type ?? "Unknown",
+      ].some((value) => value.toLowerCase().includes(search));
 
+      const transportType = post.transport_type ?? "Unknown";
       const matchesTransport =
-        transportFilter === "All" || post.type === transportFilter;
+        transportFilter === "All" || transportType === transportFilter;
 
-      const matchesStatus =
-        statusFilter === "All" || post.status === statusFilter;
-
-      return matchesSearch && matchesTransport && matchesStatus;
+      return matchesSearch && matchesTransport;
     });
-  }, [posts, searchTerm, transportFilter, statusFilter]);
-
-  function togglePostVisibility(id: number) {
-    setPosts((currentPosts) =>
-      currentPosts.map((post) =>
-        post.id === id
-          ? {
-              ...post,
-              status: post.status === "Visible" ? "Hidden" : "Visible",
-            }
-          : post,
-      ),
-    );
-
-    setSelectedPost((currentPost) =>
-      currentPost?.id === id
-        ? {
-            ...currentPost,
-            status: currentPost.status === "Visible" ? "Hidden" : "Visible",
-          }
-        : currentPost,
-    );
-  }
+  }, [posts, searchTerm, transportFilter]);
 
   return (
     <div className="min-h-screen bg-[#F4F8FC] text-slate-800">
@@ -184,23 +167,35 @@ export default function PostManagement() {
             {navigationItems.map((item) => {
               const Icon = item.icon;
               const active = item.label === "Post Management";
+              const destination = getAdminNavigationDestination(item.label);
 
               return (
                 <button
                   key={item.label}
                   type="button"
+                  disabled={!destination}
+                  title={
+                    destination
+                      ? undefined
+                      : `${item.label} is unavailable in the current system.`
+                  }
                   onClick={() => {
                     setSidebarOpen(false);
-                    navigate(item.path);
+                    if (destination) navigate(destination);
                   }}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${
                     active
                       ? "bg-[#CFD5DB] font-semibold text-[#102E4D]"
-                      : "text-slate-200 hover:bg-white/10 hover:text-white"
+                      : destination
+                        ? "text-slate-200 hover:bg-white/10 hover:text-white"
+                        : "cursor-not-allowed text-slate-400"
                   }`}
                 >
                   <Icon size={19} strokeWidth={1.8} />
                   <span>{item.label}</span>
+                  {!destination && (
+                    <span className="ml-auto text-[10px]">Unavailable</span>
+                  )}
                 </button>
               );
             })}
@@ -222,7 +217,11 @@ export default function PostManagement() {
 
           <button
             type="button"
-            onClick={() => navigate("/admin")}
+            onClick={() => {
+              const destination =
+                getAdminNavigationDestination("Preview of the System");
+              if (destination) navigate(destination);
+            }}
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-4 py-3 text-sm font-medium transition hover:bg-white/10"
           >
             <MapPinned size={17} />
@@ -276,11 +275,12 @@ export default function PostManagement() {
             </h3>
 
             <p className="mt-2 text-sm text-slate-500">
-              Review post details and manage their visibility.
+              Review posts returned by the community service. Moderation is
+              unavailable because the existing API has no moderation actions.
             </p>
           </section>
 
-          {/* Search and status filter */}
+          {/* Search */}
           <section className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-sm focus-within:border-[#102E4D] focus-within:ring-2 focus-within:ring-blue-100">
               <Search size={18} className="shrink-0 text-slate-500" />
@@ -289,7 +289,7 @@ export default function PostManagement() {
                 type="text"
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Search post, user or route"
+                placeholder="Search post, user, route, or transport..."
                 aria-label="Search posts, users or routes"
                 className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-slate-400"
               />
@@ -305,28 +305,11 @@ export default function PostManagement() {
                 </button>
               )}
             </div>
-
-            <div className="relative sm:w-[160px]">
-              <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-                aria-label="Filter by status"
-                className="h-12 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm shadow-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
-              >
-                <option value="All">All Statuses</option>
-                <option value="Visible">Visible</option>
-                <option value="Hidden">Hidden</option>
-              </select>
-              <ChevronDown
-                size={16}
-                className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-500"
-              />
-            </div>
           </section>
 
           {/* Transport filters */}
           <section className="mb-7 flex flex-wrap gap-2.5">
-            {["All", "Jeep", "Bus", "Train"].map((type) => {
+            {transportFilters.map((type) => {
               const active = transportFilter === type;
 
               return (
@@ -352,7 +335,7 @@ export default function PostManagement() {
               <div>
                 <h4 className="font-bold text-slate-900">Community Posts</h4>
                 <p className="mt-1 text-xs text-slate-500">
-                  Review submissions and control post visibility.
+                  {posts.length} posts loaded from the community service.
                 </p>
               </div>
               <span className="text-xs font-medium text-slate-500">
@@ -367,12 +350,10 @@ export default function PostManagement() {
                   <tr>
                     <th className="px-4 py-4 font-semibold">Type</th>
                     <th className="px-4 py-4 font-semibold">Route</th>
-                    <th className="px-4 py-4 font-semibold">Username</th>
+                    <th className="px-4 py-4 font-semibold">Author</th>
                     <th className="px-4 py-4 font-semibold">Post</th>
-                    <th className="px-4 py-4 font-semibold">Date</th>
-                    <th className="px-4 py-4 font-semibold">Fare</th>
-                    <th className="px-4 py-4 font-semibold">Reports</th>
-                    <th className="px-4 py-4 font-semibold">Status</th>
+                    <th className="px-4 py-4 font-semibold">Submitted</th>
+                    <th className="px-4 py-4 font-semibold">Responses</th>
                     <th className="px-4 py-4 text-center font-semibold">
                       Actions
                     </th>
@@ -387,87 +368,35 @@ export default function PostManagement() {
                     >
                       <td className="px-4 py-4">
                         <span className="inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-[#102E4D]">
-                          {post.type}
+                          {post.transport_type ?? "Unknown"}
                         </span>
                       </td>
 
                       <td className="max-w-[180px] px-4 py-4 font-medium text-slate-700">
-                        {post.route}
+                        {post.start_name} → {post.destination_name}
                       </td>
 
                       <td className="px-4 py-4 text-slate-600">
-                        @{post.username}
+                        {post.author_display_name}
                       </td>
 
                       <td className="max-w-[210px] px-4 py-4">
-                        <p className="truncate text-slate-600" title={post.post}>
-                          {post.post}
+                        <p className="truncate text-slate-600" title={post.title}>
+                          {post.title}
                         </p>
                       </td>
 
                       <td className="whitespace-nowrap px-4 py-4 text-slate-500">
-                        {post.date}
+                        {formatPostDate(post.created_at)}
                       </td>
 
-                      <td className="whitespace-nowrap px-4 py-4 font-medium text-slate-700">
-                        ₱{post.fare.toFixed(2)}
-                      </td>
-
-                      <td className="px-4 py-4">
-                        <span
-                          className={`font-semibold ${
-                            post.reports > 0
-                              ? "text-orange-600"
-                              : "text-slate-500"
-                          }`}
-                        >
-                          {post.reports}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-4">
-                        <span
-                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
-                            post.status === "Visible"
-                              ? "bg-green-50 text-green-700"
-                              : "bg-slate-100 text-slate-600"
-                          }`}
-                        >
-                          <span
-                            className={`h-1.5 w-1.5 rounded-full ${
-                              post.status === "Visible"
-                                ? "bg-green-500"
-                                : "bg-slate-400"
-                            }`}
-                          />
-                          {post.status}
-                        </span>
+                      <td className="whitespace-nowrap px-4 py-4 text-slate-600">
+                        {post.comment_count} comments · {post.upvotes} upvotes ·{" "}
+                        {post.downvotes} downvotes
                       </td>
 
                       <td className="px-4 py-4">
                         <div className="flex items-center justify-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => togglePostVisibility(post.id)}
-                            title={
-                              post.status === "Visible"
-                                ? "Hide post"
-                                : "Make post visible"
-                            }
-                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition ${
-                              post.status === "Visible"
-                                ? "border-slate-200 bg-white text-slate-600 hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700"
-                                : "border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
-                            }`}
-                          >
-                            {post.status === "Visible" ? (
-                              <EyeOff size={14} />
-                            ) : (
-                              <Eye size={14} />
-                            )}
-                            {post.status === "Visible" ? "Hide" : "Visible"}
-                          </button>
-
                           <button
                             type="button"
                             onClick={() => setSelectedPost(post)}
@@ -482,27 +411,53 @@ export default function PostManagement() {
 
                   {filteredPosts.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="px-6 py-16 text-center">
+                      <td colSpan={7} className="px-6 py-16 text-center">
                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                           <Search size={22} />
                         </div>
                         <p className="mt-3 font-semibold text-slate-700">
-                          No posts found
+                          {isLoading
+                            ? "Loading community posts..."
+                            : errorMessage
+                              ? "Community posts could not be loaded"
+                              : posts.length === 0
+                                ? "No community posts are available"
+                                : "No posts found"}
                         </p>
                         <p className="mt-1 text-sm text-slate-500">
-                          Try changing your search or filters.
+                          {errorMessage ??
+                            (isLoading
+                              ? "Loading post records from the server."
+                              : posts.length === 0
+                                ? "The community service returned no posts."
+                                : "Try changing your search or transport filter.")}
                         </p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSearchTerm("");
-                            setTransportFilter("All");
-                            setStatusFilter("All");
-                          }}
-                          className="mt-4 text-sm font-semibold text-[#102E4D] underline underline-offset-4"
-                        >
-                          Clear filters
-                        </button>
+                        {errorMessage ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setErrorMessage(null);
+                              setIsLoading(true);
+                              setRetryCount((count) => count + 1);
+                            }}
+                            className="mt-4 rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white"
+                          >
+                            Retry
+                          </button>
+                        ) : (
+                          (searchTerm || transportFilter !== "All") && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSearchTerm("");
+                                setTransportFilter("All");
+                              }}
+                              className="mt-4 text-sm font-semibold text-[#102E4D] underline underline-offset-4"
+                            >
+                              Clear filters
+                            </button>
+                          )
+                        )}
                       </td>
                     </tr>
                   )}
@@ -512,7 +467,8 @@ export default function PostManagement() {
 
             <div className="border-t border-slate-100 bg-white px-5 py-4 sm:px-6">
               <p className="text-xs text-slate-400">
-                QRoute Post Management · UI Preview
+                Post hiding and report processing are unavailable in the
+                current community schema and API.
               </p>
             </div>
           </section>
@@ -558,19 +514,28 @@ export default function PostManagement() {
             <div className="mt-6 space-y-4">
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                  Username
+                  Author
                 </p>
                 <p className="mt-1 font-semibold text-slate-800">
-                  @{selectedPost.username}
+                  {selectedPost.author_display_name}
                 </p>
               </div>
 
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                  Post description
+                  Title
                 </p>
-                <p className="mt-1 text-sm leading-6 text-slate-700">
-                  {selectedPost.post}
+                <p className="mt-1 font-semibold text-slate-800">
+                  {selectedPost.title}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                  Post content
+                </p>
+                <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                  {selectedPost.content}
                 </p>
               </div>
 
@@ -578,69 +543,58 @@ export default function PostManagement() {
                 <div className="rounded-xl bg-[#F4F8FC] p-4">
                   <p className="text-xs text-slate-500">Transport</p>
                   <p className="mt-1 font-semibold text-[#102E4D]">
-                    {selectedPost.type}
+                    {selectedPost.transport_type ?? "Unknown"}
                   </p>
                 </div>
 
                 <div className="rounded-xl bg-[#F4F8FC] p-4">
-                  <p className="text-xs text-slate-500">Fare</p>
+                  <p className="text-xs text-slate-500">Submitted</p>
                   <p className="mt-1 font-semibold text-[#102E4D]">
-                    ₱{selectedPost.fare.toFixed(2)}
+                    {formatPostDate(selectedPost.created_at)}
                   </p>
                 </div>
 
                 <div className="rounded-xl bg-[#F4F8FC] p-4">
                   <p className="text-xs text-slate-500">Route</p>
                   <p className="mt-1 text-sm font-semibold text-[#102E4D]">
-                    {selectedPost.route}
+                    {selectedPost.start_name} → {selectedPost.destination_name}
                   </p>
                 </div>
 
                 <div className="rounded-xl bg-[#F4F8FC] p-4">
-                  <p className="text-xs text-slate-500">Date submitted</p>
+                  <p className="text-xs text-slate-500">Comments</p>
                   <p className="mt-1 text-sm font-semibold text-[#102E4D]">
-                    {selectedPost.date}
+                    {selectedPost.comment_count}
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between border-t border-slate-100 pt-4">
-                <div>
-                  <p className="text-xs text-slate-500">Reports</p>
-                  <p className="mt-1 font-semibold text-slate-800">
-                    {selectedPost.reports}
-                  </p>
-                </div>
+              <p className="border-t border-slate-100 pt-4 text-sm text-slate-600">
+                {selectedPost.upvotes} upvotes · {selectedPost.downvotes}{" "}
+                downvotes
+              </p>
 
-                <span
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                    selectedPost.status === "Visible"
-                      ? "bg-green-50 text-green-700"
-                      : "bg-slate-100 text-slate-600"
-                  }`}
-                >
-                  {selectedPost.status}
-                </span>
-              </div>
+              {selectedPost.photos.length > 0 && (
+                <div className="grid grid-cols-2 gap-3">
+                  {selectedPost.photos.map((photo) => (
+                    <img
+                      key={photo.path}
+                      src={photo.url}
+                      alt=""
+                      className="h-36 w-full rounded-lg object-cover"
+                    />
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <div className="mt-6 flex justify-end">
               <button
                 type="button"
                 onClick={() => setSelectedPost(null)}
                 className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
               >
                 Close
-              </button>
-
-              <button
-                type="button"
-                onClick={() => togglePostVisibility(selectedPost.id)}
-                className="rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#19476D]"
-              >
-                {selectedPost.status === "Visible"
-                  ? "Hide Post"
-                  : "Make Visible"}
               </button>
             </div>
           </section>

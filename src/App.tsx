@@ -9,6 +9,12 @@ import {
 } from "react-router-dom";
 
 import { supabase } from "./lib/supabase";
+import {
+  AUTH_ROLE_UPDATED_EVENT,
+  getUserRole,
+} from "./lib/authSession";
+import { resolveAuthenticatedRootPath } from "./lib/authRedirect";
+import type { QRouteRole } from "./lib/roles";
 import { SavedItemsProvider } from "./components/saved/SavedItemsContext";
 import { RecentSearchesProvider } from "./components/recent-searches/RecentSearchesContext";
 import { AccountProfileProvider } from "./components/account/AccountProfileContext";
@@ -37,9 +43,38 @@ import PostManagement from "./pages/admin/post-management/post-management";
 import Reports from "./pages/admin/reports/reports";
 import UserManagement from "./pages/admin/user-management/user-management";
 
+function hasRegisteredUserAccess(role: QRouteRole | null): boolean {
+  return role === "registered_user" || role === "admin";
+}
+
 function App() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [roleState, setRoleState] = useState<{
+    userId: string | null;
+    loaded: boolean;
+    role: QRouteRole | null;
+  }>({
+    userId: null,
+    loaded: false,
+    role: null,
+  });
+
+  // A role is "loading" as soon as a user ID exists but no role load has
+  // finished for that same user. Deriving this during render (instead of
+  // setting loading state inside the effect) prevents a protected route from
+  // briefly redirecting while the effect has not run yet.
+  const roleLoading =
+    currentUserId !== null &&
+    (!roleState.loaded || roleState.userId !== currentUserId);
+
+  const currentUserRole =
+    roleState.loaded && roleState.userId === currentUserId
+      ? roleState.role
+      : null;
+  const authenticatedRootPath = resolveAuthenticatedRootPath(
+    currentUserId !== null
+  );
 
   // Restore and validate the existing Supabase session.
   useEffect(() => {
@@ -114,6 +149,7 @@ function App() {
       if (event === "SIGNED_OUT") {
         setCurrentUserId(null);
         setAuthLoading(false);
+        setRoleState({ userId: null, loaded: true, role: null });
         return;
       }
 
@@ -149,6 +185,67 @@ function App() {
     };
   }, []);
 
+  // Load the role from the database for both Google and password sessions.
+  // Frontend state is only a cache of the database value and never decides
+  // authorization by itself.
+  useEffect(() => {
+    let active = true;
+    let requestId = 0;
+
+    if (!currentUserId) {
+      return () => {
+        active = false;
+      };
+    }
+
+    const loadRole = async () => {
+      const currentRequest = ++requestId;
+
+      try {
+        const role = await getUserRole(currentUserId);
+
+        if (active && currentRequest === requestId) {
+          setRoleState({
+            userId: currentUserId,
+            loaded: true,
+            role,
+          });
+        }
+      } catch (error) {
+        console.error("Could not load the user's role:", error);
+
+        if (active && currentRequest === requestId) {
+          setRoleState({
+            userId: currentUserId,
+            loaded: true,
+            role: null,
+          });
+        }
+      }
+    };
+
+    void loadRole();
+
+    const handleRoleUpdated = () => {
+      // A new account may receive its role after the first read. Mark the
+      // current role as loading so protected routes wait instead of redirecting.
+      setRoleState((previous) =>
+        previous.userId === currentUserId
+          ? { ...previous, loaded: false, role: null }
+          : previous
+      );
+
+      void loadRole();
+    };
+
+    window.addEventListener(AUTH_ROLE_UPDATED_EVENT, handleRoleUpdated);
+
+    return () => {
+      active = false;
+      window.removeEventListener(AUTH_ROLE_UPDATED_EVENT, handleRoleUpdated);
+    };
+  }, [currentUserId]);
+
   // Sign out on this device/browser only.
   const handleLogout = async (): Promise<void> => {
     const { error } = await supabase.auth.signOut({
@@ -173,7 +270,21 @@ function App() {
   const protectedPage = (
     renderPage: (userId: string) => ReactNode
   ): ReactNode => {
-    if (authLoading) {
+    if (authLoading || roleLoading) {
+      return null;
+    }
+
+    if (!currentUserId || !hasRegisteredUserAccess(currentUserRole)) {
+      return <Navigate to="/login" replace />;
+    }
+
+    return renderPage(currentUserId);
+  };
+
+  // Administrative pages require the database role. Authentication alone is
+  // not enough, and the same rule applies to Google and password sessions.
+  const adminPage = (renderPage: () => ReactNode): ReactNode => {
+    if (authLoading || roleLoading) {
       return null;
     }
 
@@ -181,7 +292,11 @@ function App() {
       return <Navigate to="/login" replace />;
     }
 
-    return renderPage(currentUserId);
+    if (currentUserRole !== "admin") {
+      return <Navigate to="/home" replace />;
+    }
+
+    return renderPage();
   };
 
   return (
@@ -198,55 +313,56 @@ function App() {
             key={currentUserId ?? "anonymous"}
             userId={currentUserId}
           >
-          <Routes>
-        {/* Public routes */}
-        <Route
-          path="/"
-          element={
-            <Landing
-              currentUserId={currentUserId}
-              onLogout={handleLogout}
-            />
-          }
-        />
-
-        <Route
-          path="/base"
-          element={
-            <Landing
-              currentUserId={currentUserId}
-              onLogout={handleLogout}
-            />
-          }
-        />
-
-        {/* Registered-user routes */}
-        <Route
-          path="/home"
-          element={protectedPage((userId) => (
-            <Home
-              currentUserId={userId}
-              onLogout={handleLogout}
-            />
-          ))}
-        />
-
-        <Route
-          path="/saved"
-          element={protectedPage(() => <Saved />)}
-        />
-
-        <Route
-          path="/recents"
-          element={
-            authLoading ? null : (
-              <RecentSearches
-                key={currentUserId ?? "anonymous"}
-                currentUserId={currentUserId}
+            <Routes>
+              {/* Public routes */}
+              <Route
+                path="/"
+                element={
+                  authLoading ? null : authenticatedRootPath ? (
+                    <Navigate to={authenticatedRootPath} replace />
+                  ) : (
+                    <Landing
+                      currentUserId={currentUserId}
+                      onLogout={handleLogout}
+                    />
+                  )
+                }
               />
-            )
-          }
-        />
+              <Route
+                path="/base"
+                element={
+                  <Landing
+                    currentUserId={currentUserId}
+                    onLogout={handleLogout}
+                  />
+                }
+              />
+
+              {/* Registered-user routes */}
+              <Route
+                path="/home"
+                element={protectedPage((userId) => (
+                  <Home
+                    currentUserId={userId}
+                    onLogout={handleLogout}
+                  />
+                ))}
+              />
+              <Route
+                path="/saved"
+                element={protectedPage(() => <Saved />)}
+              />
+              <Route
+                path="/recents"
+                element={
+                  authLoading ? null : (
+                    <RecentSearches
+                      key={currentUserId ?? "anonymous"}
+                      currentUserId={currentUserId}
+                    />
+                  )
+                }
+              />
 
         <Route
           path="/contribution"
@@ -317,40 +433,35 @@ function App() {
           element={<PrivacyPolicy />}
         />
 
-        {/* Admin routes: authorization still needs to be enforced */}
-        <Route path="/admin" element={<AdminBase />} />
+              {/* Admin routes require the admin role from user_roles */}
+              <Route
+                path="/admin"
+                element={adminPage(() => <AdminBase />)}
+              />
+              <Route
+                path="/admin/dashboard"
+                element={adminPage(() => <Dashboard />)}
+              />
+              <Route
+                path="/admin/routes"
+                element={adminPage(() => <RouteManagement />)}
+              />
+              <Route
+                path="/admin/post-management"
+                element={adminPage(() => <PostManagement />)}
+              />
+              <Route
+                path="/admin/reports"
+                element={adminPage(() => <Reports />)}
+              />
+              <Route
+                path="/admin/users"
+                element={adminPage(() => <UserManagement />)}
+              />
 
-        <Route
-          path="/admin/dashboard"
-          element={<Dashboard />}
-        />
-
-        <Route
-          path="/admin/routes"
-          element={<RouteManagement />}
-        />
-
-        <Route
-          path="/admin/post-management"
-          element={<PostManagement />}
-        />
-
-        <Route
-          path="/admin/reports"
-          element={<Reports />}
-        />
-
-        <Route
-          path="/admin/users"
-          element={<UserManagement />}
-        />
-
-        {/* Unknown routes */}
-        <Route
-          path="*"
-          element={<Navigate to="/" replace />}
-        />
-          </Routes>
+              {/* Unknown routes */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
           </AccountProfileProvider>
         </SavedItemsProvider>
       </RecentSearchesProvider>

@@ -1,10 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabasePublishableKey =
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+import { assertPublicSupabaseKey } from "./supabaseConfig";
 
-if (!supabaseUrl || !supabasePublishableKey) {
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabasePublishableKey = assertPublicSupabaseKey(
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+);
+
+if (!supabaseUrl) {
   throw new Error("Supabase environment variables are missing.");
 }
 
