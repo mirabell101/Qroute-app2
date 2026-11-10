@@ -418,10 +418,8 @@ function App() {
           element={<Forgotpassword />}
         />
 
-        <Route
-          path="/reset-password"
-          element={<Resetpassword />}
-        />
+        <Route path="/resetpassword" element={<Resetpassword />} />
+        <Route path="/reset-password" element={<Resetpassword />} />
         <Route path="/reset-otp" element={<ResetOTP />} />
         <Route
           path="/terms-and-condition"

@@ -16,21 +16,13 @@ import {
   getSupabaseUrlSafe,
   isSupabaseConfigured,
 } from "./supabaseClient.ts";
+import { getAllowedOrigins } from "./origins.ts";
 
 const app = express();
 const port = Number(process.env.PORT) || 3001;
 const startedAt = Date.now();
 
-const allowedOrigins = new Set([
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "http://localhost:4173",
-  "http://127.0.0.1:4173",
-  ...(process.env.CORS_ALLOWED_ORIGINS ?? "")
-    .split(",")
-    .map((origin) => origin.trim().replace(/\/$/, ""))
-    .filter(Boolean),
-]);
+const allowedOrigins = getAllowedOrigins();
 
 const allowedMethods = new Set([
   "GET",

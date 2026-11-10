@@ -6,6 +6,10 @@ import { supabase } from "@/lib/supabase";
 import { API_BASE_URL } from "@/lib/api";
 import { completeSignIn } from "@/lib/authSession";
 import { getOAuthCallbackUrl } from "@/lib/authRedirect";
+import {
+  readRememberedLoginIdentifier,
+  updateRememberedLoginIdentifier,
+} from "@/lib/rememberedLoginIdentifier";
 
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,11 +20,18 @@ import appLogo from "@/assets/APP VER (1).png";
 
 function Login() {
   const navigate = useNavigate();
+  const [rememberedIdentifier] = useState(
+    readRememberedLoginIdentifier
+  );
 
   const [showPassword, setShowPassword] = useState(false);
-  const [identifier, setIdentifier] = useState("");
+  const [identifier, setIdentifier] = useState(
+    rememberedIdentifier ?? ""
+  );
   const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(
+    rememberedIdentifier !== null
+  );
 
   const [identifierError, setIdentifierError] = useState("");
   const [passwordError, setPasswordError] = useState("");
@@ -122,6 +133,15 @@ function Login() {
           "Your login was accepted, but your session could not be established."
         );
         return;
+      }
+
+      if (
+        !updateRememberedLoginIdentifier(
+          normalizedIdentifier,
+          rememberMe
+        )
+      ) {
+        console.warn("Could not update remembered login identifier.");
       }
 
       // Both password and Google sign-in complete through the same trusted

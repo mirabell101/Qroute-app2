@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { shouldPersistSupabaseSession } from "./passwordRecovery";
 
 import { assertPublicSupabaseKey } from "./supabaseConfig";
 
@@ -16,7 +17,10 @@ export const supabase = createClient(
   supabasePublishableKey,
   {
     auth: {
-      persistSession: true,
+      persistSession:
+        typeof window === "undefined"
+          ? true
+          : shouldPersistSupabaseSession(window.location.pathname),
       autoRefreshToken: true,
       detectSessionInUrl: true,
     },
