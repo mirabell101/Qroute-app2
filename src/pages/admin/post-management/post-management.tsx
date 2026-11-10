@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import { getCommunityPosts, type CommunityPost } from "@/lib/community";
+import { deleteAdminCommunityPost } from "@/lib/adminApi";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
 import { supabase } from "@/lib/supabase";
 import {
@@ -49,6 +50,21 @@ export default function PostManagement() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDeletePost = async (postId: string) => {
+    if (!userId) return;
+    setIsDeleting(true);
+    try {
+      await deleteAdminCommunityPost(userId, postId);
+      setPosts((current) => current.filter((post) => post.id !== postId));
+      setSelectedPost(null);
+    } catch (error) {
+      console.warn("Could not delete community post:", error);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -467,8 +483,7 @@ export default function PostManagement() {
 
             <div className="border-t border-slate-100 bg-white px-5 py-4 sm:px-6">
               <p className="text-xs text-slate-400">
-                Post hiding and report processing are unavailable in the
-                current community schema and API.
+                QRoute Community Post Management
               </p>
             </div>
           </section>
@@ -588,13 +603,21 @@ export default function PostManagement() {
               )}
             </div>
 
-            <div className="mt-6 flex justify-end">
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={() => setSelectedPost(null)}
                 className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
               >
                 Close
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => void handleDeletePost(selectedPost.id)}
+                className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-50"
+              >
+                {isDeleting ? "Deleting..." : "Delete Post"}
               </button>
             </div>
           </section>

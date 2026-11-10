@@ -7,6 +7,7 @@ export interface AdminSummary {
   registeredUsers: number;
   routes: number;
   communityPosts: number;
+  reports?: number;
 }
 
 interface AdminRoutePoint {
@@ -52,6 +53,19 @@ export interface AdminUserRecord {
   email: string | null;
   username: string | null;
   createdAt: string;
+  banned?: boolean;
+}
+
+export interface AdminReportRecord {
+  id: number;
+  type: "Post" | "User" | "Route" | "General";
+  reason: string;
+  reportedContent: string;
+  reporter: string;
+  reportedUser: string;
+  date: string;
+  status: "Pending" | "Reviewed" | "Dismissed";
+  description: string;
 }
 
 export async function getAdminSummary(
@@ -223,12 +237,85 @@ export async function getAdminUsers(
       if (!user) {
         throw new Error("A registered user account could not be loaded.");
       }
-      return {
+      const bannedUntil = user.banned_until;
+      const isBanned = Boolean(
+        bannedUntil && new Date(bannedUntil).getTime() > Date.now(),
+      );
+      const record: AdminUserRecord = {
         id,
         email: user.email ?? null,
         username: profileUsernames.get(id) ?? null,
         createdAt: user.created_at,
       };
+      if (isBanned) {
+        record.banned = true;
+      }
+      return record;
     })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export async function getAdminReports(
+  client: SupabaseClient,
+): Promise<AdminReportRecord[]> {
+  const { data, error } = await client
+    .from("reports")
+    .select("id, type, reason, reported_content, reporter, reported_user, status, description, created_at")
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+  if (!Array.isArray(data)) return [];
+
+  return data.map((row) => ({
+    id: Number(row.id),
+    type: row.type ?? "Post",
+    reason: row.reason ?? "",
+    reportedContent: row.reported_content ?? "",
+    reporter: row.reporter ?? "anonymous",
+    reportedUser: row.reported_user ?? "unknown",
+    date: new Date(row.created_at).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }),
+    status: row.status ?? "Pending",
+    description: row.description ?? "",
+  }));
+}
+
+export async function updateAdminReportStatus(
+  client: SupabaseClient,
+  id: number,
+  status: "Pending" | "Reviewed" | "Dismissed",
+): Promise<void> {
+  const { error } = await client
+    .from("reports")
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  if (error) throw error;
+}
+
+export async function deleteAdminPost(
+  client: SupabaseClient,
+  postId: string,
+): Promise<void> {
+  const { error } = await client
+    .from("community_posts")
+    .delete()
+    .eq("id", postId);
+
+  if (error) throw error;
+}
+
+export async function toggleAdminUserBan(
+  adminClient: SupabaseClient,
+  userId: string,
+  ban: boolean,
+): Promise<void> {
+  const { error } = await adminClient.auth.admin.updateUserById(userId, {
+    ban_duration: ban ? "876000h" : "none",
+  });
+
+  if (error) throw error;
 }

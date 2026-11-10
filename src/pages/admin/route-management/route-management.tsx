@@ -260,10 +260,17 @@ export default function RouteManagement() {
                 Review routes, transport types, and their ordered stops.
               </p>
             </div>
-            <p className="max-w-md rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              Route changes are unavailable because the existing route form
-              does not match QRoute&apos;s multi-stop and fare model.
-            </p>
+            <div className="flex w-fit items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+                <RouteIcon size={20} />
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Active Transit Routes</p>
+                <p className="text-xl font-bold text-[#102E4D]">
+                  {routes.length}
+                </p>
+              </div>
+            </div>
           </section>
 
           <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_3px_14px_rgba(15,23,42,0.035)] sm:p-6">

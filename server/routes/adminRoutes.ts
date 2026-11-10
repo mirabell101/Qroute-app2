@@ -2,9 +2,13 @@ import { Router, type Request, type Response } from "express";
 import requireAdmin from "../middleware/requireAdmin.ts";
 import requireAuth from "../middleware/requireAuth.ts";
 import {
+  deleteAdminPost,
+  getAdminReports,
   getAdminRoutes,
   getAdminSummary,
   getAdminUsers,
+  toggleAdminUserBan,
+  updateAdminReportStatus,
 } from "../admin.ts";
 import {
   getSupabaseAdminClient,
@@ -63,6 +67,71 @@ router.get("/users", async (_req: Request, res: Response) => {
   try {
     const users = await getAdminUsers(getSupabaseAdminClient());
     res.json({ success: true, users });
+  } catch (error: unknown) {
+    sendAdminError(res, error);
+  }
+});
+
+router.get("/reports", async (_req: Request, res: Response) => {
+  try {
+    const reports = await getAdminReports(getSupabaseAdminClient());
+    res.json({ success: true, reports });
+  } catch (error: unknown) {
+    sendAdminError(res, error);
+  }
+});
+
+router.patch("/reports/:id", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const { status } = req.body;
+  if (!id || !["Pending", "Reviewed", "Dismissed"].includes(status)) {
+    res.status(400).json({
+      success: false,
+      message: "Valid report id and status are required.",
+    });
+    return;
+  }
+
+  try {
+    await updateAdminReportStatus(getSupabaseAdminClient(), id, status);
+    res.json({ success: true });
+  } catch (error: unknown) {
+    sendAdminError(res, error);
+  }
+});
+
+router.delete("/posts/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (!id) {
+    res.status(400).json({
+      success: false,
+      message: "Post id is required.",
+    });
+    return;
+  }
+
+  try {
+    await deleteAdminPost(getSupabaseAdminClient(), id);
+    res.json({ success: true });
+  } catch (error: unknown) {
+    sendAdminError(res, error);
+  }
+});
+
+router.patch("/users/:id/ban", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const { ban } = req.body;
+  if (!id || typeof ban !== "boolean") {
+    res.status(400).json({
+      success: false,
+      message: "Valid user id and ban boolean status are required.",
+    });
+    return;
+  }
+
+  try {
+    await toggleAdminUserBan(getSupabaseAdminClient(), id, ban);
+    res.json({ success: true });
   } catch (error: unknown) {
     sendAdminError(res, error);
   }

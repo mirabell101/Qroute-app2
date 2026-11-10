@@ -5,6 +5,7 @@ export interface AdminSummary {
   registeredUsers: number;
   routes: number;
   communityPosts: number;
+  reports?: number;
 }
 
 interface AdminRoutePoint {
@@ -50,6 +51,19 @@ export interface AdminUserRecord {
   email: string | null;
   username: string | null;
   createdAt: string;
+  banned?: boolean;
+}
+
+export interface AdminReportRecord {
+  id: number;
+  type: "Post" | "User" | "Route" | "General";
+  reason: string;
+  reportedContent: string;
+  reporter: string;
+  reportedUser: string;
+  date: string;
+  status: "Pending" | "Reviewed" | "Dismissed";
+  description: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -183,6 +197,10 @@ function parseAdminUsers(value: unknown): AdminUserRecord[] {
 async function requestAdmin(
   path: string,
   expectedUserId: string,
+  options?: {
+    method?: string;
+    body?: unknown;
+  },
 ): Promise<Record<string, unknown>> {
   const { data, error } = await supabase.auth.getSession();
   if (error) throw new Error(error.message);
@@ -195,9 +213,12 @@ async function requestAdmin(
   }
 
   const response = await fetch(`${API_BASE_URL}/api/admin${path}`, {
+    method: options?.method ?? "GET",
     headers: {
       Authorization: `Bearer ${session.access_token}`,
+      ...(options?.body ? { "Content-Type": "application/json" } : {}),
     },
+    ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
   });
 
   let payload: unknown;
@@ -242,4 +263,45 @@ export async function getAdminUsers(
 ): Promise<AdminUserRecord[]> {
   const payload = await requestAdmin("/users", expectedUserId);
   return parseAdminUsers(payload.users);
+}
+
+export async function getAdminReports(
+  expectedUserId: string,
+): Promise<AdminReportRecord[]> {
+  const payload = await requestAdmin("/reports", expectedUserId);
+  if (!Array.isArray(payload.reports)) {
+    throw new Error("Admin service returned invalid reports data.");
+  }
+  return payload.reports as AdminReportRecord[];
+}
+
+export async function updateAdminReportStatus(
+  expectedUserId: string,
+  id: number,
+  status: "Pending" | "Reviewed" | "Dismissed",
+): Promise<void> {
+  await requestAdmin(`/reports/${id}`, expectedUserId, {
+    method: "PATCH",
+    body: { status },
+  });
+}
+
+export async function deleteAdminCommunityPost(
+  expectedUserId: string,
+  id: string,
+): Promise<void> {
+  await requestAdmin(`/posts/${id}`, expectedUserId, {
+    method: "DELETE",
+  });
+}
+
+export async function toggleAdminUserBan(
+  expectedUserId: string,
+  id: string,
+  ban: boolean,
+): Promise<void> {
+  await requestAdmin(`/users/${id}/ban`, expectedUserId, {
+    method: "PATCH",
+    body: { ban },
+  });
 }

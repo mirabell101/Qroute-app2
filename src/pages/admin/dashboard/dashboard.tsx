@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import {
   getAdminSummary,
+  getAdminReports,
   type AdminSummary,
 } from "@/lib/adminApi";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
@@ -39,7 +40,7 @@ const summaryCards: Array<{
   {
     title: "Reports",
     metric: null,
-    note: "No reports data source is configured",
+    note: "Community reports in the system",
     icon: Flag,
     iconBg: "bg-orange-100",
     iconColor: "text-orange-700",
@@ -74,6 +75,7 @@ const navigationItems = [
 export default function Dashboard() {
   const navigate = useNavigate();
   const [summary, setSummary] = useState<AdminSummary | null>(null);
+  const [reportsCount, setReportsCount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
@@ -88,8 +90,18 @@ export default function Dashboard() {
         const userId = data.session?.user.id;
         if (!userId) throw new Error("Please sign in to continue.");
 
-        const nextSummary = await getAdminSummary(userId);
-        if (active) setSummary(nextSummary);
+        const [nextSummary, reportsData] = await Promise.allSettled([
+          getAdminSummary(userId),
+          getAdminReports(userId),
+        ]);
+        if (active) {
+          if (nextSummary.status === "fulfilled") {
+            setSummary(nextSummary.value);
+          }
+          if (reportsData.status === "fulfilled") {
+            setReportsCount(reportsData.value.length);
+          }
+        }
       } catch (error: unknown) {
         if (active) {
           setErrorMessage(
@@ -294,13 +306,18 @@ export default function Dashboard() {
           <section className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
             {summaryCards.map((card) => {
               const Icon = card.icon;
+              const metricValue = card.metric && summary ? summary[card.metric] : null;
               const value = card.metric
                 ? isLoading
                   ? "Loading…"
-                  : summary
-                    ? summary[card.metric].toLocaleString()
+                  : typeof metricValue === "number"
+                    ? metricValue.toLocaleString()
                     : "Unavailable"
-                : "Unavailable";
+                : card.title === "Reports"
+                  ? isLoading
+                    ? "Loading…"
+                    : (reportsCount ?? 0).toLocaleString()
+                  : "Unavailable";
 
               return (
                 <article

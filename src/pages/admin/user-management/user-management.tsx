@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
   getAdminUsers,
+  toggleAdminUserBan,
   type AdminUserRecord,
 } from "@/lib/adminApi";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
@@ -19,6 +20,8 @@ import {
   X,
   Eye,
   UserRound,
+  Ban as BanIcon,
+  ShieldCheck,
 } from "lucide-react";
 
 const navigationItems = [
@@ -53,6 +56,34 @@ export default function UserManagement() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [pendingUserId, setPendingUserId] = useState<string | null>(null);
+  const [isBanning, setIsBanning] = useState(false);
+
+  const handleToggleBan = async (targetUserId: string) => {
+    const targetUser = users.find((u) => u.id === targetUserId);
+    if (!targetUser || !userId) return;
+
+    const nextBannedState = !targetUser.banned;
+    setIsBanning(true);
+    try {
+      await toggleAdminUserBan(userId, targetUserId, nextBannedState);
+      setUsers((current) =>
+        current.map((u) =>
+          u.id === targetUserId ? { ...u, banned: nextBannedState } : u
+        )
+      );
+      if (selectedUser?.id === targetUserId) {
+        setSelectedUser((current) =>
+          current ? { ...current, banned: nextBannedState } : null
+        );
+      }
+      setPendingUserId(null);
+    } catch (error) {
+      console.warn("Could not update ban status:", error);
+    } finally {
+      setIsBanning(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -411,7 +442,7 @@ export default function UserManagement() {
 
             <div className="border-t border-slate-100 px-5 py-4 sm:px-6">
               <p className="text-xs text-slate-400">
-                Ban and unban actions are unavailable in the verified schema.
+                QRoute User Management
               </p>
             </div>
           </section>
@@ -486,7 +517,7 @@ export default function UserManagement() {
               </div>
             </div>
 
-            <div className="mt-6 flex justify-end border-t border-slate-100 pt-5">
+            <div className="mt-6 flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={() => setSelectedUser(null)}
@@ -494,10 +525,95 @@ export default function UserManagement() {
               >
                 Close
               </button>
+
+              <button
+                type="button"
+                onClick={() => setPendingUserId(selectedUser.id)}
+                className={`rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition ${
+                  selectedUser.banned
+                    ? "bg-green-700 hover:bg-green-800"
+                    : "bg-red-600 hover:bg-red-700"
+                }`}
+              >
+                {selectedUser.banned ? "Unban User" : "Ban User"}
+              </button>
             </div>
           </section>
         </div>
       )}
+
+      {/* Ban / Unban confirmation dialog */}
+      {pendingUserId !== null &&
+        (() => {
+          const targetUser = users.find((user) => user.id === pendingUserId);
+          if (!targetUser) return null;
+          const banning = !targetUser.banned;
+
+          return (
+            <div
+              className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4"
+              onClick={() => setPendingUserId(null)}
+            >
+              <section
+                role="alertdialog"
+                aria-modal="true"
+                aria-labelledby="confirm-title"
+                onClick={(event) => event.stopPropagation()}
+                className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+              >
+                <div
+                  className={`flex h-12 w-12 items-center justify-center rounded-xl ${
+                    banning
+                      ? "bg-red-50 text-red-600"
+                      : "bg-green-50 text-green-700"
+                  }`}
+                >
+                  {banning ? (
+                    <BanIcon size={23} />
+                  ) : (
+                    <ShieldCheck size={23} />
+                  )}
+                </div>
+
+                <h3
+                  id="confirm-title"
+                  className="mt-4 text-xl font-bold text-[#102E4D]"
+                >
+                  {banning ? "Ban this user?" : "Unban this user?"}
+                </h3>
+
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  {banning
+                    ? `Are you sure you want to ban @${targetUser.username ?? targetUser.email}? This will restrict their account access.`
+                    : `Are you sure you want to restore access for @${targetUser.username ?? targetUser.email}?`}
+                </p>
+
+                <div className="mt-6 flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setPendingUserId(null)}
+                    className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isBanning}
+                    onClick={() => void handleToggleBan(targetUser.id)}
+                    className={`rounded-lg px-4 py-2.5 text-sm font-semibold text-white ${
+                      banning
+                        ? "bg-red-600 hover:bg-red-700"
+                        : "bg-green-700 hover:bg-green-800"
+                    }`}
+                  >
+                    {isBanning ? "Processing..." : `Confirm ${banning ? "Ban" : "Unban"}`}
+                  </button>
+                </div>
+              </section>
+            </div>
+          );
+        })()}
     </div>
   );
 }
