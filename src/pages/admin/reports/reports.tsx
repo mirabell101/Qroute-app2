@@ -6,6 +6,8 @@ import {
   updateAdminReportStatus,
   type AdminReportRecord,
 } from "@/lib/adminApi";
+import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
+import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route as RouteIcon,
@@ -22,106 +24,79 @@ import {
   CheckCircle2,
   Clock,
   AlertTriangle,
+  LogOut,
 } from "lucide-react";
 
 export type ReportType = "Post" | "User" | "Route" | "General";
 export type ReportStatus = "Pending" | "Reviewed" | "Dismissed";
 
-const initialReports: AdminReportRecord[] = [
-  {
-    id: 1,
-    type: "Post",
-    reason: "Incorrect fare information",
-    reportedContent: "Fare update for Cubao - Fairview",
-    reporter: "commuter01",
-    reportedUser: "sample_user1",
-    date: "Oct 15, 2026",
-    status: "Pending",
-    description:
-      "The fare information in this community post may be inaccurate. Please verify the reported details.",
-  },
-  {
-    id: 2,
-    type: "User",
-    reason: "Inappropriate behavior",
-    reportedContent: "@sample_user2",
-    reporter: "qroute_member",
-    reportedUser: "sample_user2",
-    date: "Oct 14, 2026",
-    status: "Pending",
-    description:
-      "This user was reported for behavior that may violate the QRoute community guidelines.",
-  },
-  {
-    id: 3,
-    type: "Post",
-    reason: "Misleading information",
-    reportedContent: "Jeepney route update",
-    reporter: "commuter03",
-    reportedUser: "sample_user3",
-    date: "Oct 13, 2026",
-    status: "Reviewed",
-    description:
-      "A community member questioned the accuracy of the route information shared in this post.",
-  },
-  {
-    id: 4,
-    type: "Post",
-    reason: "Spam",
-    reportedContent: "Repeated transportation post",
-    reporter: "sample_user4",
-    reportedUser: "sample_user4",
-    date: "Oct 12, 2026",
-    status: "Dismissed",
-    description:
-      "The report was reviewed and dismissed because the available information did not establish a violation.",
-  },
-];
-
 const navigationItems = [
-  { label: "Dashboard", icon: LayoutDashboard, path: "/admin/dashboard" },
-  { label: "Route Management", icon: RouteIcon, path: "/admin/routes" },
-  {
-    label: "Post Management",
-    icon: FileText,
-    path: "/admin/post-management",
-  },
-  { label: "Reports", icon: Flag, path: "/admin/reports" },
-  { label: "User Management", icon: Users, path: "/admin/users" },
-  { label: "Settings", icon: Settings, path: "/admin/settings" },
+  { label: "Dashboard", icon: LayoutDashboard },
+  { label: "Route Management", icon: RouteIcon },
+  { label: "Post Management", icon: FileText },
+  { label: "Reports", icon: Flag },
+  { label: "User Management", icon: Users },
+  { label: "Settings", icon: Settings },
 ];
 
 export default function Reports() {
   const navigate = useNavigate();
   const { userId } = useAccountProfile();
 
-  const [reports, setReports] = useState<AdminReportRecord[]>(initialReports);
+  const [reports, setReports] = useState<AdminReportRecord[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
   const [selectedReport, setSelectedReport] = useState<AdminReportRecord | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut({ scope: "local" });
+    localStorage.removeItem("qroute_current_user");
+    sessionStorage.removeItem("qroute_current_user");
+    navigate("/login", { replace: true });
+  };
 
   useEffect(() => {
     let active = true;
 
-    if (userId) {
-      void getAdminReports(userId)
-        .then((data) => {
-          if (active && data.length > 0) {
-            setReports(data);
-          }
-        })
-        .catch((error) => {
-          console.warn("Could not load reports from database, keeping fallback reports:", error);
-        });
-    }
+    void getAdminReports(userId ?? "")
+      .then((data) => {
+        if (active) {
+          setReports(data);
+          setErrorMessage(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setReports([]);
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load reports.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
 
     return () => {
       active = false;
     };
-  }, [userId]);
+  }, [userId, retryCount]);
+
+  const retryLoadingReports = () => {
+    setReports([]);
+    setErrorMessage(null);
+    setIsLoading(true);
+    setRetryCount((count) => count + 1);
+  };
 
   const filteredReports = useMemo(() => {
     const search = searchTerm.toLowerCase().trim();
@@ -151,27 +126,44 @@ export default function Reports() {
   ).length;
 
   async function handleUpdateReportStatus(id: number, status: ReportStatus) {
+    if (!userId) {
+      setUpdateError("Please sign in to continue.");
+      return;
+    }
+
     setIsUpdating(true);
+    setUpdateError(null);
     try {
-      if (userId) {
-        await updateAdminReportStatus(userId, id, status);
-      }
-    } catch (error) {
-      console.warn("Could not persist report status update to backend:", error);
-    } finally {
-      setIsUpdating(false);
+      await updateAdminReportStatus(userId, id, status);
       setReports((currentReports) =>
         currentReports.map((report) =>
           report.id === id ? { ...report, status } : report,
         ),
       );
-
       setSelectedReport((currentReport) =>
         currentReport?.id === id
           ? { ...currentReport, status }
           : currentReport,
       );
+    } catch (error: unknown) {
+      setUpdateError(
+        error instanceof Error
+          ? error.message
+          : "Unable to update the report status.",
+      );
+    } finally {
+      setIsUpdating(false);
     }
+  }
+
+  function openReportDetails(report: AdminReportRecord) {
+    setSelectedReport(report);
+    setUpdateError(null);
+  }
+
+  function closeReportDetails() {
+    setSelectedReport(null);
+    setUpdateError(null);
   }
 
   function getStatusStyle(status: ReportStatus) {
@@ -225,25 +217,37 @@ export default function Reports() {
             {navigationItems.map((item) => {
               const Icon = item.icon;
               const active = item.label === "Reports";
+              const destination = getAdminNavigationDestination(item.label);
 
               return (
                 <button
                   key={item.label}
                   type="button"
+                  disabled={!destination}
+                  title={
+                    destination
+                      ? undefined
+                      : `${item.label} is unavailable in the current system.`
+                  }
                   onClick={() => {
                     setSidebarOpen(false);
-                    navigate(item.path);
+                    if (destination) navigate(destination);
                   }}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${
                     active
                       ? "bg-[#CFD5DB] font-semibold text-[#102E4D]"
-                      : "text-slate-200 hover:bg-white/10 hover:text-white"
+                      : destination
+                        ? "text-slate-200 hover:bg-white/10 hover:text-white"
+                        : "cursor-not-allowed text-slate-400"
                   }`}
                 >
                   <Icon size={19} strokeWidth={1.8} />
                   <span>{item.label}</span>
+                  {!destination && (
+                    <span className="ml-auto text-[10px]">Unavailable</span>
+                  )}
 
-                  {item.label === "Reports" && pendingCount > 0 && (
+                  {destination && item.label === "Reports" && pendingCount > 0 && (
                     <span className="ml-auto rounded-full bg-orange-500 px-2 py-0.5 text-[10px] font-bold text-white">
                       {pendingCount}
                     </span>
@@ -269,11 +273,20 @@ export default function Reports() {
 
           <button
             type="button"
-            onClick={() => navigate("/admin")}
+            onClick={() => navigate("/admin/base")}
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-4 py-3 text-sm font-medium transition hover:bg-white/10"
           >
             <MapPinned size={17} />
             Preview of the System
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+          >
+            <LogOut size={17} />
+            Sign Out
           </button>
         </div>
       </aside>
@@ -390,7 +403,7 @@ export default function Reports() {
 
           {/* Report type filters */}
           <section className="mb-7 flex flex-wrap gap-2.5">
-            {["All", "Post", "User"].map((type) => {
+            {["All", "Post", "User", "Route", "General"].map((type) => {
               const active = typeFilter === type;
 
               return (
@@ -499,7 +512,7 @@ export default function Reports() {
                         <div className="flex items-center justify-center">
                           <button
                             type="button"
-                            onClick={() => setSelectedReport(report)}
+                            onClick={() => openReportDetails(report)}
                             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D]"
                           >
                             <Eye size={14} />
@@ -517,22 +530,47 @@ export default function Reports() {
                           <Search size={22} />
                         </div>
                         <p className="mt-3 font-semibold text-slate-700">
-                          No reports found
+                          {isLoading
+                            ? "Loading reports..."
+                            : errorMessage
+                              ? "Reports could not be loaded"
+                              : reports.length === 0
+                                ? "No reports are available"
+                                : "No reports found"}
                         </p>
                         <p className="mt-1 text-sm text-slate-500">
-                          Try another search term or change your filters.
+                          {errorMessage ??
+                            (isLoading
+                              ? "Loading report records from the server."
+                              : reports.length === 0
+                                ? "The reports service returned no reports."
+                                : "Try another search term or change your filters.")}
                         </p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSearchTerm("");
-                            setTypeFilter("All");
-                            setStatusFilter("All");
-                          }}
-                          className="mt-4 text-sm font-semibold text-[#102E4D] underline underline-offset-4"
-                        >
-                          Clear filters
-                        </button>
+                        {errorMessage ? (
+                          <button
+                            type="button"
+                            onClick={retryLoadingReports}
+                            className="mt-4 rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white"
+                          >
+                            Retry
+                          </button>
+                        ) : (
+                          (searchTerm ||
+                            typeFilter !== "All" ||
+                            statusFilter !== "All") && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSearchTerm("");
+                                setTypeFilter("All");
+                                setStatusFilter("All");
+                              }}
+                              className="mt-4 text-sm font-semibold text-[#102E4D] underline underline-offset-4"
+                            >
+                              Clear filters
+                            </button>
+                          )
+                        )}
                       </td>
                     </tr>
                   )}
@@ -553,7 +591,7 @@ export default function Reports() {
       {selectedReport && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
-          onClick={() => setSelectedReport(null)}
+          onClick={closeReportDetails}
         >
           <section
             role="dialog"
@@ -578,7 +616,7 @@ export default function Reports() {
               <button
                 type="button"
                 aria-label="Close report details"
-                onClick={() => setSelectedReport(null)}
+                onClick={closeReportDetails}
                 className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
               >
                 <X size={20} />
@@ -647,10 +685,19 @@ export default function Reports() {
               </div>
             </div>
 
+            {updateError && (
+              <p
+                role="alert"
+                className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+              >
+                {updateError}
+              </p>
+            )}
+
             <div className="mt-6 flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
               <button
                 type="button"
-                onClick={() => setSelectedReport(null)}
+                onClick={closeReportDetails}
                 className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
               >
                 Close

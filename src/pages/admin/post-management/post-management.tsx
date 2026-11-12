@@ -16,6 +16,7 @@ import {
   MapPinned,
   Menu,
   X,
+  LogOut,
 } from "lucide-react";
 
 const navigationItems = [
@@ -51,20 +52,47 @@ export default function PostManagement() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut({ scope: "local" });
+    localStorage.removeItem("qroute_current_user");
+    sessionStorage.removeItem("qroute_current_user");
+    navigate("/login", { replace: true });
+  };
 
   const handleDeletePost = async (postId: string) => {
-    if (!userId) return;
+    if (!userId) {
+      setDeleteError("Please sign in to continue.");
+      return;
+    }
     setIsDeleting(true);
     try {
       await deleteAdminCommunityPost(userId, postId);
       setPosts((current) => current.filter((post) => post.id !== postId));
-      setSelectedPost(null);
-    } catch (error) {
-      console.warn("Could not delete community post:", error);
+      closePostDetails();
+      setActionMessage("Post deleted successfully.");
+    } catch (error: unknown) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : "Unable to delete the community post.",
+      );
     } finally {
       setIsDeleting(false);
     }
   };
+
+  function openPostDetails(post: CommunityPost) {
+    setSelectedPost(post);
+    setDeleteError(null);
+  }
+
+  function closePostDetails() {
+    setSelectedPost(null);
+    setDeleteError(null);
+  }
 
   useEffect(() => {
     let active = true;
@@ -243,6 +271,15 @@ export default function PostManagement() {
             <MapPinned size={17} />
             Preview of the System
           </button>
+
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+          >
+            <LogOut size={17} />
+            Sign Out
+          </button>
         </div>
       </aside>
 
@@ -291,10 +328,26 @@ export default function PostManagement() {
             </h3>
 
             <p className="mt-2 text-sm text-slate-500">
-              Review posts returned by the community service. Moderation is
-              unavailable because the existing API has no moderation actions.
+              Review community posts returned by the community service and
+              remove posts when needed.
             </p>
           </section>
+
+          {actionMessage && (
+            <div
+              role="status"
+              className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800"
+            >
+              <span>{actionMessage}</span>
+              <button
+                type="button"
+                onClick={() => setActionMessage(null)}
+                className="rounded-lg border border-green-300 px-3 py-1.5 font-semibold transition hover:bg-green-100"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
 
           {/* Search */}
           <section className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -415,7 +468,7 @@ export default function PostManagement() {
                         <div className="flex items-center justify-center gap-2">
                           <button
                             type="button"
-                            onClick={() => setSelectedPost(post)}
+                            onClick={() => openPostDetails(post)}
                             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D]"
                           >
                             View
@@ -494,7 +547,7 @@ export default function PostManagement() {
       {selectedPost && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
-          onClick={() => setSelectedPost(null)}
+          onClick={closePostDetails}
         >
           <section
             role="dialog"
@@ -519,7 +572,7 @@ export default function PostManagement() {
               <button
                 type="button"
                 aria-label="Close post details"
-                onClick={() => setSelectedPost(null)}
+                onClick={closePostDetails}
                 className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
               >
                 <X size={20} />
@@ -603,10 +656,19 @@ export default function PostManagement() {
               )}
             </div>
 
+            {deleteError && (
+              <p
+                role="alert"
+                className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+              >
+                {deleteError}
+              </p>
+            )}
+
             <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
                 type="button"
-                onClick={() => setSelectedPost(null)}
+                onClick={closePostDetails}
                 className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
               >
                 Close

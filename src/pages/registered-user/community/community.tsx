@@ -784,7 +784,7 @@ export default function Community({
             <button
               key={label}
               type="button"
-              onClick={() => label === "Community" ? navigate(path) : currentUserId ? navigate(path) : promptLogin()}
+              onClick={() => navigate(path)}
               title={label}
               className={`group flex h-[46px] w-full items-center justify-center rounded-xl px-2 text-left lg:justify-start lg:px-3 ${label === "Community" ? "bg-[#d9dee3] font-semibold text-[#0f2a47]" : "font-medium text-white hover:bg-white/15"}`}
             >

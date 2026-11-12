@@ -13,7 +13,6 @@ import {
   AUTH_ROLE_UPDATED_EVENT,
   getUserRole,
 } from "./lib/authSession";
-import { resolveAuthenticatedRootPath } from "./lib/authRedirect";
 import type { QRouteRole } from "./lib/roles";
 import { SavedItemsProvider } from "./components/saved/SavedItemsContext";
 import { RecentSearchesProvider } from "./components/recent-searches/RecentSearchesContext";
@@ -72,9 +71,18 @@ function App() {
     roleState.loaded && roleState.userId === currentUserId
       ? roleState.role
       : null;
-  const authenticatedRootPath = resolveAuthenticatedRootPath(
-    currentUserId !== null
-  );
+
+  // Role-aware root redirect: admins go to their dashboard, registered users
+  // go to the user homepage. Wait for both auth and role to finish loading so
+  // the redirect target is based on the verified database role, not a guess.
+  const authenticatedRootPath: string | null =
+    authLoading || roleLoading
+      ? null
+      : currentUserId === null
+        ? null
+        : currentUserRole === "admin"
+          ? "/admin/dashboard"
+          : "/home";
 
   // Restore and validate the existing Supabase session.
   useEffect(() => {
@@ -318,9 +326,9 @@ function App() {
               <Route
                 path="/"
                 element={
-                  authLoading ? null : authenticatedRootPath ? (
+                  authenticatedRootPath ? (
                     <Navigate to={authenticatedRootPath} replace />
-                  ) : (
+                  ) : authLoading || roleLoading ? null : (
                     <Landing
                       currentUserId={currentUserId}
                       onLogout={handleLogout}
@@ -434,6 +442,10 @@ function App() {
               {/* Admin routes require the admin role from user_roles */}
               <Route
                 path="/admin"
+                element={adminPage(() => <Navigate to="/admin/dashboard" replace />)}
+              />
+              <Route
+                path="/admin/base"
                 element={adminPage(() => <AdminBase />)}
               />
               <Route

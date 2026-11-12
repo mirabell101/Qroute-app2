@@ -23,6 +23,7 @@ const TRUSTED_POST_AUTH_PATHS = new Set([
   "/points-badges",
   "/community",
   "/admin",
+  "/admin/base",
   "/admin/dashboard",
   "/admin/routes",
   "/admin/post-management",

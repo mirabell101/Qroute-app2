@@ -93,5 +93,10 @@ export async function completeSignIn(
 }
 
 export function completeGoogleSignIn(accessToken: string): Promise<string> {
-  return completeSignIn(accessToken, "/home");
+  // Do not pass a hardcoded fallback path here. The session endpoint returns
+  // the user's real role, and completeSignIn resolves the destination from
+  // that role via roleLandingPath. Passing "/home" would override the
+  // role-based destination, sending admins to the user homepage instead of
+  // the admin dashboard.
+  return completeSignIn(accessToken, null);
 }

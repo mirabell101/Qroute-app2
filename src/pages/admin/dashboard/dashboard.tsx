@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/lib/supabase";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
   getAdminSummary,
-  getAdminReports,
   type AdminSummary,
 } from "@/lib/adminApi";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
+import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route,
@@ -18,6 +18,7 @@ import {
   Clock,
   MapPinned,
   Menu,
+  LogOut,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -39,7 +40,7 @@ const summaryCards: Array<{
   },
   {
     title: "Reports",
-    metric: null,
+    metric: "reports",
     note: "Community reports in the system",
     icon: Flag,
     iconBg: "bg-orange-100",
@@ -72,54 +73,62 @@ const navigationItems = [
   { label: "Settings", icon: Settings, active: false },
 ];
 
+function formatActivityTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Time unavailable"
+    : date.toLocaleString();
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { userId } = useAccountProfile();
   const [summary, setSummary] = useState<AdminSummary | null>(null);
-  const [reportsCount, setReportsCount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut({ scope: "local" });
+    localStorage.removeItem("qroute_current_user");
+    sessionStorage.removeItem("qroute_current_user");
+    navigate("/login", { replace: true });
+  };
 
   useEffect(() => {
     let active = true;
 
     const loadSummary = async () => {
-      try {
-        const { data, error } = await supabase.auth.getSession();
-        if (error) throw new Error(error.message);
-        const userId = data.session?.user.id;
-        if (!userId) throw new Error("Please sign in to continue.");
+      if (!userId) {
+        throw new Error("Please sign in to continue.");
+      }
 
-        const [nextSummary, reportsData] = await Promise.allSettled([
-          getAdminSummary(userId),
-          getAdminReports(userId),
-        ]);
+      const nextSummary = await getAdminSummary(userId);
+      if (active) {
+        setSummary(nextSummary);
+        setErrorMessage(null);
+      }
+    };
+
+    void loadSummary()
+      .catch((error: unknown) => {
         if (active) {
-          if (nextSummary.status === "fulfilled") {
-            setSummary(nextSummary.value);
-          }
-          if (reportsData.status === "fulfilled") {
-            setReportsCount(reportsData.value.length);
-          }
-        }
-      } catch (error: unknown) {
-        if (active) {
+          setSummary(null);
           setErrorMessage(
             error instanceof Error
               ? error.message
               : "Unable to load admin dashboard data.",
           );
         }
-      } finally {
+      })
+      .finally(() => {
         if (active) setIsLoading(false);
-      }
-    };
+      });
 
-    void loadSummary();
     return () => {
       active = false;
     };
-  }, [retryCount]);
+  }, [userId, retryCount]);
 
   const retryLoadingSummary = () => {
     setSummary(null);
@@ -203,11 +212,20 @@ export default function Dashboard() {
 
           <button
             type="button"
-            onClick={() => navigate("/admin")}
+            onClick={() => navigate("/admin/base")}
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-4 py-3 text-sm font-medium transition hover:bg-white/10"
           >
             <MapPinned size={17} />
             Switch to User Mode
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+          >
+            <LogOut size={17} />
+            Sign Out
           </button>
         </div>
       </aside>
@@ -307,16 +325,10 @@ export default function Dashboard() {
             {summaryCards.map((card) => {
               const Icon = card.icon;
               const metricValue = card.metric && summary ? summary[card.metric] : null;
-              const value = card.metric
-                ? isLoading
-                  ? "Loading…"
-                  : typeof metricValue === "number"
-                    ? metricValue.toLocaleString()
-                    : "Unavailable"
-                : card.title === "Reports"
-                  ? isLoading
-                    ? "Loading…"
-                    : (reportsCount ?? 0).toLocaleString()
+              const value = isLoading
+                ? "Loading…"
+                : typeof metricValue === "number"
+                  ? metricValue.toLocaleString()
                   : "Unavailable";
 
               return (
@@ -364,8 +376,61 @@ export default function Dashboard() {
                 <Clock size={19} className="text-slate-400" />
               </div>
 
-              <div className="px-5 py-5 text-sm text-slate-500 sm:px-6">
-                No admin activity data source is configured.
+              <div className="px-5 py-5 sm:px-6">
+                {isLoading ? (
+                  <p role="status" className="text-sm text-slate-500">
+                    Loading recent activity...
+                  </p>
+                ) : !summary || summary.recentActivity === null ? (
+                  <p className="text-sm text-slate-500">
+                    Recent activity is unavailable right now.
+                  </p>
+                ) : summary.recentActivity.length === 0 ? (
+                  <p className="text-sm text-slate-500">
+                    No recent activity yet.
+                  </p>
+                ) : (
+                  <ul className="space-y-3">
+                    {summary.recentActivity.map((item, index) => {
+                      const ActivityIcon =
+                        item.kind === "report" ? Flag : FileText;
+
+                      return (
+                        <li
+                          key={`${item.kind}-${index}`}
+                          className="flex items-start gap-3 rounded-lg border border-slate-100 bg-[#F8FAFD] px-4 py-3"
+                        >
+                          <span
+                            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                              item.kind === "report"
+                                ? "bg-orange-100 text-orange-700"
+                                : "bg-purple-100 text-purple-700"
+                            }`}
+                          >
+                            <ActivityIcon size={15} />
+                          </span>
+                          <div className="min-w-0">
+                            <p
+                              className="truncate font-medium text-slate-800"
+                              title={item.title}
+                            >
+                              {item.title}
+                            </p>
+                            <p
+                              className="truncate text-xs text-slate-500"
+                              title={item.detail}
+                            >
+                              {item.detail}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-400">
+                              {formatActivityTime(item.occurredAt)}
+                            </p>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </div>
             </div>
           </section>

@@ -7,6 +7,7 @@ import {
   type AdminUserRecord,
 } from "@/lib/adminApi";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
+import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route as RouteIcon,
@@ -22,6 +23,7 @@ import {
   UserRound,
   Ban as BanIcon,
   ShieldCheck,
+  LogOut,
 } from "lucide-react";
 
 const navigationItems = [
@@ -58,10 +60,22 @@ export default function UserManagement() {
   const [retryCount, setRetryCount] = useState(0);
   const [pendingUserId, setPendingUserId] = useState<string | null>(null);
   const [isBanning, setIsBanning] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut({ scope: "local" });
+    localStorage.removeItem("qroute_current_user");
+    sessionStorage.removeItem("qroute_current_user");
+    navigate("/login", { replace: true });
+  };
 
   const handleToggleBan = async (targetUserId: string) => {
     const targetUser = users.find((u) => u.id === targetUserId);
-    if (!targetUser || !userId) return;
+    if (!targetUser) return;
+    if (!userId) {
+      setActionError("Please sign in to continue.");
+      return;
+    }
 
     const nextBannedState = !targetUser.banned;
     setIsBanning(true);
@@ -78,8 +92,13 @@ export default function UserManagement() {
         );
       }
       setPendingUserId(null);
-    } catch (error) {
-      console.warn("Could not update ban status:", error);
+      setActionError(null);
+    } catch (error: unknown) {
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "Unable to update the user's access.",
+      );
     } finally {
       setIsBanning(false);
     }
@@ -232,6 +251,15 @@ export default function UserManagement() {
           >
             <MapPinned size={17} />
             Preview of the System
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+          >
+            <LogOut size={17} />
+            Sign Out
           </button>
         </div>
       </aside>
@@ -528,7 +556,10 @@ export default function UserManagement() {
 
               <button
                 type="button"
-                onClick={() => setPendingUserId(selectedUser.id)}
+                onClick={() => {
+                  setPendingUserId(selectedUser.id);
+                  setActionError(null);
+                }}
                 className={`rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition ${
                   selectedUser.banned
                     ? "bg-green-700 hover:bg-green-800"
@@ -552,7 +583,10 @@ export default function UserManagement() {
           return (
             <div
               className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4"
-              onClick={() => setPendingUserId(null)}
+              onClick={() => {
+                setPendingUserId(null);
+                setActionError(null);
+              }}
             >
               <section
                 role="alertdialog"
@@ -588,10 +622,22 @@ export default function UserManagement() {
                     : `Are you sure you want to restore access for @${targetUser.username ?? targetUser.email}?`}
                 </p>
 
+                {actionError && (
+                  <p
+                    role="alert"
+                    className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+                  >
+                    {actionError}
+                  </p>
+                )}
+
                 <div className="mt-6 flex justify-end gap-3">
                   <button
                     type="button"
-                    onClick={() => setPendingUserId(null)}
+                    onClick={() => {
+                      setPendingUserId(null);
+                      setActionError(null);
+                    }}
                     className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
                   >
                     Cancel

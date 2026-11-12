@@ -1,11 +1,19 @@
 import { API_BASE_URL } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 
+export interface AdminRecentActivityItem {
+  kind: "report" | "post";
+  title: string;
+  detail: string;
+  occurredAt: string;
+}
+
 export interface AdminSummary {
   registeredUsers: number;
   routes: number;
   communityPosts: number;
-  reports?: number;
+  reports: number | null;
+  recentActivity: AdminRecentActivityItem[] | null;
 }
 
 interface AdminRoutePoint {
@@ -64,6 +72,28 @@ export interface AdminReportRecord {
   date: string;
   status: "Pending" | "Reviewed" | "Dismissed";
   description: string;
+}
+
+export interface AdminRouteStopPayload {
+  kind: "terminal" | "stop";
+  id: number;
+}
+
+export interface AdminRouteCreatePayload {
+  name: string;
+  transportTypeId: number;
+  variantId: number;
+  stops: AdminRouteStopPayload[];
+}
+
+export interface AdminRouteUpdatePayload {
+  name?: string;
+  transportTypeId?: number;
+  variantId?: number;
+  moderationStatus?: "pending" | "approved" | "rejected";
+  moderationNote?: string | null;
+  isActive?: boolean;
+  stops?: AdminRouteStopPayload[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -154,12 +184,39 @@ function isAdminRouteRecord(value: unknown): value is AdminRouteRecord {
   );
 }
 
+function isNullableCount(value: unknown): value is number | null {
+  return value === null || isNonNegativeInteger(value);
+}
+
+function isRecentActivityItem(
+  value: unknown,
+): value is AdminRecentActivityItem {
+  return (
+    isRecord(value) &&
+    (value.kind === "report" || value.kind === "post") &&
+    typeof value.title === "string" &&
+    typeof value.detail === "string" &&
+    typeof value.occurredAt === "string"
+  );
+}
+
+function isNullableRecentActivity(
+  value: unknown,
+): value is AdminRecentActivityItem[] | null {
+  return (
+    value === null ||
+    (Array.isArray(value) && value.every(isRecentActivityItem))
+  );
+}
+
 function parseAdminSummary(value: unknown): AdminSummary {
   if (
     !isRecord(value) ||
     !isNonNegativeInteger(value.registeredUsers) ||
     !isNonNegativeInteger(value.routes) ||
-    !isNonNegativeInteger(value.communityPosts)
+    !isNonNegativeInteger(value.communityPosts) ||
+    !isNullableCount(value.reports) ||
+    !isNullableRecentActivity(value.recentActivity)
   ) {
     throw new Error("Admin service returned an invalid response.");
   }
@@ -167,6 +224,8 @@ function parseAdminSummary(value: unknown): AdminSummary {
     registeredUsers: value.registeredUsers,
     routes: value.routes,
     communityPosts: value.communityPosts,
+    reports: value.reports,
+    recentActivity: value.recentActivity,
   };
 }
 
@@ -303,5 +362,42 @@ export async function toggleAdminUserBan(
   await requestAdmin(`/users/${id}/ban`, expectedUserId, {
     method: "PATCH",
     body: { ban },
+  });
+}
+
+export async function createAdminRoute(
+  expectedUserId: string,
+  payload: AdminRouteCreatePayload,
+): Promise<number> {
+  const response = await requestAdmin("/routes", expectedUserId, {
+    method: "POST",
+    body: payload,
+  });
+  if (
+    !isRecord(response.route) ||
+    !isNonNegativeInteger(response.route.id)
+  ) {
+    throw new Error("Admin service returned an invalid response.");
+  }
+  return response.route.id;
+}
+
+export async function updateAdminRoute(
+  expectedUserId: string,
+  routeId: number,
+  payload: AdminRouteUpdatePayload,
+): Promise<void> {
+  await requestAdmin(`/routes/${routeId}`, expectedUserId, {
+    method: "PATCH",
+    body: payload,
+  });
+}
+
+export async function deleteAdminRoute(
+  expectedUserId: string,
+  routeId: number,
+): Promise<void> {
+  await requestAdmin(`/routes/${routeId}`, expectedUserId, {
+    method: "DELETE",
   });
 }

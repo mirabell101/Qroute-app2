@@ -5,7 +5,9 @@ const adminNavigationDestinations: Record<string, string | null> = {
   Reports: "/admin/reports",
   "User Management": "/admin/users",
   Settings: null,
-  "Preview of the System": "/admin",
+  // The admin base map view lives at /admin/base. /admin itself now
+  // redirects directly to /admin/dashboard.
+  "Preview of the System": "/admin/base",
   "Switch to User Mode": "/home",
   Recents: "/recents",
   Saved: "/saved",
