@@ -1,0 +1,2 @@
+[functions.cleanup-unverified-users]
+verify_jwt = false
