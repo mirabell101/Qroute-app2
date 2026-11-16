@@ -90,7 +90,7 @@ function AuthCallback({
       // client already exchanged the code during initialization. Only
       // exchange manually when initialization did not attempt the exchange,
       // otherwise the single-use code would be redeemed twice.
-      if (!session && callback.code && !initializationError) {
+      if (!session && callback.code) {
         const { data: exchangeData, error: exchangeError } =
           await supabase.auth.exchangeCodeForSession(callback.code);
 
@@ -124,6 +124,7 @@ function AuthCallback({
       if (!session?.access_token) {
         console.error("OAuth callback did not establish a session.", {
           hadCode: Boolean(callback.code),
+          hadImplicitTokens: Boolean(implicitTokens),
           initializationError: initializationError?.message ?? null,
         });
 
@@ -157,6 +158,9 @@ function AuthCallback({
       if (onComplete) {
         onComplete();
       } else {
+        if (window.location.hash) {
+          window.history.replaceState(null, "", destination);
+        }
         navigate(destination, { replace: true });
       }
     }

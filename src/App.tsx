@@ -326,7 +326,14 @@ function App() {
               <Route
                 path="/"
                 element={
-                  authenticatedRootPath ? (
+                  window.location.hash.includes("access_token") ||
+                  window.location.search.includes("code=") ||
+                  window.location.search.includes("error=") ? (
+                    <Navigate
+                      to={`/auth/callback${window.location.search}${window.location.hash}`}
+                      replace
+                    />
+                  ) : authenticatedRootPath ? (
                     <Navigate to={authenticatedRootPath} replace />
                   ) : authLoading || roleLoading ? null : (
                     <Landing

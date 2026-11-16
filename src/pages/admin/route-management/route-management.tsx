@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
+import AccountAvatar from "@/components/account/AccountAvatar";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
   createAdminRoute,
@@ -91,8 +93,15 @@ function routeStatus(route: AdminRouteRecord): string {
 
 export default function RouteManagement() {
   const navigate = useNavigate();
-  const { userId } = useAccountProfile();
+  const { userId, account } = useAccountProfile();
   const [routes, setRoutes] = useState<AdminRouteRecord[]>([]);
+
+  const adminDisplayName =
+    account?.displayName?.trim() ||
+    account?.username?.trim() ||
+    (account?.email ? account.email.split("@")[0] : null) ||
+    "Admin";
+  const adminEmail = account?.email || "Administrator";
   const [activeFilter, setActiveFilter] = useState("All");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedRoute, setSelectedRoute] = useState<AdminRouteRecord | null>(
@@ -515,7 +524,7 @@ export default function RouteManagement() {
             aria-label="QRoute dashboard"
           >
             <img
-                src="/White%20Qroute%20Logo.png"
+                src={qrouteWhiteLogo}
                 alt="QRoute Logo"
                 className="h-auto w-[150px] object-contain"
               />
@@ -613,20 +622,29 @@ export default function RouteManagement() {
             <button
               type="button"
               aria-label="Notifications"
-              disabled
-              title="Notifications are unavailable because no notification destination exists."
-              className="relative flex h-10 w-10 cursor-not-allowed items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-slate-400"
+              title="View reports"
+              onClick={() => navigate("/admin/reports")}
+              className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
             >
               <Bell size={19} />
             </button>
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
             <div className="flex items-center gap-2.5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#DCE9F7] font-bold text-[#102E4D]">
-                A
-              </div>
-              <div className="hidden sm:block">
-                <p className="text-sm font-semibold text-slate-800">Admin</p>
-                <p className="text-xs text-slate-500">Administrator</p>
+              <AccountAvatar
+                account={account}
+                className="h-10 w-10 bg-[#DCE9F7] font-bold text-[#102E4D]"
+                iconSize={20}
+              />
+              <div className="hidden sm:block text-left">
+                <p className="text-sm font-semibold text-slate-800">
+                  {adminDisplayName}
+                </p>
+                <p
+                  className="text-xs text-slate-500 max-w-[180px] truncate"
+                  title={adminEmail}
+                >
+                  {adminEmail}
+                </p>
               </div>
             </div>
           </div>

@@ -112,7 +112,10 @@ export async function getAdminSummary(
       .from("user_roles")
       .select("user_id")
       .eq("role", "registered_user"),
-    client.from("routes").select("id", { count: "exact", head: true }),
+    client
+      .from("routes")
+      .select("id", { count: "exact", head: true })
+      .eq("is_deleted", false),
     client.from("community_posts").select("id", { count: "exact", head: true }),
     client.from("reports").select("id", { count: "exact", head: true }),
     client

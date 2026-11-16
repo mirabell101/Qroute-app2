@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
+import AccountAvatar from "@/components/account/AccountAvatar";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
+  getAdminReports,
   getAdminSummary,
   type AdminSummary,
 } from "@/lib/adminApi";
@@ -82,11 +85,21 @@ function formatActivityTime(value: string): string {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { userId } = useAccountProfile();
+  const { userId, account } = useAccountProfile();
   const [summary, setSummary] = useState<AdminSummary | null>(null);
+  const [pendingReportsCount, setPendingReportsCount] = useState<number | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+
+  const adminDisplayName =
+    account?.displayName?.trim() ||
+    account?.username?.trim() ||
+    (account?.email ? account.email.split("@")[0] : null) ||
+    "Admin";
+  const adminEmail = account?.email || "Administrator";
 
   const handleLogout = async () => {
     await supabase.auth.signOut({ scope: "local" });
@@ -103,9 +116,16 @@ export default function Dashboard() {
         throw new Error("Please sign in to continue.");
       }
 
-      const nextSummary = await getAdminSummary(userId);
+      const [nextSummary, reports] = await Promise.all([
+        getAdminSummary(userId),
+        getAdminReports(userId).catch(() => null),
+      ]);
       if (active) {
         setSummary(nextSummary);
+        if (reports) {
+          const pending = reports.filter((r) => r.status === "Pending").length;
+          setPendingReportsCount(pending);
+        }
         setErrorMessage(null);
       }
     };
@@ -144,7 +164,7 @@ export default function Dashboard() {
         <div className="flex h-[105px] items-center border-b border-white/10 px-7">
           <div>
             <img
-                src="/White%20Qroute%20Logo.png"
+                src={qrouteWhiteLogo}
                 alt="QRoute Logo"
                 className="h-auto w-[150px] object-contain"
               />
@@ -250,30 +270,43 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-3 sm:gap-5">
-
-
             <button
               type="button"
-              aria-label="Notifications"
-              disabled
-              title="Notifications are unavailable because no notification destination exists."
-              className="relative flex h-10 w-10 cursor-not-allowed items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-slate-400"
+              aria-label="Pending Reports"
+              title={
+                pendingReportsCount !== null && pendingReportsCount > 0
+                  ? `${pendingReportsCount} pending report${pendingReportsCount === 1 ? "" : "s"}`
+                  : "View reports"
+              }
+              onClick={() => navigate("/admin/reports")}
+              className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
             >
               <Bell size={19} />
+              {typeof pendingReportsCount === "number" &&
+                pendingReportsCount > 0 && (
+                  <span className="absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-orange-500 px-1 text-[10px] font-bold text-white shadow-sm">
+                    {pendingReportsCount > 99 ? "99+" : pendingReportsCount}
+                  </span>
+                )}
             </button>
 
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
 
             <div className="flex items-center gap-2.5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#DCE9F7] font-bold text-[#102E4D]">
-                A
-              </div>
-              <div className="hidden sm:block">
+              <AccountAvatar
+                account={account}
+                className="h-10 w-10 bg-[#DCE9F7] font-bold text-[#102E4D]"
+                iconSize={20}
+              />
+              <div className="hidden sm:block text-left">
                 <p className="text-sm font-semibold text-slate-800">
-                  Admin
+                  {adminDisplayName}
                 </p>
-                <p className="text-xs text-slate-500">
-                  Administrator
+                <p
+                  className="text-xs text-slate-500 max-w-[180px] truncate"
+                  title={adminEmail}
+                >
+                  {adminEmail}
                 </p>
               </div>
             </div>
@@ -285,10 +318,8 @@ export default function Dashboard() {
           {/* Welcome Section */}
           <section className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
-
-
               <h3 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">
-                Welcome back, Admin!
+                Welcome back, {adminDisplayName}!
               </h3>
 
               <p className="mt-2 text-sm text-slate-500">
@@ -355,7 +386,11 @@ export default function Dashboard() {
 
                   <div className="mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
                     <span className="text-xs text-slate-500">
-                      {card.note}
+                      {card.metric === "reports" &&
+                      pendingReportsCount !== null &&
+                      pendingReportsCount > 0
+                        ? `${pendingReportsCount} pending review`
+                        : card.note}
                     </span>
                   </div>
                 </article>

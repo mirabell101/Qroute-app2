@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
+import AccountAvatar from "@/components/account/AccountAvatar";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
   getAdminUsers,
@@ -47,7 +49,14 @@ function formatCreatedAt(value: string): string {
 
 export default function UserManagement() {
   const navigate = useNavigate();
-  const { userId } = useAccountProfile();
+  const { userId, account } = useAccountProfile();
+
+  const adminDisplayName =
+    account?.displayName?.trim() ||
+    account?.username?.trim() ||
+    (account?.email ? account.email.split("@")[0] : null) ||
+    "Admin";
+  const adminEmail = account?.email || "Administrator";
 
   const [users, setUsers] = useState<AdminUserRecord[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -173,7 +182,7 @@ export default function UserManagement() {
         <div className="flex h-[105px] items-center border-b border-white/10 px-7">
           <div>
              <img
-                src="/White%20Qroute%20Logo.png"
+                src={qrouteWhiteLogo}
                 alt="QRoute Logo"
                 className="h-auto w-[150px] object-contain"
               />
@@ -291,12 +300,21 @@ export default function UserManagement() {
           <div className="flex items-center gap-3 sm:gap-5">
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
             <div className="flex items-center gap-2.5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#DCE9F7] font-bold text-[#102E4D]">
-                A
-              </div>
-              <div className="hidden sm:block">
-                <p className="text-sm font-semibold text-slate-800">Admin</p>
-                <p className="text-xs text-slate-500">Administrator</p>
+              <AccountAvatar
+                account={account}
+                className="h-10 w-10 bg-[#DCE9F7] font-bold text-[#102E4D]"
+                iconSize={20}
+              />
+              <div className="hidden sm:block text-left">
+                <p className="text-sm font-semibold text-slate-800">
+                  {adminDisplayName}
+                </p>
+                <p
+                  className="text-xs text-slate-500 max-w-[180px] truncate"
+                  title={adminEmail}
+                >
+                  {adminEmail}
+                </p>
               </div>
             </div>
           </div>
