@@ -90,7 +90,7 @@ function AuthCallback({
       // client already exchanged the code during initialization. Only
       // exchange manually when initialization did not attempt the exchange,
       // otherwise the single-use code would be redeemed twice.
-      if (!session && callback.code) {
+      if (!session && callback.code && !initializationError) {
         const { data: exchangeData, error: exchangeError } =
           await supabase.auth.exchangeCodeForSession(callback.code);
 

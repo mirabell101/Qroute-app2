@@ -15,6 +15,8 @@ type SessionResponse = {
   message?: string;
 };
 
+let googleSignInCompletion: Promise<string> | null = null;
+
 /**
  * Reads the signed-in user's role from the database.
  *
@@ -98,5 +100,11 @@ export function completeGoogleSignIn(accessToken: string): Promise<string> {
   // that role via roleLandingPath. Passing "/home" would override the
   // role-based destination, sending admins to the user homepage instead of
   // the admin dashboard.
-  return completeSignIn(accessToken, null);
+  // Keep callback completion single-flight for this page load: auth state
+  // updates can remount the callback before it redirects.
+  if (!googleSignInCompletion) {
+    googleSignInCompletion = completeSignIn(accessToken, null);
+  }
+
+  return googleSignInCompletion;
 }

@@ -17,6 +17,7 @@ export const supabase = createClient(
   supabasePublishableKey,
   {
     auth: {
+      flowType: "pkce",
       persistSession:
         typeof window === "undefined"
           ? true
