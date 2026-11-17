@@ -1,10 +1,12 @@
 
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 import AccountAvatar from "@/components/account/AccountAvatar";
 import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
+import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route,
@@ -14,6 +16,7 @@ import {
   Settings as SettingsIcon,
   MapPinned,
   Menu,
+  LogOut,
   X,
   UserRound,
   LockKeyhole,
@@ -68,6 +71,13 @@ export default function Settings() {
     (account?.email ? account.email.split("@")[0] : null) ||
     "Admin";
   const adminEmail = account?.email || "Administrator";
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut({ scope: "local" });
+    localStorage.removeItem("qroute_current_user");
+    sessionStorage.removeItem("qroute_current_user");
+    navigate("/login", { replace: true });
+  };
 
   // Password modal
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
@@ -200,9 +210,11 @@ export default function Settings() {
       >
         <div className="flex h-[105px] items-center border-b border-white/10 px-7">
           <div>
-            <h1 className="text-[32px] font-extrabold tracking-[-1.5px]">
-              QRoute
-            </h1>
+            <img
+              src={qrouteWhiteLogo}
+              alt="QRoute Logo"
+              className="h-auto w-[150px] object-contain"
+            />
             <p className="mt-0.5 text-xs tracking-wide text-blue-200">
               ADMINISTRATION
             </p>
@@ -265,6 +277,15 @@ export default function Settings() {
           >
             <MapPinned size={17} />
             Preview of the System
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+          >
+            <LogOut size={17} />
+            Sign Out
           </button>
         </div>
       </aside>
