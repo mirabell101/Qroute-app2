@@ -2,9 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 import AccountAvatar from "@/components/account/AccountAvatar";
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
-import { getCommunityPosts, type CommunityPost } from "@/lib/community";
-import { deleteAdminCommunityPost } from "@/lib/adminApi";
+import { AdminCommunityPhoto } from "@/components/admin/AdminCommunityPhoto";
+import {
+  getCommunityPosts,
+  withPhotoUrls,
+  type CommunityPost,
+} from "@/lib/community";
+import {
+  deleteAdminCommunityPost,
+  setAdminPostVisibility,
+} from "@/lib/adminApi";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
 import { supabase } from "@/lib/supabase";
 import {
@@ -18,8 +27,17 @@ import {
   MapPinned,
   Menu,
   X,
+  ChevronDown,
+  Eye,
+  EyeOff,
   LogOut,
 } from "lucide-react";
+import {
+  applyPostVisibility,
+  filterCommunityPosts,
+  getPostVisibility,
+  type PostVisibility,
+} from "./postManagementModel";
 
 const navigationItems = [
   { label: "Dashboard", icon: LayoutDashboard },
@@ -54,6 +72,9 @@ export default function PostManagement() {
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [transportFilter, setTransportFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState<"All" | PostVisibility>(
+    "All",
+  );
   const [selectedPost, setSelectedPost] =
     useState<CommunityPost | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -63,6 +84,8 @@ export default function PostManagement() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [visibilityUpdatingId, setVisibilityUpdatingId] = useState<string | null>(null);
+  const [visibilityError, setVisibilityError] = useState<string | null>(null);
 
   const handleLogout = async () => {
     await supabase.auth.signOut({ scope: "local" });
@@ -102,6 +125,43 @@ export default function PostManagement() {
     setSelectedPost(null);
     setDeleteError(null);
   }
+
+  const handleToggleVisibility = async (post: CommunityPost) => {
+    if (!userId) {
+      setVisibilityError("Please sign in to continue.");
+      return;
+    }
+
+    const nextHidden = !post.is_hidden;
+    setVisibilityUpdatingId(post.id);
+    setVisibilityError(null);
+    try {
+      await setAdminPostVisibility(userId, post.id, nextHidden);
+      setPosts((current) =>
+        applyPostVisibility(current, post.id, nextHidden).map((item) =>
+          item.id === post.id ? withPhotoUrls(item) : item,
+        ),
+      );
+      setSelectedPost((current) =>
+        current?.id === post.id
+          ? withPhotoUrls({ ...current, is_hidden: nextHidden })
+          : current,
+      );
+      setActionMessage(
+        nextHidden
+          ? "Post hidden successfully."
+          : "Post is visible again.",
+      );
+    } catch (error: unknown) {
+      setVisibilityError(
+        error instanceof Error
+          ? error.message
+          : "Unable to update the post visibility.",
+      );
+    } finally {
+      setVisibilityUpdatingId(null);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -159,26 +219,15 @@ export default function PostManagement() {
     [posts],
   );
 
-  const filteredPosts = useMemo(() => {
-    const search = searchTerm.toLowerCase().trim();
-
-    return posts.filter((post) => {
-      const route = `${post.start_name} ${post.destination_name}`;
-      const matchesSearch = [
-        route,
-        post.author_display_name,
-        post.title,
-        post.content,
-        post.transport_type ?? "Unknown",
-      ].some((value) => value.toLowerCase().includes(search));
-
-      const transportType = post.transport_type ?? "Unknown";
-      const matchesTransport =
-        transportFilter === "All" || transportType === transportFilter;
-
-      return matchesSearch && matchesTransport;
-    });
-  }, [posts, searchTerm, transportFilter]);
+  const filteredPosts = useMemo(
+    () =>
+      filterCommunityPosts(posts, {
+        searchTerm,
+        transportFilter,
+        statusFilter,
+      }),
+    [posts, searchTerm, transportFilter, statusFilter],
+  );
 
   return (
     <div className="min-h-screen bg-[#F4F8FC] text-slate-800">
@@ -316,22 +365,28 @@ export default function PostManagement() {
             </div>
           </div>
 
-          <div className="hidden items-center gap-2 sm:flex">
-            <AccountAvatar
-              account={account}
-              className="h-10 w-10 bg-[#DCE9F7] font-bold text-[#102E4D]"
-              iconSize={20}
-            />
-            <div className="text-left">
-              <p className="text-sm font-semibold text-slate-800">
-                {adminDisplayName}
-              </p>
-              <p
-                className="text-xs text-slate-500 max-w-[180px] truncate"
-                title={adminEmail}
-              >
-                {adminEmail}
-              </p>
+          <div className="flex items-center gap-3 sm:gap-5">
+            <AdminNotificationBell adminUserId={userId ?? ""} />
+
+            <div className="hidden h-9 w-px bg-slate-200 sm:block" />
+
+            <div className="hidden items-center gap-2 sm:flex">
+              <AccountAvatar
+                account={account}
+                className="h-10 w-10 bg-[#DCE9F7] font-bold text-[#102E4D]"
+                iconSize={20}
+              />
+              <div className="text-left">
+                <p className="text-sm font-semibold text-slate-800">
+                  {adminDisplayName}
+                </p>
+                <p
+                  className="text-xs text-slate-500 max-w-[180px] truncate"
+                  title={adminEmail}
+                >
+                  {adminEmail}
+                </p>
+              </div>
             </div>
           </div>
         </header>
@@ -350,6 +405,15 @@ export default function PostManagement() {
               remove posts when needed.
             </p>
           </section>
+
+          {visibilityError && (
+            <div
+              role="alert"
+              className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+            >
+              {visibilityError}
+            </div>
+          )}
 
           {actionMessage && (
             <div
@@ -391,6 +455,24 @@ export default function PostManagement() {
                   <X size={17} />
                 </button>
               )}
+            </div>
+            <div className="relative sm:w-[160px]">
+              <select
+                value={statusFilter}
+                onChange={(event) =>
+                  setStatusFilter(event.target.value as "All" | PostVisibility)
+                }
+                aria-label="Filter by visibility"
+                className="h-12 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm shadow-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+              >
+                <option value="All">All Statuses</option>
+                <option value="Visible">Visible</option>
+                <option value="Hidden">Hidden</option>
+              </select>
+              <ChevronDown
+                size={16}
+                className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-500"
+              />
             </div>
           </section>
 
@@ -441,6 +523,7 @@ export default function PostManagement() {
                     <th className="px-4 py-4 font-semibold">Post</th>
                     <th className="px-4 py-4 font-semibold">Submitted</th>
                     <th className="px-4 py-4 font-semibold">Responses</th>
+                    <th className="px-4 py-4 font-semibold">Status</th>
                     <th className="px-4 py-4 text-center font-semibold">
                       Actions
                     </th>
@@ -483,7 +566,53 @@ export default function PostManagement() {
                       </td>
 
                       <td className="px-4 py-4">
+                        {(() => {
+                          const visibility = getPostVisibility(post);
+                          return (
+                            <span
+                              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
+                                visibility === "Visible"
+                                  ? "bg-green-50 text-green-700"
+                                  : "bg-slate-100 text-slate-600"
+                              }`}
+                            >
+                              <span
+                                className={`h-1.5 w-1.5 rounded-full ${
+                                  visibility === "Visible"
+                                    ? "bg-green-500"
+                                    : "bg-slate-400"
+                                }`}
+                              />
+                              {visibility}
+                            </span>
+                          );
+                        })()}
+                      </td>
+
+                      <td className="px-4 py-4">
                         <div className="flex items-center justify-center gap-2">
+                          <button
+                            type="button"
+                            disabled={visibilityUpdatingId !== null}
+                            onClick={() => void handleToggleVisibility(post)}
+                            title={
+                              getPostVisibility(post) === "Visible"
+                                ? "Hide post from community users"
+                                : "Show post to community users"
+                            }
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D] disabled:opacity-50"
+                          >
+                            {getPostVisibility(post) === "Visible" ? (
+                              <EyeOff size={14} />
+                            ) : (
+                              <Eye size={14} />
+                            )}
+                            {visibilityUpdatingId === post.id
+                              ? "Saving…"
+                              : getPostVisibility(post) === "Visible"
+                                ? "Hide"
+                                : "Show"}
+                          </button>
                           <button
                             type="button"
                             onClick={() => openPostDetails(post)}
@@ -498,7 +627,7 @@ export default function PostManagement() {
 
                   {filteredPosts.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="px-6 py-16 text-center">
+                      <td colSpan={8} className="px-6 py-16 text-center">
                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                           <Search size={22} />
                         </div>
@@ -538,6 +667,7 @@ export default function PostManagement() {
                               onClick={() => {
                                 setSearchTerm("");
                                 setTransportFilter("All");
+                                setStatusFilter("All");
                               }}
                               className="mt-4 text-sm font-semibold text-[#102E4D] underline underline-offset-4"
                             >
@@ -655,6 +785,27 @@ export default function PostManagement() {
                 </div>
               </div>
 
+              <div className="flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                <div>
+                  <p className="text-xs text-slate-500">Visibility</p>
+                  <p className="mt-1 font-semibold text-[#102E4D]">
+                    {getPostVisibility(selectedPost)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={visibilityUpdatingId !== null}
+                  onClick={() => void handleToggleVisibility(selectedPost)}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {visibilityUpdatingId === selectedPost.id
+                    ? "Saving…"
+                    : getPostVisibility(selectedPost) === "Visible"
+                      ? "Hide post"
+                      : "Show post"}
+                </button>
+              </div>
+
               <p className="border-t border-slate-100 pt-4 text-sm text-slate-600">
                 {selectedPost.upvotes} upvotes · {selectedPost.downvotes}{" "}
                 downvotes
@@ -663,8 +814,8 @@ export default function PostManagement() {
               {selectedPost.photos.length > 0 && (
                 <div className="grid grid-cols-2 gap-3">
                   {selectedPost.photos.map((photo) => (
-                    <img
-                      key={photo.path}
+                    <AdminCommunityPhoto
+                      key={photo.url}
                       src={photo.url}
                       alt=""
                       className="h-36 w-full rounded-lg object-cover"

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 import AccountAvatar from "@/components/account/AccountAvatar";
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
   getAdminUsers,
@@ -21,12 +22,17 @@ import {
   MapPinned,
   Menu,
   X,
+  ChevronDown,
   Eye,
   UserRound,
   Ban as BanIcon,
   ShieldCheck,
   LogOut,
 } from "lucide-react";
+import {
+  getUserStatus,
+  type UserStatus,
+} from "./userManagementModel";
 
 const navigationItems = [
   { label: "Dashboard", icon: LayoutDashboard },
@@ -60,6 +66,8 @@ export default function UserManagement() {
 
   const [users, setUsers] = useState<AdminUserRecord[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"All" | UserStatus>("All");
+  const [quickFilter, setQuickFilter] = useState<"All" | UserStatus>("All");
   const [selectedUser, setSelectedUser] = useState<AdminUserRecord | null>(
     null,
   );
@@ -149,10 +157,27 @@ export default function UserManagement() {
       const matchesSearch =
         (user.username?.toLowerCase().includes(search) ?? false) ||
         (user.email?.toLowerCase().includes(search) ?? false);
+      const status = getUserStatus(user.banned);
 
-      return matchesSearch;
+      return (
+        matchesSearch &&
+        (statusFilter === "All" || status === statusFilter) &&
+        (quickFilter === "All" || status === quickFilter)
+      );
     });
-  }, [users, searchTerm]);
+  }, [users, searchTerm, statusFilter, quickFilter]);
+
+  const activeCount = users.filter(
+    (user) => getUserStatus(user.banned) === "Active",
+  ).length;
+  const bannedCount = users.filter(
+    (user) => getUserStatus(user.banned) === "Banned",
+  ).length;
+
+  const getStatusStyle = (status: UserStatus) =>
+    status === "Active"
+      ? "bg-green-50 text-green-700"
+      : "bg-red-50 text-red-700";
 
   const retryLoadingUsers = () => {
     setUsers([]);
@@ -298,6 +323,8 @@ export default function UserManagement() {
           </div>
 
           <div className="flex items-center gap-3 sm:gap-5">
+            <AdminNotificationBell adminUserId={userId ?? ""} />
+
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
             <div className="flex items-center gap-2.5">
               <AccountAvatar
@@ -333,9 +360,33 @@ export default function UserManagement() {
                 Review accounts with a verified registered-user role.
               </p>
             </div>
+            <div className="flex flex-wrap gap-3">
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-50 text-green-700">
+                  <ShieldCheck size={20} />
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Active</p>
+                  <p className="text-xl font-bold text-[#102E4D]">
+                    {activeCount}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-50 text-red-600">
+                  <BanIcon size={20} />
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Banned</p>
+                  <p className="text-xl font-bold text-[#102E4D]">
+                    {bannedCount}
+                  </p>
+                </div>
+              </div>
+            </div>
           </section>
 
-          <section className="mb-7 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <section className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-sm transition focus-within:border-[#102E4D] focus-within:ring-2 focus-within:ring-blue-100">
               <Search size={18} className="shrink-0 text-slate-400" />
 
@@ -359,6 +410,41 @@ export default function UserManagement() {
                 </button>
               )}
             </div>
+            <div className="relative sm:w-[180px]">
+              <select
+                value={statusFilter}
+                onChange={(event) =>
+                  setStatusFilter(event.target.value as "All" | UserStatus)
+                }
+                aria-label="Filter accounts by status"
+                className="h-12 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm shadow-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+              >
+                <option value="All">All Status</option>
+                <option value="Active">Active</option>
+                <option value="Banned">Banned</option>
+              </select>
+              <ChevronDown
+                size={16}
+                className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-500"
+              />
+            </div>
+          </section>
+
+          <section className="mb-7 flex flex-wrap gap-2.5">
+            {(["All", "Active", "Banned"] as const).map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                onClick={() => setQuickFilter(filter)}
+                className={`min-w-[70px] rounded-full border px-5 py-2.5 text-sm font-medium shadow-sm transition ${
+                  quickFilter === filter
+                    ? "border-[#102E4D] bg-[#102E4D] text-white"
+                    : "border-slate-200 bg-white text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]"
+                }`}
+              >
+                {filter}
+              </button>
+            ))}
           </section>
 
           {/* User table */}
@@ -378,13 +464,14 @@ export default function UserManagement() {
             </div>
 
             <div className="w-full overflow-x-auto">
-              <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+              <table className="w-full min-w-[900px] border-collapse text-left text-sm">
                 <thead className="bg-[#DFEAF4] text-xs text-slate-700">
                   <tr>
                     <th className="px-5 py-4 font-semibold">Username</th>
                     <th className="px-5 py-4 font-semibold">Email</th>
                     <th className="px-5 py-4 font-semibold">Joined</th>
                     <th className="px-5 py-4 font-semibold">Role</th>
+                    <th className="px-5 py-4 font-semibold">Status</th>
                     <th className="px-5 py-4 text-center font-semibold">
                       Action
                     </th>
@@ -423,6 +510,19 @@ export default function UserManagement() {
                       </td>
 
                       <td className="px-5 py-4">
+                        <span
+                          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${getStatusStyle(getUserStatus(user.banned))}`}
+                        >
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${
+                              user.banned ? "bg-red-500" : "bg-green-500"
+                            }`}
+                          />
+                          {getUserStatus(user.banned)}
+                        </span>
+                      </td>
+
+                      <td className="px-5 py-4">
                         <div className="flex items-center justify-center gap-2">
                           <button
                             type="button"
@@ -432,6 +532,25 @@ export default function UserManagement() {
                             <Eye size={14} />
                             View
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPendingUserId(user.id);
+                              setActionError(null);
+                            }}
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-medium transition ${
+                              user.banned
+                                ? "border-green-200 bg-white text-green-700 hover:bg-green-50"
+                                : "border-red-200 bg-white text-red-600 hover:bg-red-50"
+                            }`}
+                          >
+                            {user.banned ? (
+                              <ShieldCheck size={14} />
+                            ) : (
+                              <BanIcon size={14} />
+                            )}
+                            {user.banned ? "Unban" : "Ban"}
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -439,7 +558,7 @@ export default function UserManagement() {
 
                   {filteredUsers.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-6 py-16 text-center">
+                      <td colSpan={6} className="px-6 py-16 text-center">
                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                           <Search size={22} />
                         </div>
@@ -472,7 +591,11 @@ export default function UserManagement() {
                           searchTerm && (
                             <button
                               type="button"
-                              onClick={() => setSearchTerm("")}
+                              onClick={() => {
+                                setSearchTerm("");
+                                setStatusFilter("All");
+                                setQuickFilter("All");
+                              }}
                               className="mt-4 text-sm font-semibold text-[#102E4D] underline underline-offset-4"
                             >
                               Clear search

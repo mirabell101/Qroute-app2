@@ -413,6 +413,28 @@ export async function updateAdminReportStatus(
   if (error) throw error;
 }
 
+export async function setCommunityPostVisibility(
+  client: SupabaseClient,
+  postId: string,
+  isHidden: boolean,
+): Promise<void> {
+  // Selecting the updated row in the same query confirms that a post was
+  // actually matched, so a missing post can be reported as not found without
+  // a second round trip. Only the visibility column is written; post content
+  // and photos stay intact.
+  const { data: post, error: updateError } = await client
+    .from("community_posts")
+    .update({ is_hidden: isHidden })
+    .eq("id", postId)
+    .select("id")
+    .maybeSingle();
+
+  if (updateError) throw updateError;
+  if (!post) {
+    throw new AdminNotFoundError("Community post not found.");
+  }
+}
+
 export async function deleteAdminPost(
   client: SupabaseClient,
   postId: string,

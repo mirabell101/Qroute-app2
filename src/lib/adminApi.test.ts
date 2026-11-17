@@ -462,4 +462,202 @@ describe("admin API client", () => {
     expect(options.method).toBe("DELETE");
     expect(options.body).toBeUndefined();
   });
+
+  it("parses the verified unread notification count", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, unreadCount: 3 }),
+    });
+
+    await expect(
+      getAdminApi().getAdminUnreadNotificationCount("admin-1"),
+    ).resolves.toBe(3);
+
+    const [url] = mocks.fetch.mock.calls[0] as [string];
+    expect(url).toMatch(/\/api\/admin\/notifications\/unread-count$/);
+  });
+
+  it("preserves zero unread notifications", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, unreadCount: 0 }),
+    });
+
+    await expect(
+      getAdminApi().getAdminUnreadNotificationCount("admin-1"),
+    ).resolves.toBe(0);
+  });
+
+  it("rejects malformed unread counts", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, unreadCount: "three" }),
+    });
+
+    await expect(
+      getAdminApi().getAdminUnreadNotificationCount("admin-1"),
+    ).rejects.toThrow("Admin service returned an invalid response.");
+  });
+
+  it("parses notification events with per-admin read state", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        unreadCount: 1,
+        notifications: [
+          {
+            id: "notif-1",
+            postId: "post-1",
+            reportId: 42,
+            title: "Post reported",
+            message: "Three unique reports",
+            createdAt: "2026-11-17T10:00:00.000Z",
+            isRead: false,
+          },
+          {
+            id: "notif-2",
+            postId: "post-2",
+            reportId: null,
+            title: "Post reported",
+            message: "No linked report",
+            createdAt: "2026-11-16T10:00:00.000Z",
+            isRead: true,
+          },
+        ],
+      }),
+    });
+
+    await expect(
+      getAdminApi().getAdminNotifications("admin-1"),
+    ).resolves.toEqual({
+      unreadCount: 1,
+      notifications: [
+        {
+          id: "notif-1",
+          postId: "post-1",
+          reportId: 42,
+          title: "Post reported",
+          message: "Three unique reports",
+          createdAt: "2026-11-17T10:00:00.000Z",
+          isRead: false,
+        },
+        {
+          id: "notif-2",
+          postId: "post-2",
+          reportId: null,
+          title: "Post reported",
+          message: "No linked report",
+          createdAt: "2026-11-16T10:00:00.000Z",
+          isRead: true,
+        },
+      ],
+    });
+
+    const [url] = mocks.fetch.mock.calls[0] as [string];
+    expect(url).toMatch(/\/api\/admin\/notifications$/);
+  });
+
+  it("rejects malformed notification events", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        unreadCount: 1,
+        notifications: [
+          {
+            id: "notif-1",
+            postId: "post-1",
+            reportId: "not-a-number",
+            title: "Post reported",
+            message: "Three unique reports",
+            createdAt: "2026-11-17T10:00:00.000Z",
+            isRead: false,
+          },
+        ],
+      }),
+    });
+
+    await expect(
+      getAdminApi().getAdminNotifications("admin-1"),
+    ).rejects.toThrow("Admin service returned an invalid response.");
+  });
+
+  it("marks a notification read with the verified session", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true }),
+    });
+
+    await expect(
+      getAdminApi().markAdminNotificationRead("admin-1", "notif-1"),
+    ).resolves.toBeUndefined();
+
+    const [url, options] = mocks.fetch.mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toMatch(/\/api\/admin\/notifications\/notif-1\/read$/);
+    expect(options.method).toBe("PATCH");
+    expect(new Headers(options.headers).get("Authorization")).toBe(
+      "Bearer admin-token",
+    );
+    expect(options.body).toBeUndefined();
+  });
+
+  it("sends a hide visibility payload to the admin post endpoint", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, postId: "post-1", isHidden: true }),
+    });
+
+    await expect(
+      getAdminApi().setAdminPostVisibility("admin-1", "post-1", true),
+    ).resolves.toBeUndefined();
+
+    const [url, options] = mocks.fetch.mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toMatch(/\/api\/admin\/posts\/post-1\/visibility$/);
+    expect(options.method).toBe("PATCH");
+    expect(new Headers(options.headers).get("Authorization")).toBe(
+      "Bearer admin-token",
+    );
+    expect(JSON.parse(options.body as string)).toEqual({ isHidden: true });
+  });
+
+  it("sends a show visibility payload to the admin post endpoint", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, postId: "post-1", isHidden: false }),
+    });
+
+    await expect(
+      getAdminApi().setAdminPostVisibility("admin-1", "post-1", false),
+    ).resolves.toBeUndefined();
+
+    const [, options] = mocks.fetch.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(options.body as string)).toEqual({ isHidden: false });
+  });
+
+  it("surfaces visibility update errors", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ success: false, message: "Visibility update failed." }),
+    });
+
+    await expect(
+      getAdminApi().setAdminPostVisibility("admin-1", "post-1", true),
+    ).rejects.toThrow("Visibility update failed.");
+  });
 });

@@ -11,10 +11,16 @@ import {
   getAdminRoutes,
   getAdminSummary,
   getAdminUsers,
+  setCommunityPostVisibility,
   toggleAdminUserBan,
   updateAdminReportStatus,
   updateAdminRoute,
 } from "../admin.ts";
+import {
+  getAdminUnreadNotificationCount,
+  listAdminNotifications,
+  markAdminNotificationRead,
+} from "../adminNotifications.ts";
 import {
   parseAdminRouteCreateInput,
   parseAdminRouteUpdateInput,
@@ -23,6 +29,12 @@ import {
   getSupabaseAdminClient,
   getSupabaseClientForAccessToken,
 } from "../supabaseClient.ts";
+import {
+  downloadCommunityPhoto,
+  parsePhotoIndex,
+  resolvePhotoPath,
+  sendCommunityPhoto,
+} from "../communityPhotos.ts";
 
 const router = Router();
 
@@ -270,6 +282,145 @@ router.patch("/users/:id/ban", async (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (error: unknown) {
     sendAdminError(res, error, "Unable to update the user's access.");
+  }
+});
+
+function getVerifiedAdminContext(res: Response) {
+  const accessToken = getAccessToken(res);
+  const adminUserId = getAdminUserId(res);
+  if (!accessToken || !adminUserId) {
+    res.status(401).json({
+      success: false,
+      message: "Authentication required.",
+    });
+    return null;
+  }
+  return { accessToken, adminUserId };
+}
+
+router.get("/notifications", async (_req: Request, res: Response) => {
+  const context = getVerifiedAdminContext(res);
+  if (!context) return;
+
+  try {
+    const result = await listAdminNotifications(
+      getSupabaseClientForAccessToken(context.accessToken),
+      context.adminUserId,
+    );
+    res.json({ success: true, ...result });
+  } catch (error: unknown) {
+    sendAdminError(res, error, "Unable to load admin notifications.");
+  }
+});
+
+router.get("/notifications/unread-count", async (_req: Request, res: Response) => {
+  const context = getVerifiedAdminContext(res);
+  if (!context) return;
+
+  try {
+    const unreadCount = await getAdminUnreadNotificationCount(
+      getSupabaseClientForAccessToken(context.accessToken),
+      context.adminUserId,
+    );
+    res.json({ success: true, unreadCount });
+  } catch (error: unknown) {
+    sendAdminError(res, error, "Unable to load the unread notification count.");
+  }
+});
+
+router.patch("/notifications/:id/read", async (req: Request, res: Response) => {
+  const notificationId = parseUuid(req.params.id);
+  if (!notificationId) {
+    res.status(400).json({
+      success: false,
+      message: "A valid notification id is required.",
+    });
+    return;
+  }
+
+  const context = getVerifiedAdminContext(res);
+  if (!context) return;
+
+  try {
+    await markAdminNotificationRead(
+      getSupabaseClientForAccessToken(context.accessToken),
+      context.adminUserId,
+      notificationId,
+    );
+    res.json({ success: true });
+  } catch (error: unknown) {
+    sendAdminError(res, error, "Unable to mark the notification as read.");
+  }
+});
+
+// Hidden-post photos are only reachable through this protected router. The
+// admin client can read every post, but the path is still checked against the
+// requested post before any object is downloaded.
+router.get(
+  "/posts/:postId/photos/:photoIndex",
+  async (req: Request, res: Response) => {
+    const postId = parseUuid(req.params.postId);
+    const photoIndex = parsePhotoIndex(req.params.photoIndex);
+    res.setHeader("Cache-Control", "no-store");
+
+    if (!postId || photoIndex === null) {
+      res.status(400).json({
+        success: false,
+        message: "A valid post id and photo index are required.",
+      });
+      return;
+    }
+
+    try {
+      const { data: post, error } = await getSupabaseAdminClient()
+        .from("community_posts")
+        .select("photo_paths")
+        .eq("id", postId)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!post) {
+        res.status(404).json({ success: false, message: "Post not found." });
+        return;
+      }
+
+      const photoPath = resolvePhotoPath(post.photo_paths, photoIndex);
+      if (!photoPath) {
+        res.status(404).json({ success: false, message: "Photo not found." });
+        return;
+      }
+
+      const photo = await downloadCommunityPhoto(
+        getSupabaseAdminClient(),
+        photoPath,
+      );
+      sendCommunityPhoto(res, photo.bytes, photo.contentType);
+    } catch (error: unknown) {
+      sendAdminError(res, error, "Unable to load the community post photo.");
+    }
+  },
+);
+
+router.patch("/posts/:id/visibility", async (req: Request, res: Response) => {
+  const postId = parseUuid(req.params.id);
+  const isHidden = req.body?.isHidden;
+  if (!postId || typeof isHidden !== "boolean") {
+    res.status(400).json({
+      success: false,
+      message: "A valid post id and boolean isHidden value are required.",
+    });
+    return;
+  }
+
+  try {
+    await setCommunityPostVisibility(
+      getSupabaseAdminClient(),
+      postId,
+      isHidden,
+    );
+    res.json({ success: true });
+  } catch (error: unknown) {
+    sendAdminError(res, error, "Unable to update the community post visibility.");
   }
 });
 

@@ -41,6 +41,8 @@ import RouteManagement from "./pages/admin/route-management/route-management";
 import PostManagement from "./pages/admin/post-management/post-management";
 import Reports from "./pages/admin/reports/reports";
 import UserManagement from "./pages/admin/user-management/user-management";
+import Notifications from "./pages/admin/notifications/notifications";
+import Settings from "./pages/admin/settings/settings";
 
 function hasRegisteredUserAccess(role: QRouteRole | null): boolean {
   return role === "registered_user" || role === "admin";
@@ -472,8 +474,16 @@ function App() {
                 element={adminPage(() => <Reports />)}
               />
               <Route
+                path="/admin/notifications"
+                element={adminPage(() => <Notifications />)}
+              />
+              <Route
                 path="/admin/users"
                 element={adminPage(() => <UserManagement />)}
+              />
+              <Route
+                path="/admin/settings"
+                element={adminPage(() => <Settings />)}
               />
 
               {/* Unknown routes */}

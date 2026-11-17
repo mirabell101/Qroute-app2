@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 import AccountAvatar from "@/components/account/AccountAvatar";
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
   getAdminReports,
@@ -9,6 +10,7 @@ import {
   type AdminReportRecord,
 } from "@/lib/adminApi";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
+import { parseReportIdParam } from "@/pages/admin/notifications/notificationsModel";
 import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
@@ -43,6 +45,7 @@ const navigationItems = [
 
 export default function Reports() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { userId, account } = useAccountProfile();
 
   const adminDisplayName =
@@ -63,6 +66,8 @@ export default function Reports() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [deepLinkNotice, setDeepLinkNotice] = useState("");
+  const deepLinkHandledRef = useRef(false);
 
   const handleLogout = async () => {
     await supabase.auth.signOut({ scope: "local" });
@@ -99,6 +104,30 @@ export default function Reports() {
       active = false;
     };
   }, [userId, retryCount]);
+
+  useEffect(() => {
+    if (isLoading || deepLinkHandledRef.current) return;
+    const reportId = parseReportIdParam(searchParams.get("reportId"));
+    if (reportId === null) return;
+
+    deepLinkHandledRef.current = true;
+    const targetReport = reports.find((report) => report.id === reportId);
+
+    void Promise.resolve().then(() => {
+      setSearchParams({}, { replace: true });
+
+      if (!targetReport) {
+        setDeepLinkNotice(`Report #${reportId} is no longer available.`);
+        return;
+      }
+
+      setSearchTerm("");
+      setTypeFilter("All");
+      setStatusFilter("All");
+      setSelectedReport(targetReport);
+      setDeepLinkNotice("");
+    });
+  }, [isLoading, reports, searchParams, setSearchParams]);
 
   const retryLoadingReports = () => {
     setReports([]);
@@ -325,6 +354,8 @@ export default function Reports() {
           </div>
 
           <div className="flex items-center gap-3 sm:gap-5">
+            <AdminNotificationBell adminUserId={userId ?? ""} />
+
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
 
             <div className="flex items-center gap-2.5">
@@ -349,6 +380,15 @@ export default function Reports() {
         </header>
 
         <div className="mx-auto max-w-[1500px] p-5 sm:p-8 lg:p-10">
+          {deepLinkNotice && (
+            <p
+              role="status"
+              className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+            >
+              {deepLinkNotice}
+            </p>
+          )}
+
           {/* Page heading */}
           <section className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>

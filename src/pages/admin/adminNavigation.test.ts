@@ -32,12 +32,28 @@ describe("admin navigation destinations", () => {
     expect(destination("Profile")).toBe("/profile");
   });
 
-  it("does not map unsupported admin controls to a route", () => {
+  it("maps Settings to the protected admin settings route", () => {
+    expect(
+      getNavigationModule().getAdminNavigationDestination("Settings"),
+    ).toBe("/admin/settings");
+  });
+
+  it("maps Notifications to the protected admin notifications page", () => {
     const destination = getNavigationModule().getAdminNavigationDestination;
 
-    expect(destination("Settings")).toBeNull();
-    expect(destination("Notifications")).toBeNull();
+    expect(destination("Notifications")).toBe("/admin/notifications");
     expect(destination("Map filters")).toBeNull();
     expect(destination("Unknown")).toBeNull();
+  });
+
+  it("navigates the notification bell to the notifications page", () => {
+    const destinations: string[] = [];
+
+    getNavigationModule().navigateToAdminDestination(
+      "Notifications",
+      (destination) => destinations.push(destination),
+    );
+
+    expect(destinations).toEqual(["/admin/notifications"]);
   });
 });

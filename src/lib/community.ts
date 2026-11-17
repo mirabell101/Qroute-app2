@@ -2,6 +2,8 @@ import { API_BASE_URL } from "@/lib/api";
 import { validateImage } from "@/lib/mapImages";
 import { supabase } from "@/lib/supabase";
 import {
+  buildCommunityPhotoUrl,
+  normalizeCommunityPhotoPaths,
   toPublicCommunityPost,
   type PublicCommunityPostData,
 } from "@/lib/communityPublicData";
@@ -30,6 +32,7 @@ export interface CommunityPost {
   transport_type: string | null;
   photo_paths: string[];
   photos: CommunityPostPhoto[];
+  is_hidden: boolean;
   created_at: string;
   comment_count: number;
   upvotes: number;
@@ -79,6 +82,10 @@ export interface CommunityVoteState {
 export interface CommunityAccess {
   canPublishAndVote: boolean;
   canReceiveRealtime: boolean;
+}
+
+export interface CommunityReportResult {
+  reportId: number;
 }
 
 export async function getCommunityAccess(userId: string): Promise<CommunityAccess> {
@@ -205,6 +212,37 @@ export async function getCommunityVoteStates(postIds: string[]): Promise<Communi
   return result.states ?? [];
 }
 
+export async function reportCommunityPost(
+  postId: string,
+  reason: string,
+  description: string,
+): Promise<CommunityReportResult> {
+  const result = await request<{
+    success?: unknown;
+    report?: { id?: unknown };
+  }>(
+    `/posts/${encodeURIComponent(postId)}/reports`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        reason: reason.trim(),
+        description: description.trim(),
+      }),
+    },
+    true,
+  );
+
+  if (
+    result.success !== true ||
+    typeof result.report?.id !== "number" ||
+    !Number.isSafeInteger(result.report.id)
+  ) {
+    throw new Error("Community service returned an invalid response.");
+  }
+
+  return { reportId: result.report.id };
+}
+
 export async function createCommunityPost(input: CommunityPostInput): Promise<CommunityPost> {
   const result = await request<{ post: CommunityPost }>(
     "/posts",
@@ -214,14 +252,19 @@ export async function createCommunityPost(input: CommunityPostInput): Promise<Co
   return withPhotoUrls(result.post);
 }
 
-function withPhotoUrls(post: CommunityPost): CommunityPost {
-  const photoPaths = post.photo_paths ?? [];
+export function withPhotoUrls(post: CommunityPost): CommunityPost {
+  const photoPaths = normalizeCommunityPhotoPaths(post.photo_paths);
+  const buildUrl = post.is_hidden
+    ? (index: number) =>
+        `${API_BASE_URL}/api/admin/posts/${encodeURIComponent(post.id)}/photos/${index}`
+    : (index: number) => buildCommunityPhotoUrl(post.id, index);
+
   return {
     ...post,
     photo_paths: photoPaths,
-    photos: photoPaths.map((path) => ({
+    photos: photoPaths.map((path, index) => ({
       path,
-      url: supabase.storage.from(COMMUNITY_PHOTO_BUCKET).getPublicUrl(path).data.publicUrl,
+      url: buildUrl(index),
     })),
   };
 }

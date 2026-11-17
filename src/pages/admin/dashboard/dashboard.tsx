@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 import AccountAvatar from "@/components/account/AccountAvatar";
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
   getAdminReports,
@@ -17,7 +18,6 @@ import {
   Flag,
   Users,
   Settings,
-  Bell,
   Clock,
   MapPinned,
   Menu,
@@ -236,7 +236,7 @@ export default function Dashboard() {
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-4 py-3 text-sm font-medium transition hover:bg-white/10"
           >
             <MapPinned size={17} />
-            Switch to User Mode
+            Preview of the System
           </button>
 
           <button
@@ -270,25 +270,7 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-3 sm:gap-5">
-            <button
-              type="button"
-              aria-label="Pending Reports"
-              title={
-                pendingReportsCount !== null && pendingReportsCount > 0
-                  ? `${pendingReportsCount} pending report${pendingReportsCount === 1 ? "" : "s"}`
-                  : "View reports"
-              }
-              onClick={() => navigate("/admin/reports")}
-              className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
-            >
-              <Bell size={19} />
-              {typeof pendingReportsCount === "number" &&
-                pendingReportsCount > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-orange-500 px-1 text-[10px] font-bold text-white shadow-sm">
-                    {pendingReportsCount > 99 ? "99+" : pendingReportsCount}
-                  </span>
-                )}
-            </button>
+            <AdminNotificationBell adminUserId={userId ?? ""} />
 
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
 

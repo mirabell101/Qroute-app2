@@ -1,6 +1,5 @@
 import { useNavigate } from "react-router-dom";
 import {
-  Bell,
   Bus,
   Car,
   Home,
@@ -10,6 +9,8 @@ import {
   TrainFront,
   UserCircle,
 } from "lucide-react";
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
 
 import {
@@ -53,6 +54,7 @@ const navItems = [
 
 export default function Base() {
   const navigate = useNavigate();
+  const { userId } = useAccountProfile();
 
   // Shared map state (search, routes, trip selection, fares).
   const map = useTransitMap();
@@ -466,39 +468,7 @@ export default function Base() {
         >
           {/* NOTIFICATION */}
 
-          <button
-            type="button"
-            disabled
-            title="Notifications are unavailable because no notification destination exists."
-            className="
-              group
-              cursor-not-allowed
-              opacity-50
-              flex
-              h-[45px]
-              w-[45px]
-              items-center
-              justify-center
-              rounded-full
-              bg-white
-              shadow-[0_2px_8px_rgba(0,0,0,0.15)]
-              transition-all
-              duration-200
-              hover:scale-105
-              hover:bg-gray-100
-              hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]
-            "
-          >
-            <Bell
-              size={20}
-              strokeWidth={2}
-              className="
-                transition-transform
-                duration-200
-                group-hover:rotate-6
-              "
-            />
-          </button>
+          <AdminNotificationBell adminUserId={userId ?? ""} />
 
           {/* PROFILE */}
 

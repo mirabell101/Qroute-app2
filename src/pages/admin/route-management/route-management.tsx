@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 import AccountAvatar from "@/components/account/AccountAvatar";
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
   createAdminRoute,
@@ -28,7 +29,6 @@ import {
   Flag,
   Users,
   Settings,
-  Bell,
   Search,
   UserRound,
   Eye,
@@ -619,15 +619,7 @@ export default function RouteManagement() {
           </div>
           <div className="flex items-center gap-3 sm:gap-5">
 
-            <button
-              type="button"
-              aria-label="Notifications"
-              title="View reports"
-              onClick={() => navigate("/admin/reports")}
-              className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
-            >
-              <Bell size={19} />
-            </button>
+            <AdminNotificationBell adminUserId={userId ?? ""} />
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
             <div className="flex items-center gap-2.5">
               <AccountAvatar

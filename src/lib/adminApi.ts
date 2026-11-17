@@ -74,6 +74,21 @@ export interface AdminReportRecord {
   description: string;
 }
 
+export interface AdminNotificationRecord {
+  id: string;
+  postId: string;
+  reportId: number | null;
+  title: string;
+  message: string;
+  createdAt: string;
+  isRead: boolean;
+}
+
+export interface AdminNotificationList {
+  notifications: AdminNotificationRecord[];
+  unreadCount: number;
+}
+
 export interface AdminRouteStopPayload {
   kind: "terminal" | "stop";
   id: number;
@@ -188,6 +203,25 @@ function isNullableCount(value: unknown): value is number | null {
   return value === null || isNonNegativeInteger(value);
 }
 
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isAdminNotificationRecord(value: unknown): value is AdminNotificationRecord {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    typeof value.postId === "string" &&
+    value.postId.length > 0 &&
+    (value.reportId === null || isPositiveInteger(value.reportId)) &&
+    typeof value.title === "string" &&
+    typeof value.message === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.isRead === "boolean"
+  );
+}
+
 function isRecentActivityItem(
   value: unknown,
 ): value is AdminRecentActivityItem {
@@ -251,6 +285,21 @@ function parseAdminUsers(value: unknown): AdminUserRecord[] {
     throw new Error("Admin service returned an invalid response.");
   }
   return value;
+}
+
+function parseAdminNotifications(value: unknown): AdminNotificationList {
+  if (
+    !isRecord(value) ||
+    !isNonNegativeInteger(value.unreadCount) ||
+    !Array.isArray(value.notifications) ||
+    !value.notifications.every(isAdminNotificationRecord)
+  ) {
+    throw new Error("Admin service returned an invalid response.");
+  }
+  return {
+    notifications: value.notifications,
+    unreadCount: value.unreadCount,
+  };
 }
 
 async function requestAdmin(
@@ -400,4 +449,47 @@ export async function deleteAdminRoute(
   await requestAdmin(`/routes/${routeId}`, expectedUserId, {
     method: "DELETE",
   });
+}
+
+export async function getAdminUnreadNotificationCount(
+  expectedUserId: string,
+): Promise<number> {
+  const payload = await requestAdmin(
+    "/notifications/unread-count",
+    expectedUserId,
+  );
+  if (!isNonNegativeInteger(payload.unreadCount)) {
+    throw new Error("Admin service returned an invalid response.");
+  }
+  return payload.unreadCount;
+}
+
+export async function getAdminNotifications(
+  expectedUserId: string,
+): Promise<AdminNotificationList> {
+  const payload = await requestAdmin("/notifications", expectedUserId);
+  return parseAdminNotifications(payload);
+}
+
+export async function markAdminNotificationRead(
+  expectedUserId: string,
+  notificationId: string,
+): Promise<void> {
+  await requestAdmin(
+    `/notifications/${encodeURIComponent(notificationId)}/read`,
+    expectedUserId,
+    { method: "PATCH" },
+  );
+}
+
+export async function setAdminPostVisibility(
+  expectedUserId: string,
+  postId: string,
+  isHidden: boolean,
+): Promise<void> {
+  await requestAdmin(
+    `/posts/${encodeURIComponent(postId)}/visibility`,
+    expectedUserId,
+    { method: "PATCH", body: { isHidden } },
+  );
 }
