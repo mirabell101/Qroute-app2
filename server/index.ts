@@ -20,6 +20,7 @@ import { getAllowedOrigins } from "./origins.ts";
 
 const app = express();
 const port = Number(process.env.PORT) || 3001;
+const host = process.env.QROUTE_SERVER_HOST || "0.0.0.0";
 const startedAt = Date.now();
 
 const allowedOrigins = getAllowedOrigins();
@@ -265,6 +266,6 @@ app.use(
   }
 );
 
-app.listen(port, "0.0.0.0", () => {
-  console.log(`[server] listening on 0.0.0.0:${port}`);
+app.listen(port, host, () => {
+  console.log(`[server] listening on ${host}:${port}`);
 });

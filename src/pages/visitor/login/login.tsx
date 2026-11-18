@@ -1,4 +1,5 @@
-import { useState } from "react";
+
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 
@@ -20,6 +21,7 @@ import appLogo from "@/assets/APP VER (1).png";
 
 function Login() {
   const navigate = useNavigate();
+
   const [rememberedIdentifier] = useState(
     readRememberedLoginIdentifier
   );
@@ -37,6 +39,22 @@ function Login() {
   const [passwordError, setPasswordError] = useState("");
   const [loginError, setLoginError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Backend-enforced login lockout countdown.
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
+  const [lockoutScope, setLockoutScope] = useState<
+    "account" | "ip" | null
+  >(null);
+
+  useEffect(() => {
+    if (lockoutSeconds <= 0) return;
+
+    const timer = window.setTimeout(() => {
+      setLockoutSeconds((previous) => Math.max(0, previous - 1));
+    }, 1000);
+
+    return () => window.clearTimeout(timer);
+  }, [lockoutSeconds]);
 
   const validateIdentifier = (value: string) => {
     if (!value.trim()) {
@@ -59,7 +77,7 @@ function Login() {
   };
 
   const handleLogin = async () => {
-    if (isSubmitting) return;
+    if (isSubmitting || lockoutSeconds > 0) return;
 
     const normalizedIdentifier = identifier.trim();
     const identifierValidation =
@@ -99,6 +117,31 @@ function Login() {
             email: result.email,
           },
         });
+
+        return;
+      }
+
+      // Display backend-enforced account/IP lockout.
+      if (
+        response.status === 429 &&
+        (result.code === "ACCOUNT_LOCKED" ||
+          result.code === "IP_BLOCKED")
+      ) {
+        const seconds = Math.max(
+          1,
+          Number(result.retryAfterSeconds) || 1
+        );
+
+        setLockoutSeconds(seconds);
+
+        setLockoutScope(
+          result.scope === "account" ? "account" : "ip"
+        );
+
+        setLoginError(
+          result.message ||
+            "Too many login attempts. Please wait before trying again."
+        );
 
         return;
       }
@@ -149,6 +192,7 @@ function Login() {
       const requestedPath = new URLSearchParams(
         window.location.search
       ).get("next");
+
       let destination: string;
 
       try {
@@ -165,6 +209,7 @@ function Login() {
             ? error.message
             : "Unable to verify your account permissions."
         );
+
         return;
       }
 
@@ -178,6 +223,7 @@ function Login() {
       });
     } catch (error) {
       console.error("Login request failed:", error);
+
       setLoginError(
         "Unable to connect to the server. Please try again."
       );
@@ -215,6 +261,7 @@ function Login() {
       }
     } catch (error) {
       setIsSubmitting(false);
+
       setLoginError(
         error instanceof Error
           ? error.message
@@ -268,6 +315,7 @@ function Login() {
             autoComplete="username"
             placeholder="Enter your email or username"
             value={identifier}
+            disabled={lockoutSeconds > 0}
             onChange={(event) => {
               setIdentifier(event.target.value);
               setIdentifierError("");
@@ -308,6 +356,7 @@ function Login() {
               autoComplete="current-password"
               placeholder="Enter your password"
               value={password}
+              disabled={lockoutSeconds > 0}
               onChange={(event) => {
                 setPassword(event.target.value);
                 setPasswordError("");
@@ -375,24 +424,39 @@ function Login() {
           </button>
         </div>
 
-        {/* LOGIN ERROR */}
+        {/* LOGIN ERROR + LOCKOUT COUNTDOWN */}
         {loginError && (
-          <p
+          <div
             role="alert"
+            aria-live="polite"
             className="mt-3 text-center text-[11px] text-red-500"
           >
-            {loginError}
-          </p>
+            <p>{loginError}</p>
+
+            {lockoutSeconds > 0 && (
+              <p className="mt-1 font-semibold">
+                {lockoutScope === "account"
+                  ? "Account temporarily locked."
+                  : "Network temporarily blocked."}{" "}
+                Try again in {Math.floor(lockoutSeconds / 60)}:
+                {String(lockoutSeconds % 60).padStart(2, "0")}.
+              </p>
+            )}
+          </div>
         )}
 
         {/* SIGN IN */}
         <Button
           type="button"
-          disabled={isSubmitting}
+          disabled={isSubmitting || lockoutSeconds > 0}
           onClick={() => void handleLogin()}
           className="mt-4 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8]"
         >
-          {isSubmitting ? "Signing In..." : "Sign In"}
+          {lockoutSeconds > 0
+            ? `Try Again in ${lockoutSeconds}s`
+            : isSubmitting
+              ? "Signing In..."
+              : "Sign In"}
         </Button>
 
         {/* DIVIDER */}
