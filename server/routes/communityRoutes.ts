@@ -4,19 +4,27 @@ import requireRegisteredUser from "../middleware/requireRegisteredUser.ts";
 import {
   getSupabaseClient,
   getSupabaseClientForAccessToken,
+  getSupabaseAdminClient,
 } from "../supabaseClient.ts";
 import {
   parseCommunityCommentInput,
+  parseCommunityReportInput,
   isCommunityPostId,
   parseCommunityPostInput,
   parseCommunityVoteInput,
 } from "../communityValidation.ts";
 import { upsertCommunityVote } from "../communityVoteWrites.ts";
+import {
+  downloadCommunityPhoto,
+  parsePhotoIndex,
+  resolvePhotoPath,
+  sendCommunityPhoto,
+} from "../communityPhotos.ts";
 
 const router = Router();
 const communityPhotoBucket = "community-post-photos";
 const postFields =
-  "id, author_id, author_display_name, title, content, start_name, start_latitude, start_longitude, destination_name, destination_latitude, destination_longitude, transport_type_id, photo_paths, created_at, transport_types(name), community_post_comments(count)";
+  "id, author_id, author_display_name, title, content, start_name, start_latitude, start_longitude, destination_name, destination_latitude, destination_longitude, transport_type_id, photo_paths, is_hidden, created_at, transport_types(name), community_post_comments(count)";
 
 function sendDatabaseError(res: Response, error: { code?: string; message: string }) {
   if (error.code === "PGRST116") {
@@ -106,6 +114,158 @@ router.get("/posts", requireAuth, async (_req: Request, res: Response) => {
     });
   }
 });
+
+// Public photos are served only when the visibility-filtered RPC still
+// returns the post. Hiding a post removes it from that result immediately,
+// so a later request for the same photo is denied.
+router.get("/posts/:postId/photos/:photoIndex", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store");
+
+  if (!isCommunityPostId(req.params.postId)) {
+    res.status(400).json({ success: false, message: "Invalid post ID." });
+    return;
+  }
+  const photoIndex = parsePhotoIndex(req.params.photoIndex);
+  if (photoIndex === null) {
+    res.status(400).json({ success: false, message: "Invalid photo index." });
+    return;
+  }
+
+  try {
+    const { data, error } = await getSupabaseClient().rpc(
+      "get_public_community_data",
+      {
+        p_post_ids: [req.params.postId],
+        p_include_posts: true,
+        p_include_comments: false,
+      },
+    );
+    if (error) {
+      sendDatabaseError(res, error);
+      return;
+    }
+
+    const posts = (data as { posts?: unknown } | null)?.posts;
+    const post = Array.isArray(posts)
+      ? posts.find(
+          (item) =>
+            item &&
+            typeof item === "object" &&
+            (item as { id?: unknown }).id === req.params.postId,
+        )
+      : null;
+    const photoPath = post
+      ? resolvePhotoPath((post as { photo_paths?: unknown }).photo_paths, photoIndex)
+      : null;
+    if (!photoPath) {
+      res.status(404).json({ success: false, message: "Photo not found." });
+      return;
+    }
+
+    const photo = await downloadCommunityPhoto(getSupabaseAdminClient(), photoPath);
+    sendCommunityPhoto(res, photo.bytes, photo.contentType);
+  } catch (error: unknown) {
+    sendDatabaseError(res, {
+      message: error instanceof Error ? error.message : "Unknown database error",
+    });
+  }
+});
+
+router.post(
+  "/posts/:postId/reports",
+  requireAuth,
+  requireRegisteredUser,
+  async (req: Request, res: Response) => {
+    if (!isCommunityPostId(req.params.postId)) {
+      res.status(400).json({ success: false, message: "Invalid post ID." });
+      return;
+    }
+
+    const parsed = parseCommunityReportInput(req.body);
+    if (parsed.error) {
+      res.status(400).json({ success: false, message: parsed.error });
+      return;
+    }
+
+    const user = res.locals.user as { id: string; email?: string | null };
+    const userSupabase =
+      res.locals.communitySupabase as ReturnType<
+        typeof getSupabaseClientForAccessToken
+      >;
+
+    try {
+      const { data: post, error: postError } = await userSupabase
+        .from("community_posts")
+        .select("author_id, author_display_name, content")
+        .eq("id", req.params.postId)
+        .maybeSingle();
+      if (postError) {
+        sendDatabaseError(res, postError);
+        return;
+      }
+      if (!post) {
+        res.status(404).json({ success: false, message: "Post not found." });
+        return;
+      }
+      if (
+        typeof post.author_id !== "string" ||
+        typeof post.content !== "string"
+      ) {
+        sendDatabaseError(res, {
+          message: "Community post returned incomplete report details.",
+        });
+        return;
+      }
+
+      const { data: report, error: reportError } = await getSupabaseAdminClient()
+        .from("reports")
+        .insert({
+          type: "Post",
+          reason: parsed.data.reason,
+          reported_content: post.content,
+          description: parsed.data.description,
+          reporter: user.email?.trim() || user.id,
+          reported_user:
+            typeof post.author_display_name === "string" &&
+            post.author_display_name.trim()
+              ? post.author_display_name.trim()
+              : post.author_id,
+          status: "Pending",
+          community_post_id: req.params.postId,
+          reporter_user_id: user.id,
+        })
+        .select("id")
+        .single();
+
+      if (reportError?.code === "23505") {
+        res.status(409).json({
+          success: false,
+          message: "You have already reported this post.",
+        });
+        return;
+      }
+      if (reportError) {
+        sendDatabaseError(res, reportError);
+        return;
+      }
+      if (!report || typeof report.id !== "number") {
+        sendDatabaseError(res, {
+          message: "Report insert returned an invalid report record.",
+        });
+        return;
+      }
+
+      res.status(201).json({ success: true, report: { id: report.id } });
+    } catch (error: unknown) {
+      sendDatabaseError(res, {
+        message: error instanceof Error ? error.message : "Unknown database error",
+        ...(error && typeof error === "object" && "code" in error
+          ? { code: String(error.code) }
+          : {}),
+      });
+    }
+  },
+);
 
 router.get("/posts/:postId", requireAuth, async (req: Request, res: Response) => {
   if (!isCommunityPostId(req.params.postId)) {

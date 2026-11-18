@@ -13,6 +13,11 @@ export interface CommunityPostInput {
   photoPaths: string[];
 }
 
+export interface CommunityReportInput {
+  reason: string;
+  description: string;
+}
+
 export function isCommunityPostId(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
@@ -39,6 +44,31 @@ function parsePoint(value: unknown): CommunityPointInput | null {
   const name = point.name.trim();
   if (!name || name.length > 180) return null;
   return { name, latitude: point.latitude, longitude: point.longitude };
+}
+
+export function parseCommunityReportInput(
+  value: unknown,
+): ParseResult<CommunityReportInput> {
+  if (!value || typeof value !== "object") {
+    return { data: null, error: "Report details are required." };
+  }
+
+  const input = value as Record<string, unknown>;
+  const reason = typeof input.reason === "string" ? input.reason.trim() : "";
+  const description =
+    typeof input.description === "string" ? input.description.trim() : "";
+
+  if (!reason || reason.length > 120) {
+    return { data: null, error: "Reason must be between 1 and 120 characters." };
+  }
+  if (!description || description.length > 2000) {
+    return {
+      data: null,
+      error: "Description must be between 1 and 2000 characters.",
+    };
+  }
+
+  return { data: { reason, description }, error: null };
 }
 
 export function parseCommunityPostInput(value: unknown): ParseResult<CommunityPostInput> {

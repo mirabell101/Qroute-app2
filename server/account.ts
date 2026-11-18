@@ -53,12 +53,11 @@ export async function getAccount(
     .maybeSingle();
 
   if (profileError) throw profileError;
-  if (!profile) {
-    throw new AccountRequestError(404, "Account profile not found.");
-  }
 
   const storedDisplayName =
-    typeof profile.display_name === "string" && profile.display_name.trim()
+    profile &&
+    typeof profile.display_name === "string" &&
+    profile.display_name.trim()
       ? profile.display_name
       : null;
   const metadataDisplayName = [
@@ -70,11 +69,25 @@ export async function getAccount(
       typeof value === "string" && value.trim().length > 0,
   ) ?? null;
 
+  const uploadedPhoto = await getProfilePhotoUrl(client, user.id).catch(
+    () => null,
+  );
+  const metadataPhoto = [
+    user.userMetadata?.avatar_url,
+    user.userMetadata?.picture,
+  ].find(
+    (value): value is string =>
+      typeof value === "string" && value.trim().length > 0,
+  ) ?? null;
+
   return {
     email: user.email,
-    username: typeof profile.username === "string" ? profile.username : null,
+    username:
+      profile && typeof profile.username === "string"
+        ? profile.username
+        : null,
     displayName: storedDisplayName ?? metadataDisplayName,
-    profilePhotoUrl: await getProfilePhotoUrl(client, user.id),
+    profilePhotoUrl: uploadedPhoto ?? metadataPhoto,
   };
 }
 

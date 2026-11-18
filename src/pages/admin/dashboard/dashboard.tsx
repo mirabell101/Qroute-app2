@@ -1,4 +1,16 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
+import AccountAvatar from "@/components/account/AccountAvatar";
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
+import {
+  getAdminReports,
+  getAdminSummary,
+  type AdminSummary,
+} from "@/lib/adminApi";
+import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
+import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route,
@@ -6,62 +18,52 @@ import {
   Flag,
   Users,
   Settings,
-  Bell,
   Clock,
   MapPinned,
   Menu,
+  LogOut,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
-const summaryCards = [
+const summaryCards: Array<{
+  title: string;
+  metric: keyof AdminSummary | null;
+  note: string;
+  icon: LucideIcon;
+  iconBg: string;
+  iconColor: string;
+}> = [
   {
-    title: "Registered Viewers",
-    value: "1,248",
+    title: "Registered Users",
+    metric: "registeredUsers",
     note: "Total registered accounts",
     icon: Users,
     iconBg: "bg-blue-100",
     iconColor: "text-blue-700",
   },
   {
-    title: "Pending Reports",
-    value: "12",
-    note: "Reports awaiting review",
+    title: "Reports",
+    metric: "reports",
+    note: "Community reports in the system",
     icon: Flag,
     iconBg: "bg-orange-100",
     iconColor: "text-orange-700",
   },
   {
     title: "Transport Routes",
-    value: "86",
+    metric: "routes",
     note: "Routes in the system",
     icon: Route,
     iconBg: "bg-green-100",
     iconColor: "text-green-700",
   },
   {
-    title: "Active Posts",
-    value: "324",
-    note: "Community posts",
+    title: "Community Posts",
+    metric: "communityPosts",
+    note: "Total community posts",
     icon: FileText,
     iconBg: "bg-purple-100",
     iconColor: "text-purple-700",
-  },
-];
-
-const accessDate = new Date();
-
-const activities = [
-  {
-    title: "Admin accessed the dashboard",
-    description: "Administrator account accessed the dashboard.",
-    time: accessDate.toLocaleTimeString("en-PH", {
-      hour: "2-digit",
-      minute: "2-digit",
-    }),
-    date: accessDate.toLocaleDateString("en-PH", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    }),
   },
 ];
 
@@ -74,8 +76,86 @@ const navigationItems = [
   { label: "Settings", icon: Settings, active: false },
 ];
 
+function formatActivityTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Time unavailable"
+    : date.toLocaleString();
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { userId, account } = useAccountProfile();
+  const [summary, setSummary] = useState<AdminSummary | null>(null);
+  const [pendingReportsCount, setPendingReportsCount] = useState<number | null>(
+    null,
+  );
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+
+  const adminDisplayName =
+    account?.displayName?.trim() ||
+    account?.username?.trim() ||
+    (account?.email ? account.email.split("@")[0] : null) ||
+    "Admin";
+  const adminEmail = account?.email || "Administrator";
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut({ scope: "local" });
+    localStorage.removeItem("qroute_current_user");
+    sessionStorage.removeItem("qroute_current_user");
+    navigate("/login", { replace: true });
+  };
+
+  useEffect(() => {
+    let active = true;
+
+    const loadSummary = async () => {
+      if (!userId) {
+        throw new Error("Please sign in to continue.");
+      }
+
+      const [nextSummary, reports] = await Promise.all([
+        getAdminSummary(userId),
+        getAdminReports(userId).catch(() => null),
+      ]);
+      if (active) {
+        setSummary(nextSummary);
+        if (reports) {
+          const pending = reports.filter((r) => r.status === "Pending").length;
+          setPendingReportsCount(pending);
+        }
+        setErrorMessage(null);
+      }
+    };
+
+    void loadSummary()
+      .catch((error: unknown) => {
+        if (active) {
+          setSummary(null);
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load admin dashboard data.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [userId, retryCount]);
+
+  const retryLoadingSummary = () => {
+    setSummary(null);
+    setErrorMessage(null);
+    setIsLoading(true);
+    setRetryCount((count) => count + 1);
+  };
 
   return (
     <div className="min-h-screen bg-[#F4F8FC] text-slate-800">
@@ -84,7 +164,7 @@ export default function Dashboard() {
         <div className="flex h-[105px] items-center border-b border-white/10 px-7">
           <div>
             <img
-                src="/White%20Qroute%20Logo.png"
+                src={qrouteWhiteLogo}
                 alt="QRoute Logo"
                 className="h-auto w-[150px] object-contain"
               />
@@ -102,46 +182,31 @@ export default function Dashboard() {
           <nav className="space-y-1.5">
             {navigationItems.map((item) => {
               const Icon = item.icon;
+              const destination = getAdminNavigationDestination(item.label);
 
               return (
                 <button
                   key={item.label}
                   type="button"
-                 onClick={() => {
-                      switch (item.label) {
-                        case "Dashboard":
-                          navigate("/admin/dashboard");
-                          break;
-                        case "Route Management":
-                          navigate("/admin/routes");
-                          break;
-                        case "Post Management":
-                          navigate("/admin/post-management");
-                          break;
-                        case "Reports":
-                          navigate("/admin/reports");
-                          break;
-                        case "User Management":
-                          navigate("/admin/users");
-                          break;
-                        case "Settings":
-                          navigate("/admin/settings");
-                          break;
-                      }
-                    }}
+                  disabled={!destination}
+                  title={
+                    destination
+                      ? undefined
+                      : `${item.label} is unavailable in the current system.`
+                  }
+                  onClick={() => destination && navigate(destination)}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${
                     item.active
                       ? "bg-[#CFD5DB] font-semibold text-[#102E4D]"
-                      : "text-slate-200 hover:bg-white/10 hover:text-white"
+                      : destination
+                        ? "text-slate-200 hover:bg-white/10 hover:text-white"
+                        : "cursor-not-allowed text-slate-400"
                   }`}
                 >
                   <Icon size={19} strokeWidth={1.8} />
                   <span>{item.label}</span>
-
-                  {item.label === "Reports" && (
-                    <span className="ml-auto rounded-full bg-orange-500 px-2 py-0.5 text-[10px] font-bold text-white">
-                      12
-                    </span>
+                  {!destination && (
+                    <span className="ml-auto text-[10px]">Unavailable</span>
                   )}
                 </button>
               );
@@ -167,11 +232,20 @@ export default function Dashboard() {
 
           <button
             type="button"
-            onClick={() => navigate("/admin")}
+            onClick={() => navigate("/admin/base")}
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-4 py-3 text-sm font-medium transition hover:bg-white/10"
           >
             <MapPinned size={17} />
-            Switch to User Mode
+            Preview of the System
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+          >
+            <LogOut size={17} />
+            Sign Out
           </button>
         </div>
       </aside>
@@ -196,29 +270,25 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-3 sm:gap-5">
-
-
-            <button
-              type="button"
-              aria-label="Notifications"
-              className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white transition hover:bg-slate-100"
-            >
-              <Bell size={19} className="text-slate-600" />
-              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
-            </button>
+            <AdminNotificationBell adminUserId={userId ?? ""} />
 
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
 
             <div className="flex items-center gap-2.5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#DCE9F7] font-bold text-[#102E4D]">
-                A
-              </div>
-              <div className="hidden sm:block">
+              <AccountAvatar
+                account={account}
+                className="h-10 w-10 bg-[#DCE9F7] font-bold text-[#102E4D]"
+                iconSize={20}
+              />
+              <div className="hidden sm:block text-left">
                 <p className="text-sm font-semibold text-slate-800">
-                  Admin
+                  {adminDisplayName}
                 </p>
-                <p className="text-xs text-slate-500">
-                  Administrator
+                <p
+                  className="text-xs text-slate-500 max-w-[180px] truncate"
+                  title={adminEmail}
+                >
+                  {adminEmail}
                 </p>
               </div>
             </div>
@@ -230,10 +300,8 @@ export default function Dashboard() {
           {/* Welcome Section */}
           <section className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
-
-
               <h3 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">
-                Welcome back, Admin!
+                Welcome back, {adminDisplayName}!
               </h3>
 
               <p className="mt-2 text-sm text-slate-500">
@@ -243,10 +311,38 @@ export default function Dashboard() {
 
           </section>
 
+          {isLoading && (
+            <p className="mt-5 text-sm text-slate-600" role="status">
+              Loading dashboard data...
+            </p>
+          )}
+
+          {errorMessage && (
+            <div
+              className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+              role="alert"
+            >
+              <span>{errorMessage}</span>
+              <button
+                type="button"
+                onClick={retryLoadingSummary}
+                className="rounded-lg border border-red-300 px-3 py-1.5 font-semibold hover:bg-red-100"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
           {/* Summary Cards */}
           <section className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
             {summaryCards.map((card) => {
               const Icon = card.icon;
+              const metricValue = card.metric && summary ? summary[card.metric] : null;
+              const value = isLoading
+                ? "Loading…"
+                : typeof metricValue === "number"
+                  ? metricValue.toLocaleString()
+                  : "Unavailable";
 
               return (
                 <article
@@ -259,7 +355,7 @@ export default function Dashboard() {
                         {card.title}
                       </p>
                       <p className="mt-4 text-3xl font-bold tracking-tight text-[#102E4D]">
-                        {card.value}
+                        {value}
                       </p>
                     </div>
 
@@ -272,7 +368,11 @@ export default function Dashboard() {
 
                   <div className="mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
                     <span className="text-xs text-slate-500">
-                      {card.note}
+                      {card.metric === "reports" &&
+                      pendingReportsCount !== null &&
+                      pendingReportsCount > 0
+                        ? `${pendingReportsCount} pending review`
+                        : card.note}
                     </span>
                   </div>
                 </article>
@@ -280,57 +380,75 @@ export default function Dashboard() {
             })}
           </section>
 
-          {/* Admin Attendance */}
+          {/* Recent activity */}
           <section className="mt-8 grid grid-cols-1 gap-6">
             <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_3px_14px_rgba(15,23,42,0.035)]">
               <div className="flex items-center justify-between border-b border-slate-100 px-5 py-5 sm:px-6">
                 <div>
                   <h4 className="font-bold text-slate-900">
-                    Admin Attendance
+                    Recent activity
                   </h4>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Recent dashboard access history
-                  </p>
                 </div>
 
                 <Clock size={19} className="text-slate-400" />
               </div>
 
-              <div className="divide-y divide-slate-100 px-5 sm:px-6">
-{activities.map((activity) => (
-  <div
-    key={activity.title}
-    className="flex items-center gap-4 py-5"
-  >
-    {/* Admin Avatar */}
-    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 font-bold text-blue-700">
-      A
-    </div>
+              <div className="px-5 py-5 sm:px-6">
+                {isLoading ? (
+                  <p role="status" className="text-sm text-slate-500">
+                    Loading recent activity...
+                  </p>
+                ) : !summary || summary.recentActivity === null ? (
+                  <p className="text-sm text-slate-500">
+                    Recent activity is unavailable right now.
+                  </p>
+                ) : summary.recentActivity.length === 0 ? (
+                  <p className="text-sm text-slate-500">
+                    No recent activity yet.
+                  </p>
+                ) : (
+                  <ul className="space-y-3">
+                    {summary.recentActivity.map((item, index) => {
+                      const ActivityIcon =
+                        item.kind === "report" ? Flag : FileText;
 
-    {/* Admin Details - Left Side */}
-    <div className="min-w-0 flex-1">
-      <p className="text-sm font-semibold text-slate-800">
-        Admin
-      </p>
-      <p className="mt-1 text-xs leading-5 text-slate-500">
-        {activity.description}
-      </p>
-    </div>
-
-    {/* Date and Time - Right Side */}
-    <div className="flex w-36 shrink-0 flex-col items-end text-right">
-      <p className="whitespace-nowrap text-xs font-medium text-slate-600">
-        {activity.time}
-      </p>
-      <p className="mt-1 whitespace-nowrap text-xs text-slate-400">
-        {activity.date}
-      </p>
-    </div>
-  </div>
-))}
+                      return (
+                        <li
+                          key={`${item.kind}-${index}`}
+                          className="flex items-start gap-3 rounded-lg border border-slate-100 bg-[#F8FAFD] px-4 py-3"
+                        >
+                          <span
+                            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                              item.kind === "report"
+                                ? "bg-orange-100 text-orange-700"
+                                : "bg-purple-100 text-purple-700"
+                            }`}
+                          >
+                            <ActivityIcon size={15} />
+                          </span>
+                          <div className="min-w-0">
+                            <p
+                              className="truncate font-medium text-slate-800"
+                              title={item.title}
+                            >
+                              {item.title}
+                            </p>
+                            <p
+                              className="truncate text-xs text-slate-500"
+                              title={item.detail}
+                            >
+                              {item.detail}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-400">
+                              {formatActivityTime(item.occurredAt)}
+                            </p>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </div>
-
-
             </div>
           </section>
         </div>

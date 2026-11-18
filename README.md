@@ -2,6 +2,12 @@
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
+## Admin access
+
+Sign in through `/login` with an account whose `public.user_roles` record has the `admin` role. Admins are sent to `/admin/dashboard`; `/admin` is a shortcut to the same dashboard. Other roles do not receive admin access.
+
+For Google sign-in, add the app callback URL (`/auth/callback`) to the Supabase Auth redirect URL allowlist. In Google Cloud, the authorized redirect URI must be the Supabase project's Auth callback URL shown in its Google provider settings. A callback that arrives without an OAuth code or session indicates a redirect/provider configuration issue, before admin authorization is checked.
+
 Currently, two official plugins are available:
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)

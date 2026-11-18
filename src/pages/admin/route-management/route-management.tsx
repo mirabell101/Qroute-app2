@@ -1,5 +1,27 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
+import AccountAvatar from "@/components/account/AccountAvatar";
+import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
+import {
+  createAdminRoute,
+  deleteAdminRoute,
+  getAdminRoutes,
+  updateAdminRoute,
+  type AdminRouteRecord,
+  type AdminRouteUpdatePayload,
+} from "@/lib/adminApi";
+import {
+  getTransitCatalog,
+  getTransportOptions,
+  pointKey,
+  type ExistingPoint,
+  type TransportTypeOption,
+  type TransportVariantOption,
+} from "@/lib/contributions";
+import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
+import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route as RouteIcon,
@@ -7,133 +29,488 @@ import {
   Flag,
   Users,
   Settings,
-  Bell,
   Search,
-  Plus,
   UserRound,
-  Pencil,
   Eye,
   X,
   Bus,
   TrainFront,
   CarFront,
-  MapPin,
-  ArrowLeftRight,
+  Plus,
+  Pencil,
+  Trash2,
+  ChevronUp,
+  ChevronDown,
+  LogOut,
 } from "lucide-react";
 
-type TransportType = "Jeep" | "Bus" | "Train";
-type TransportRoute = {
-  id: number;
-  type: TransportType;
-  name: string;
-  origin: string;
-  destination: string;
-  fare: number;
-};
-
-const filters = ["All", "Jeep", "Bus", "Train"] as const;
-type Filter = (typeof filters)[number];
-
 const navigationItems = [
-  { label: "Dashboard", icon: LayoutDashboard, path: "/admin/dashboard" },
-  { label: "Route Management", icon: RouteIcon, path: "/admin/routes" },
-  { label: "Post Management", icon: FileText, path: "/admin/post-management" },
-  { label: "Reports", icon: Flag, path: "/admin/reports" },
-  { label: "User Management", icon: Users, path: "/admin/users" },
-  { label: "Settings", icon: Settings, path: "/admin/settings" },
+  { label: "Dashboard", icon: LayoutDashboard },
+  { label: "Route Management", icon: RouteIcon },
+  { label: "Post Management", icon: FileText },
+  { label: "Reports", icon: Flag },
+  { label: "User Management", icon: Users },
+  { label: "Settings", icon: Settings },
 ];
+
+type RouteFormState = "closed" | "create" | "edit";
+
+type RouteModerationStatus = "pending" | "approved" | "rejected";
+
+interface EditableRouteStop {
+  kind: "terminal" | "stop";
+  id: number;
+  name: string;
+  kindLabel: string;
+  unresolved: boolean;
+}
+
+interface RouteFormData {
+  types: TransportTypeOption[];
+  variants: TransportVariantOption[];
+  points: ExistingPoint[];
+}
+
+function pointKindLabel(point: ExistingPoint): string {
+  if (point.kind === "terminal") return "Terminal";
+  return point.stopType === "train_station" ? "Train station" : "Road stop";
+}
+
+function routeTransportType(route: AdminRouteRecord): string {
+  return (
+    route.transport_types?.name ??
+    route.transport_variants?.name ??
+    "Transport type unavailable"
+  );
+}
+
+function routeStatus(route: AdminRouteRecord): string {
+  if (route.is_deleted) return "Deleted";
+  if (route.is_banned) return "Banned";
+  if (!route.is_active) return "Inactive";
+  return route.moderation_status;
+}
 
 export default function RouteManagement() {
   const navigate = useNavigate();
-  const [routes, setRoutes] = useState<TransportRoute[]>([]);
-  const [activeFilter, setActiveFilter] = useState<Filter>("All");
+  const { userId, account } = useAccountProfile();
+  const [routes, setRoutes] = useState<AdminRouteRecord[]>([]);
+
+  const adminDisplayName =
+    account?.displayName?.trim() ||
+    account?.username?.trim() ||
+    (account?.email ? account.email.split("@")[0] : null) ||
+    "Admin";
+  const adminEmail = account?.email || "Administrator";
+  const [activeFilter, setActiveFilter] = useState("All");
   const [searchTerm, setSearchTerm] = useState("");
-  const [modalMode, setModalMode] = useState<"add" | "edit" | "view" | null>(null);
-  const [selectedRoute, setSelectedRoute] = useState<TransportRoute | null>(null);
-  const [form, setForm] = useState({
-    type: "Jeep" as TransportType,
-    name: "",
-    origin: "",
-    destination: "",
-    fare: "",
-  });
+  const [selectedRoute, setSelectedRoute] = useState<AdminRouteRecord | null>(
+    null,
+  );
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut({ scope: "local" });
+    localStorage.removeItem("qroute_current_user");
+    sessionStorage.removeItem("qroute_current_user");
+    navigate("/login", { replace: true });
+  };
+
+  const [formState, setFormState] = useState<RouteFormState>("closed");
+  const [editingRoute, setEditingRoute] = useState<AdminRouteRecord | null>(
+    null,
+  );
+  const [routeName, setRouteName] = useState("");
+  const [transportTypeId, setTransportTypeId] = useState<number | null>(null);
+  const [variantId, setVariantId] = useState<number | null>(null);
+  const [moderationStatus, setModerationStatus] =
+    useState<RouteModerationStatus>("approved");
+  const [isActive, setIsActive] = useState(true);
+  const [stops, setStops] = useState<EditableRouteStop[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formData, setFormData] = useState<RouteFormData | null>(null);
+  const [formDataError, setFormDataError] = useState<string | null>(null);
+  const [isFormDataLoading, setIsFormDataLoading] = useState(false);
+
+  const [pendingDeleteRoute, setPendingDeleteRoute] =
+    useState<AdminRouteRecord | null>(null);
+  const [isDeletingRoute, setIsDeletingRoute] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    void getAdminRoutes(userId ?? "")
+      .then((data) => {
+        if (active) {
+          setRoutes(data);
+          setErrorMessage(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setRoutes([]);
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load routes.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [userId, retryCount]);
+
+  const refreshRoutes = () => {
+    setErrorMessage(null);
+    setIsLoading(true);
+    setRetryCount((count) => count + 1);
+  };
+
+  const ensureFormData = async (): Promise<void> => {
+    if (formData) return;
+    setIsFormDataLoading(true);
+    setFormDataError(null);
+    try {
+      const [options, catalog] = await Promise.all([
+        getTransportOptions(),
+        getTransitCatalog(),
+      ]);
+      setFormData({
+        types: options.types,
+        variants: options.variants,
+        points: catalog.points,
+      });
+    } catch (error: unknown) {
+      setFormDataError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load route form options.",
+      );
+    } finally {
+      setIsFormDataLoading(false);
+    }
+  };
+
+  const openCreateForm = () => {
+    setFormState("create");
+    setEditingRoute(null);
+    setRouteName("");
+    setTransportTypeId(null);
+    setVariantId(null);
+    setModerationStatus("approved");
+    setIsActive(true);
+    setStops([]);
+    setFormError(null);
+    void ensureFormData();
+  };
+
+  const openEditForm = (route: AdminRouteRecord) => {
+    setFormState("edit");
+    setEditingRoute(route);
+    setRouteName(route.name);
+    setTransportTypeId(route.transport_type_id);
+    setVariantId(route.transport_variants?.id ?? null);
+    setModerationStatus(route.moderation_status);
+    setIsActive(route.is_active);
+    setStops(
+      [...route.route_stops]
+        .sort((left, right) => left.stop_order - right.stop_order)
+        .map((stop) => {
+          if (stop.terminals) {
+            return {
+              kind: "terminal" as const,
+              id: stop.terminals.id,
+              name: stop.terminals.name,
+              kindLabel: "Terminal",
+              unresolved: false,
+            };
+          }
+          if (stop.stops) {
+            return {
+              kind: "stop" as const,
+              id: stop.stops.id,
+              name: stop.stops.name,
+              kindLabel:
+                stop.stops.stop_type === "train_station"
+                  ? "Train station"
+                  : "Road stop",
+              unresolved: false,
+            };
+          }
+          return {
+            kind: "terminal" as const,
+            id: 0,
+            name: "Point unavailable",
+            kindLabel: "Point unavailable",
+            unresolved: true,
+          };
+        }),
+    );
+    setFormError(null);
+    void ensureFormData();
+  };
+
+  const closeRouteForm = () => {
+    setFormState("closed");
+    setEditingRoute(null);
+    setFormError(null);
+  };
+
+  const moveStop = (index: number, direction: -1 | 1) => {
+    setStops((current) => {
+      const target = index + direction;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+
+  const removeStop = (index: number) => {
+    setStops((current) => current.filter((_, i) => i !== index));
+  };
+
+  const addStop = (key: string) => {
+    if (!formData || !key) return;
+    const point = formData.points.find(
+      (candidate) => pointKey(candidate.kind, candidate.id) === key,
+    );
+    if (!point) return;
+    setStops((current) => [
+      ...current,
+      {
+        kind: point.kind,
+        id: point.id,
+        name: point.name,
+        kindLabel: pointKindLabel(point),
+        unresolved: false,
+      },
+    ]);
+  };
+
+  const validateRouteForm = (): string | null => {
+    const name = routeName.trim();
+    if (name.length < 1 || name.length > 180) {
+      return "Route name must be between 1 and 180 characters.";
+    }
+    if (transportTypeId === null) {
+      return "Choose a transport type.";
+    }
+    if (variantId === null) {
+      return "Choose a transport variant.";
+    }
+    if (stops.some((stop) => stop.unresolved)) {
+      return "This route has a stop that could not be resolved. Remove it and add a valid stop before saving.";
+    }
+    if (stops.length < 2 || stops.length > 100) {
+      return "A route needs between 2 and 100 ordered stops.";
+    }
+    return null;
+  };
+
+  const handleCreateRoute = async () => {
+    if (!userId) {
+      setFormError("Please sign in to continue.");
+      return;
+    }
+    const validationError = validateRouteForm();
+    if (validationError) {
+      setFormError(validationError);
+      return;
+    }
+
+    setIsSaving(true);
+    setFormError(null);
+    try {
+      await createAdminRoute(userId, {
+        name: routeName.trim(),
+        transportTypeId: transportTypeId!,
+        variantId: variantId!,
+        stops: stops.map((stop) => ({ kind: stop.kind, id: stop.id })),
+      });
+      closeRouteForm();
+      refreshRoutes();
+    } catch (error: unknown) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "Unable to create the route.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleUpdateRoute = async () => {
+    if (!editingRoute) return;
+    if (!userId) {
+      setFormError("Please sign in to continue.");
+      return;
+    }
+    const validationError = validateRouteForm();
+    if (validationError) {
+      setFormError(validationError);
+      return;
+    }
+
+    const nextStops = stops.map((stop) => ({
+      kind: stop.kind,
+      id: stop.id,
+    }));
+    const stopsChanged =
+      nextStops.length !== editingRoute.route_stops.length ||
+      editingRoute.route_stops.some((stop, index) => {
+        const embedded = stop.terminals
+          ? { kind: "terminal" as const, id: stop.terminals.id }
+          : stop.stops
+            ? { kind: "stop" as const, id: stop.stops.id }
+            : null;
+        return (
+          !embedded ||
+          embedded.kind !== nextStops[index].kind ||
+          embedded.id !== nextStops[index].id
+        );
+      });
+
+    const payload: AdminRouteUpdatePayload = {};
+    if (routeName.trim() !== editingRoute.name) {
+      payload.name = routeName.trim();
+    }
+    if (transportTypeId !== editingRoute.transport_type_id) {
+      payload.transportTypeId = transportTypeId!;
+    }
+    if (variantId !== editingRoute.transport_variants?.id) {
+      payload.variantId = variantId!;
+    }
+    if (moderationStatus !== editingRoute.moderation_status) {
+      payload.moderationStatus = moderationStatus;
+    }
+    if (isActive !== editingRoute.is_active) {
+      payload.isActive = isActive;
+    }
+    if (stopsChanged) {
+      payload.stops = nextStops;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      closeRouteForm();
+      return;
+    }
+
+    setIsSaving(true);
+    setFormError(null);
+    try {
+      await updateAdminRoute(userId, editingRoute.id, payload);
+      closeRouteForm();
+      refreshRoutes();
+    } catch (error: unknown) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "Unable to update the route.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const openDeleteDialog = (route: AdminRouteRecord) => {
+    setPendingDeleteRoute(route);
+    setDeleteError(null);
+  };
+
+  const closeDeleteDialog = () => {
+    setPendingDeleteRoute(null);
+    setDeleteError(null);
+  };
+
+  const handleDeleteRoute = async (routeId: number) => {
+    if (!userId) {
+      setDeleteError("Please sign in to continue.");
+      return;
+    }
+    setIsDeletingRoute(true);
+    try {
+      await deleteAdminRoute(userId, routeId);
+      closeDeleteDialog();
+      refreshRoutes();
+    } catch (error: unknown) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : "Unable to delete the route.",
+      );
+    } finally {
+      setIsDeletingRoute(false);
+    }
+  };
+
+  const filters = useMemo(
+    () => [
+      "All",
+      ...new Set(
+        routes
+          .map(
+            (route) =>
+              route.transport_types?.name ??
+              route.transport_variants?.name ??
+              "",
+          )
+          .filter(Boolean),
+      ),
+    ],
+    [routes],
+  );
 
   const filteredRoutes = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
     return routes.filter((route) => {
-      const matchesFilter = activeFilter === "All" || route.type === activeFilter;
-      const matchesSearch =
-        !query ||
-        route.name.toLowerCase().includes(query) ||
-        route.origin.toLowerCase().includes(query) ||
-        route.destination.toLowerCase().includes(query) ||
-        route.type.toLowerCase().includes(query);
+      const transportType = routeTransportType(route);
+      const stopNames = route.route_stops
+        .map((stop) => stop.terminals?.name ?? stop.stops?.name ?? "")
+        .join(" ");
+      const matchesFilter =
+        activeFilter === "All" || transportType === activeFilter;
+      const matchesSearch = `${route.name} ${transportType} ${stopNames}`
+        .toLowerCase()
+        .includes(query);
       return matchesFilter && matchesSearch;
     });
   }, [routes, activeFilter, searchTerm]);
 
-  const resetForm = () =>
-    setForm({ type: "Jeep", name: "", origin: "", destination: "", fare: "" });
+  const activeRouteCount = useMemo(
+    () =>
+      routes.filter(
+        (route) =>
+          route.is_approved &&
+          route.moderation_status === "approved" &&
+          route.is_active &&
+          !route.is_banned &&
+          !route.is_deleted,
+      ).length,
+    [routes],
+  );
 
-  const openAddModal = () => {
-    setSelectedRoute(null);
-    resetForm();
-    setModalMode("add");
-  };
+  const availableVariants =
+    formData?.variants.filter(
+      (variant) => variant.transport_type_id === transportTypeId,
+    ) ?? [];
 
-  const openEditModal = (route: TransportRoute) => {
-    setSelectedRoute(route);
-    setForm({
-      type: route.type,
-      name: route.name,
-      origin: route.origin,
-      destination: route.destination,
-      fare: String(route.fare),
-    });
-    setModalMode("edit");
-  };
-
-  const closeModal = () => {
-    setModalMode(null);
-    setSelectedRoute(null);
-  };
-
-  const saveRoute = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const fare = Number(form.fare);
-    if (
-      !form.name.trim() ||
-      !form.origin.trim() ||
-      !form.destination.trim() ||
-      form.fare.trim() === "" ||
-      !Number.isFinite(fare) ||
-      fare < 0
-    ) return;
-
-    const values = {
-      type: form.type,
-      name: form.name.trim(),
-      origin: form.origin.trim(),
-      destination: form.destination.trim(),
-      fare,
-    };
-
-    if (modalMode === "edit" && selectedRoute) {
-      setRoutes((current) =>
-        current.map((route) =>
-          route.id === selectedRoute.id ? { ...route, ...values } : route
-        )
-      );
-    } else {
-      setRoutes((current) => [...current, { id: Date.now(), ...values }]);
-    }
-    closeModal();
-  };
-
-  const transportIcon = (type: TransportType) => {
-    if (type === "Jeep") return <CarFront size={16} />;
-    if (type === "Bus") return <Bus size={16} />;
-    return <TrainFront size={16} />;
+  const transportIcon = (type: string) => {
+    const normalized = type.toLowerCase();
+    if (normalized.includes("bus")) return <Bus size={16} />;
+    if (normalized.includes("train")) return <TrainFront size={16} />;
+    if (normalized.includes("jeep")) return <CarFront size={16} />;
+    return <RouteIcon size={16} />;
   };
 
   return (
@@ -147,7 +524,7 @@ export default function RouteManagement() {
             aria-label="QRoute dashboard"
           >
             <img
-                src="/White%20Qroute%20Logo.png"
+                src={qrouteWhiteLogo}
                 alt="QRoute Logo"
                 className="h-auto w-[150px] object-contain"
               />
@@ -163,25 +540,30 @@ export default function RouteManagement() {
             {navigationItems.map((item) => {
               const Icon = item.icon;
               const active = item.label === "Route Management";
+              const destination = getAdminNavigationDestination(item.label);
               return (
                 <button
                   key={item.label}
                   type="button"
-                  onClick={() => {
-                    if (item.path !== "/admin/routes") navigate(item.path);
-                  }}
+                  disabled={!destination}
+                  title={
+                    destination
+                      ? undefined
+                      : `${item.label} is unavailable in the current system.`
+                  }
+                  onClick={() => destination && navigate(destination)}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${
                     active
                       ? "bg-[#CFD5DB] font-semibold text-[#102E4D]"
-                      : "text-slate-200 hover:bg-white/10 hover:text-white"
+                      : destination
+                        ? "text-slate-200 hover:bg-white/10 hover:text-white"
+                        : "cursor-not-allowed text-slate-400"
                   }`}
                 >
                   <Icon size={19} strokeWidth={1.8} />
                   <span>{item.label}</span>
-                  {item.label === "Reports" && (
-                    <span className="ml-auto rounded-full bg-orange-500 px-2 py-0.5 text-[10px] font-bold text-white">
-                      12
-                    </span>
+                  {!destination && (
+                    <span className="ml-auto text-[10px]">Unavailable</span>
                   )}
                 </button>
               );
@@ -203,11 +585,24 @@ export default function RouteManagement() {
           </div>
           <button
             type="button"
-            onClick={() => navigate("/")}
+            onClick={() => {
+              const destination =
+                getAdminNavigationDestination("Switch to User Mode");
+              if (destination) navigate(destination);
+            }}
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-4 py-3 text-sm font-medium transition hover:bg-white/10"
           >
             <UserRound size={17} />
             Switch to User Mode
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+          >
+            <LogOut size={17} />
+            Sign Out
           </button>
         </div>
       </aside>
@@ -219,27 +614,29 @@ export default function RouteManagement() {
               Route Management
             </h2>
             <p className="mt-1 text-xs text-slate-500 sm:text-sm">
-              Manage transport routes and information
+              Review route and ordered-stop records
             </p>
           </div>
           <div className="flex items-center gap-3 sm:gap-5">
 
-            <button
-              type="button"
-              aria-label="Notifications"
-              className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white transition hover:bg-slate-100"
-            >
-              <Bell size={19} className="text-slate-600" />
-              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
-            </button>
+            <AdminNotificationBell adminUserId={userId ?? ""} />
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
             <div className="flex items-center gap-2.5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#DCE9F7] font-bold text-[#102E4D]">
-                A
-              </div>
-              <div className="hidden sm:block">
-                <p className="text-sm font-semibold text-slate-800">Admin</p>
-                <p className="text-xs text-slate-500">Administrator</p>
+              <AccountAvatar
+                account={account}
+                className="h-10 w-10 bg-[#DCE9F7] font-bold text-[#102E4D]"
+                iconSize={20}
+              />
+              <div className="hidden sm:block text-left">
+                <p className="text-sm font-semibold text-slate-800">
+                  {adminDisplayName}
+                </p>
+                <p
+                  className="text-xs text-slate-500 max-w-[180px] truncate"
+                  title={adminEmail}
+                >
+                  {adminEmail}
+                </p>
               </div>
             </div>
           </div>
@@ -253,17 +650,20 @@ export default function RouteManagement() {
                 Transport Routes
               </h3>
               <p className="mt-2 text-sm text-slate-500">
-                Add, review, and maintain the transport routes available in QRoute.
+                Review routes, transport types, and their ordered stops.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={openAddModal}
-              className="inline-flex w-fit items-center gap-2 rounded-lg bg-[#102E4D] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#19476D]"
-            >
-              <Plus size={17} />
-              Add Route
-            </button>
+            <div className="flex w-fit items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+                <RouteIcon size={20} />
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Active Transit Routes</p>
+                <p className="text-xl font-bold text-[#102E4D]">
+                  {activeRouteCount}
+                </p>
+              </div>
+            </div>
           </section>
 
           <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_3px_14px_rgba(15,23,42,0.035)] sm:p-6">
@@ -273,7 +673,7 @@ export default function RouteManagement() {
                 <input
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Search route, origin, or destination..."
+                  placeholder="Search route, stop, or transport type..."
                   aria-label="Search routes"
                   className="w-full border-0 bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
                 />
@@ -307,16 +707,26 @@ export default function RouteManagement() {
               </div>
             </div>
 
-            <div className="mt-6 flex items-center justify-between">
+            <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h4 className="font-bold text-slate-900">All Routes</h4>
                 <p className="mt-1 text-xs text-slate-500">
                   {filteredRoutes.length} {filteredRoutes.length === 1 ? "route" : "routes"} displayed
                 </p>
               </div>
-              <span className="rounded-full bg-[#EAF1F8] px-3 py-1.5 text-xs font-semibold text-[#102E4D]">
-                {activeFilter === "All" ? "All transport types" : `${activeFilter} routes`}
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="rounded-full bg-[#EAF1F8] px-3 py-1.5 text-xs font-semibold text-[#102E4D]">
+                  {activeFilter === "All" ? "All transport types" : `${activeFilter} routes`}
+                </span>
+                <button
+                  type="button"
+                  onClick={openCreateForm}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#19476D]"
+                >
+                  <Plus size={16} />
+                  Add Route
+                </button>
+              </div>
             </div>
 
             <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
@@ -326,8 +736,8 @@ export default function RouteManagement() {
                     <tr>
                       <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Type</th>
                       <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Route Name</th>
-                      <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Origin to Destination</th>
-                      <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Fare</th>
+                      <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Ordered Stops</th>
+                      <th className="px-5 py-4 text-xs font-semibold uppercase tracking-wide">Status</th>
                       <th className="px-5 py-4 text-center text-xs font-semibold uppercase tracking-wide">Actions</th>
                     </tr>
                   </thead>
@@ -337,36 +747,51 @@ export default function RouteManagement() {
                         <tr key={route.id} className="transition hover:bg-slate-50">
                           <td className="px-5 py-4">
                             <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700">
-                              {transportIcon(route.type)}
-                              {route.type}
+                              {transportIcon(routeTransportType(route))}
+                              {routeTransportType(route)}
                             </span>
                           </td>
                           <td className="px-5 py-4 font-semibold text-slate-800">{route.name}</td>
                           <td className="px-5 py-4 text-slate-600">
-                            <span className="inline-flex items-center gap-2">
-                              <MapPin size={15} className="text-slate-400" />
-                              {route.origin}
-                              <ArrowLeftRight size={14} className="text-slate-400" />
-                              {route.destination}
-                            </span>
+                            {route.route_stops
+                              .map(
+                                (stop) =>
+                                  stop.terminals?.name ??
+                                  stop.stops?.name ??
+                                  "Point unavailable",
+                              )
+                              .join(" → ") || "No stops recorded"}
                           </td>
-                          <td className="px-5 py-4 font-medium text-slate-700">₱{route.fare.toFixed(2)}</td>
+                          <td className="px-5 py-4 text-slate-600">
+                            {routeStatus(route)}
+                          </td>
                           <td className="px-5 py-4">
                             <div className="flex justify-center gap-2">
                               <button
                                 type="button"
-                                onClick={() => openEditModal(route)}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:text-[#102E4D]"
-                              >
-                                <Pencil size={13} /> Edit
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => { setSelectedRoute(route); setModalMode("view"); }}
+                                onClick={() => setSelectedRoute(route)}
                                 className="inline-flex items-center gap-1.5 rounded-lg bg-[#EAF1F8] px-3 py-2 text-xs font-semibold text-[#102E4D] transition hover:bg-[#DCE9F7]"
                               >
                                 <Eye size={13} /> View
                               </button>
+                              {!route.is_deleted && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditForm(route)}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D]"
+                                  >
+                                    <Pencil size={13} /> Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => openDeleteDialog(route)}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-100"
+                                  >
+                                    <Trash2 size={13} /> Delete
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -378,16 +803,33 @@ export default function RouteManagement() {
                             <RouteIcon size={25} />
                           </div>
                           <p className="mt-4 font-semibold text-slate-800">
-                            {searchTerm || activeFilter !== "All" ? "No matching routes found" : "No routes added yet"}
+                            {isLoading
+                              ? "Loading routes..."
+                              : errorMessage
+                                ? "Routes could not be loaded"
+                                : routes.length === 0
+                                  ? "No routes are available"
+                                  : "No matching routes found"}
                           </p>
                           <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500">
-                            {searchTerm || activeFilter !== "All"
-                              ? "Try another search term or choose a different transport filter."
-                              : "Add a transport route to start building the QRoute route directory."}
+                            {errorMessage ??
+                              (isLoading
+                                ? "Loading route records from the database."
+                                : routes.length === 0
+                                  ? "The database returned no route records."
+                                  : "Try another search term or transport filter.")}
                           </p>
-                          {!searchTerm && activeFilter === "All" && (
-                            <button type="button" onClick={openAddModal} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#19476D]">
-                              <Plus size={16} /> Add your first route
+                          {errorMessage && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setErrorMessage(null);
+                                setIsLoading(true);
+                                setRetryCount((count) => count + 1);
+                              }}
+                              className="mt-4 rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#19476D]"
+                            >
+                              Retry
                             </button>
                           )}
                         </td>
@@ -398,7 +840,8 @@ export default function RouteManagement() {
               </div>
             </div>
             <p className="mt-4 text-xs text-slate-400">
-              Route information shown here is managed by the admin.
+              Routes created here are saved as approved and active. Deleting a
+              route hides it from the system while keeping its record.
             </p>
           </section>
 
@@ -408,104 +851,458 @@ export default function RouteManagement() {
         </div>
       </main>
 
-      {modalMode && (
+      {selectedRoute && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]">
-          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="route-details-title"
+            className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+          >
             <div className="mb-6 flex items-start justify-between">
               <div>
-                <h2 className="text-xl font-bold text-[#102E4D]">
-                  {modalMode === "add" ? "Add Route" : modalMode === "edit" ? "Edit Route" : "Route Details"}
+                <h2
+                  id="route-details-title"
+                  className="text-xl font-bold text-[#102E4D]"
+                >
+                  Route Details
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  {modalMode === "view" ? "Review the route information below." : "Enter the transport route details."}
+                  Review the stored route information and stop sequence.
                 </p>
               </div>
-              <button type="button" onClick={closeModal} aria-label="Close dialog" className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100">
+              <button
+                type="button"
+                onClick={() => setSelectedRoute(null)}
+                aria-label="Close dialog"
+                className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100"
+              >
                 <X size={19} />
               </button>
             </div>
 
-            {modalMode === "view" && selectedRoute ? (
-              <div className="space-y-4">
-                <Detail label="Transport type" value={selectedRoute.type} />
-                <Detail label="Route name" value={selectedRoute.name} />
-                <Detail label="Origin" value={selectedRoute.origin} />
-                <Detail label="Destination" value={selectedRoute.destination} />
-                <Detail label="Fare" value={`₱${selectedRoute.fare.toFixed(2)}`} />
-                <button type="button" onClick={closeModal} className="mt-3 w-full rounded-lg bg-[#102E4D] px-4 py-3 text-sm font-semibold text-white hover:bg-[#19476D]">
-                  Close
+            <div className="space-y-4">
+              <Detail label="Route name" value={selectedRoute.name} />
+              <Detail
+                label="Transport type"
+                value={routeTransportType(selectedRoute)}
+              />
+              <Detail
+                label="Transport variant"
+                value={
+                  selectedRoute.transport_variants?.code ??
+                  "Variant unavailable"
+                }
+              />
+              <Detail label="Status" value={routeStatus(selectedRoute)} />
+              <div>
+                <h3 className="mb-2 text-sm font-semibold text-slate-700">
+                  Ordered stops
+                </h3>
+                {selectedRoute.route_stops.length ? (
+                  <ol className="space-y-2">
+                    {selectedRoute.route_stops.map((stop) => (
+                      <li
+                        key={`${stop.route_id}-${stop.stop_order}`}
+                        className="flex items-center gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm"
+                      >
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#EAF1F8] text-xs font-semibold text-[#102E4D]">
+                          {stop.stop_order}
+                        </span>
+                        <span>
+                          {stop.terminals?.name ??
+                            stop.stops?.name ??
+                            "Point unavailable"}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="text-sm text-slate-500">
+                    No stops are associated with this route.
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedRoute(null)}
+                className="mt-3 w-full rounded-lg bg-[#102E4D] px-4 py-3 text-sm font-semibold text-white hover:bg-[#19476D]"
+              >
+                Close
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* Create / edit route modal */}
+      {formState !== "closed" && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]"
+          onClick={closeRouteForm}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="route-form-title"
+            onClick={(event) => event.stopPropagation()}
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+          >
+            <div className="mb-6 flex items-start justify-between">
+              <div>
+                <h2
+                  id="route-form-title"
+                  className="text-xl font-bold text-[#102E4D]"
+                >
+                  {formState === "create" ? "Add Route" : "Edit Route"}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {formState === "create"
+                    ? "Create a route with its transport details and ordered stops."
+                    : "Update the stored route information and stop sequence."}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeRouteForm}
+                aria-label="Close dialog"
+                className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100"
+              >
+                <X size={19} />
+              </button>
+            </div>
+
+            {isFormDataLoading ? (
+              <p role="status" className="py-10 text-center text-sm text-slate-500">
+                Loading route form options...
+              </p>
+            ) : !formData ? (
+              <div className="text-center">
+                <p
+                  role="alert"
+                  className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+                >
+                  {formDataError ?? "Unable to load route form options."}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void ensureFormData()}
+                  className="mt-4 rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#19476D]"
+                >
+                  Retry
                 </button>
               </div>
             ) : (
-              <form onSubmit={saveRoute} className="space-y-4">
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (formState === "create") {
+                    void handleCreateRoute();
+                  } else {
+                    void handleUpdateRoute();
+                  }
+                }}
+                className="space-y-4"
+              >
                 <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Transport Type</label>
-                  <select
-                    value={form.type}
-                    onChange={(event) => setForm({ ...form, type: event.target.value as TransportType })}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+                  <label
+                    htmlFor="route-name-input"
+                    className="mb-1.5 block text-sm font-semibold text-slate-700"
                   >
-                    <option value="Jeep">Jeep</option>
-                    <option value="Bus">Bus</option>
-                    <option value="Train">Train</option>
-                  </select>
-                </div>
-                <Field label="Route Name" value={form.name} onChange={(value) => setForm({ ...form, name: value })} placeholder="e.g. Route 1" />
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <Field label="Origin" value={form.origin} onChange={(value) => setForm({ ...form, origin: value })} placeholder="Starting point" />
-                  <Field label="Destination" value={form.destination} onChange={(value) => setForm({ ...form, destination: value })} placeholder="End point" />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Fare (₱)</label>
+                    Route name
+                  </label>
                   <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    required
-                    value={form.fare}
-                    onChange={(event) => setForm({ ...form, fare: event.target.value })}
-                    placeholder="0.00"
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+                    id="route-name-input"
+                    type="text"
+                    value={routeName}
+                    maxLength={180}
+                    onChange={(event) => setRouteName(event.target.value)}
+                    placeholder="Enter the route name"
+                    className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
                   />
                 </div>
-                <div className="flex justify-end gap-3 border-t border-slate-100 pt-5">
-                  <button type="button" onClick={closeModal} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
+
+                <div>
+                  <label
+                    htmlFor="route-type-select"
+                    className="mb-1.5 block text-sm font-semibold text-slate-700"
+                  >
+                    Transport type
+                  </label>
+                  <select
+                    id="route-type-select"
+                    value={transportTypeId ?? ""}
+                    onChange={(event) => {
+                      setTransportTypeId(
+                        event.target.value ? Number(event.target.value) : null,
+                      );
+                      setVariantId(null);
+                    }}
+                    className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+                  >
+                    <option value="">Choose a transport type</option>
+                    {formData.types.map((type) => (
+                      <option key={type.id} value={type.id}>
+                        {type.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="route-variant-select"
+                    className="mb-1.5 block text-sm font-semibold text-slate-700"
+                  >
+                    Transport variant
+                  </label>
+                  <select
+                    id="route-variant-select"
+                    value={variantId ?? ""}
+                    onChange={(event) => {
+                      setVariantId(
+                        event.target.value ? Number(event.target.value) : null,
+                      );
+                    }}
+                    disabled={!transportTypeId}
+                    className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  >
+                    <option value="">Choose a transport variant</option>
+                    {availableVariants.map((variant) => (
+                      <option key={variant.id} value={variant.id}>
+                        {variant.name} ({variant.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {formState === "edit" && (
+                  <div>
+                    <label
+                      htmlFor="route-status-select"
+                      className="mb-1.5 block text-sm font-semibold text-slate-700"
+                    >
+                      Moderation status
+                    </label>
+                    <select
+                      id="route-status-select"
+                      value={moderationStatus}
+                      onChange={(event) =>
+                        setModerationStatus(
+                          event.target.value as RouteModerationStatus,
+                        )
+                      }
+                      className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+                    >
+                      <option value="pending">Pending</option>
+                      <option value="approved">Approved</option>
+                      <option value="rejected">Rejected</option>
+                    </select>
+                    <p className="mt-1.5 text-xs text-slate-400">
+                      Saving a status records you as the moderator and
+                      re-applies route approval.
+                    </p>
+                  </div>
+                )}
+
+                <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={isActive}
+                    onChange={(event) => setIsActive(event.target.checked)}
+                    className="h-4 w-4 accent-[#102E4D]"
+                  />
+                  Route is active
+                </label>
+
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-700">
+                      Ordered stops
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      {stops.length} of 100
+                    </span>
+                  </div>
+
+                  {stops.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                      Add at least two ordered stops to define the route.
+                    </p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {stops.map((stop, index) => (
+                        <li
+                          key={`${stop.kind}-${stop.id}-${index}`}
+                          className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-sm ${
+                            stop.unresolved
+                              ? "border-red-200 bg-red-50"
+                              : "border-slate-200 bg-slate-50"
+                          }`}
+                        >
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#EAF1F8] text-xs font-semibold text-[#102E4D]">
+                            {index + 1}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p
+                              className={`truncate font-medium ${
+                                stop.unresolved
+                                  ? "text-red-700"
+                                  : "text-slate-800"
+                              }`}
+                            >
+                              {stop.name}
+                            </p>
+                            <p className="text-xs text-slate-400">
+                              {stop.kindLabel}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              aria-label={`Move ${stop.name} up`}
+                              disabled={index === 0}
+                              onClick={() => moveStop(index, -1)}
+                              className="rounded-md p-1.5 text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <ChevronUp size={15} />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Move ${stop.name} down`}
+                              disabled={index === stops.length - 1}
+                              onClick={() => moveStop(index, 1)}
+                              className="rounded-md p-1.5 text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <ChevronDown size={15} />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${stop.name}`}
+                              onClick={() => removeStop(index)}
+                              className="rounded-md p-1.5 text-slate-500 transition hover:bg-red-100 hover:text-red-700"
+                            >
+                              <X size={15} />
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <select
+                    value=""
+                    onChange={(event) => addStop(event.target.value)}
+                    aria-label="Add a stop to the route"
+                    className="mt-3 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+                  >
+                    <option value="">Add a stop…</option>
+                    {formData.points.map((point) => (
+                      <option
+                        key={pointKey(point.kind, point.id)}
+                        value={pointKey(point.kind, point.id)}
+                      >
+                        {pointKindLabel(point)} · {point.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1.5 text-xs text-slate-400">
+                    Only approved terminals and stops can be added.
+                  </p>
+                </div>
+
+                {formError && (
+                  <p
+                    role="alert"
+                    className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+                  >
+                    {formError}
+                  </p>
+                )}
+
+                <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
+                  <button
+                    type="button"
+                    onClick={closeRouteForm}
+                    className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                  >
                     Cancel
                   </button>
-                  <button type="submit" className="rounded-lg bg-[#102E4D] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#19476D]">
-                    {modalMode === "edit" ? "Save Changes" : "Add Route"}
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#19476D] disabled:opacity-50"
+                  >
+                    {isSaving
+                      ? "Saving..."
+                      : formState === "create"
+                        ? "Create Route"
+                        : "Save Changes"}
                   </button>
                 </div>
               </form>
             )}
-          </div>
+          </section>
         </div>
       )}
-    </div>
-  );
-}
 
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <div>
-      <label className="mb-1.5 block text-sm font-medium text-slate-700">{label}</label>
-      <input
-        required
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
-      />
+      {/* Delete route confirmation */}
+      {pendingDeleteRoute && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4"
+          onClick={closeDeleteDialog}
+        >
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="route-delete-title"
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-red-50 text-red-600">
+              <Trash2 size={23} />
+            </div>
+
+            <h3
+              id="route-delete-title"
+              className="mt-4 text-xl font-bold text-[#102E4D]"
+            >
+              Delete this route?
+            </h3>
+
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {`Are you sure you want to delete "${pendingDeleteRoute.name}"? The route will be hidden from the system while its record is kept.`}
+            </p>
+
+            {deleteError && (
+              <p
+                role="alert"
+                className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+              >
+                {deleteError}
+              </p>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeDeleteDialog}
+                className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingRoute}
+                onClick={() => void handleDeleteRoute(pendingDeleteRoute.id)}
+                className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-50"
+              >
+                {isDeletingRoute ? "Deleting..." : "Delete Route"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

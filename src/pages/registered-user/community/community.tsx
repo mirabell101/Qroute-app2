@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Bell,
   Car,
+  Flag,
   Home as HomeIcon,
   ImagePlus,
   MapPin,
@@ -30,6 +31,7 @@ import {
   getCommunityVoteStates,
   removeCommunityVote,
   removeCommunityPostPhotos,
+  reportCommunityPost,
   setCommunityVote,
   uploadCommunityPostPhotos,
 } from "@/lib/community";
@@ -111,6 +113,12 @@ export default function Community({
   const [profileMenu, setProfileMenu] = useState(false);
   const [showCreatePost, setShowCreatePost] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [reportTarget, setReportTarget] = useState<CommunityPost | null>(null);
+  const [reportReason, setReportReason] = useState("");
+  const [reportDetails, setReportDetails] = useState("");
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportError, setReportError] = useState("");
+  const [reportSuccess, setReportSuccess] = useState("");
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [transportTypeId, setTransportTypeId] = useState<number | null>(null);
@@ -718,6 +726,56 @@ export default function Community({
     }
   };
 
+  const openReportDialog = (post: CommunityPost) => {
+    if (!currentUserId || !isRegisteredUser) {
+      if (currentUserId) {
+        setError("A registered-user account is required to report a post.");
+        return;
+      }
+      promptLogin();
+      return;
+    }
+    setReportTarget(post);
+    setReportReason("");
+    setReportDetails("");
+    setReportError("");
+    setReportSuccess("");
+  };
+
+  const closeReportDialog = () => {
+    if (reportSubmitting) return;
+    setReportTarget(null);
+    setReportError("");
+    setReportSuccess("");
+  };
+
+  const submitReport = async () => {
+    if (!reportTarget || reportSubmitting || reportSuccess) return;
+    const reason = reportReason.trim();
+    const details = reportDetails.trim();
+    if (!reason || !details) {
+      setReportError("Enter a reason and a short description of the problem.");
+      return;
+    }
+
+    setReportSubmitting(true);
+    setReportError("");
+    try {
+      await reportCommunityPost(reportTarget.id, reason, details);
+      setReportSuccess("Report submitted. Thank you for helping keep the community safe.");
+      setError("");
+      setNotice("Your report was submitted successfully.");
+    } catch (reportErrorValue) {
+      setReportError(
+        reportErrorValue instanceof Error
+          ? reportErrorValue.message
+          : "Unable to submit your report.",
+      );
+    } finally {
+      setReportSubmitting(false);
+    }
+  };
+
   const locationPicker = (target: Target, value: CommunityPoint | null, query: string) => {
     const setQuery = target === "start" ? setStartSearch : setDestinationSearch;
     const results = filteredLocations(query);
@@ -784,7 +842,7 @@ export default function Community({
             <button
               key={label}
               type="button"
-              onClick={() => label === "Community" ? navigate(path) : currentUserId ? navigate(path) : promptLogin()}
+              onClick={() => navigate(path)}
               title={label}
               className={`group flex h-[46px] w-full items-center justify-center rounded-xl px-2 text-left lg:justify-start lg:px-3 ${label === "Community" ? "bg-[#d9dee3] font-semibold text-[#0f2a47]" : "font-medium text-white hover:bg-white/15"}`}
             >
@@ -894,6 +952,9 @@ export default function Community({
                       <button type="button" onClick={() => void reactToPost(post, "upvote")} aria-pressed={currentUserId === votesUserId && votes[post.id] === "upvote"} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm ${currentUserId === votesUserId && votes[post.id] === "upvote" ? "bg-green-50 text-green-700" : "text-gray-600 hover:bg-gray-100"}`}><ThumbsUp size={16} />{post.upvotes}</button>
                       <button type="button" onClick={() => void reactToPost(post, "downvote")} aria-pressed={currentUserId === votesUserId && votes[post.id] === "downvote"} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm ${currentUserId === votesUserId && votes[post.id] === "downvote" ? "bg-red-50 text-red-700" : "text-gray-600 hover:bg-gray-100"}`}><ThumbsDown size={16} />{post.downvotes}</button>
                       <button type="button" onClick={() => void toggleComments(post.id)} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 hover:bg-gray-100"><MessageSquare size={16} />{post.comment_count} Comments</button>
+                      {isRegisteredUser && (
+                        <button type="button" onClick={() => openReportDialog(post)} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 hover:bg-gray-100"><Flag size={16} />Report</button>
+                      )}
                     </div>
 
                     {commentsOpen[post.id] && (
@@ -947,6 +1008,52 @@ export default function Community({
               <div><p className="mb-2 text-sm font-medium text-gray-700">Choose {activeTarget === "destination" ? "destination" : "starting point"} by searching or clicking the map.</p><CommunityPostMap start={start} destination={destination} activeTarget={activeTarget} existingPoints={locations.filter((point) => transportTypeId === null || point.transportTypeId === null || point.transportTypeId === transportTypeId)} onMapPick={handleMapPick} onExistingPointPick={(point) => activeTarget && chooseLocation(activeTarget, point)} transportType={transportTypes.find((type) => type.id === transportTypeId)?.name ?? ""} routeColor={transportTypes.find((type) => type.id === transportTypeId)?.color ?? "#2563eb"} height="h-[300px]" /><p className="mt-2 text-xs text-gray-500">Select a start or destination above, then click any map location. The line only visualizes your selected points.</p></div>
             </div>
             <div className="mt-6 flex flex-col-reverse gap-2 border-t border-gray-100 pt-4 sm:flex-row sm:justify-end"><button type="button" onClick={() => { setShowCreatePost(false); resetComposer(); }} className="rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50">Cancel</button><button type="button" disabled={isSubmitting} onClick={() => void submitPost()} className="rounded-lg bg-[#12395A] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#1b4b6f] disabled:opacity-50">{isSubmitting ? "Publishing…" : "Publish post"}</button></div>
+          </section>
+        </div>
+      )}
+
+      {reportTarget && (
+        <div className="fixed inset-0 z-[6500] flex items-center justify-center bg-black/50 p-4" onClick={closeReportDialog}>
+          <section role="dialog" aria-modal="true" aria-labelledby="community-report-title" className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 id="community-report-title" className="text-lg font-bold text-[#12395A]">Report this post</h2>
+                <p className="mt-1 text-sm text-gray-500">Your report is sent to the QRoute admins for review.</p>
+              </div>
+              <button type="button" onClick={closeReportDialog} aria-label="Close report dialog" className="rounded-lg p-2 text-gray-500 hover:bg-gray-100"><X size={20} /></button>
+            </div>
+            <form className="mt-5 space-y-4" onSubmit={(event) => { event.preventDefault(); void submitReport(); }}>
+              <label className="block text-sm font-medium text-gray-700">
+                Reason
+                <input
+                  autoFocus
+                  maxLength={120}
+                  value={reportReason}
+                  onChange={(event) => setReportReason(event.target.value)}
+                  placeholder="e.g. Spam or misleading information"
+                  disabled={reportSubmitting || Boolean(reportSuccess)}
+                  className="mt-1 h-10 w-full rounded-lg border border-gray-200 px-3 outline-none focus:border-[#12395A] disabled:bg-gray-50"
+                />
+              </label>
+              <label className="block text-sm font-medium text-gray-700">
+                Details
+                <textarea
+                  maxLength={2000}
+                  rows={5}
+                  value={reportDetails}
+                  onChange={(event) => setReportDetails(event.target.value)}
+                  placeholder="Tell the admins what is wrong with this post."
+                  disabled={reportSubmitting || Boolean(reportSuccess)}
+                  className="mt-1 w-full resize-y rounded-lg border border-gray-200 px-3 py-2 outline-none focus:border-[#12395A] disabled:bg-gray-50"
+                />
+              </label>
+              {reportError && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{reportError}</p>}
+              {reportSuccess && <p role="status" className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">{reportSuccess}</p>}
+              <div className="flex justify-end gap-2 border-t border-gray-100 pt-4">
+                <button type="button" onClick={closeReportDialog} disabled={reportSubmitting} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50">{reportSuccess ? "Done" : "Cancel"}</button>
+                <button type="submit" disabled={reportSubmitting || Boolean(reportSuccess)} className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1b4b6f] disabled:opacity-50">{reportSubmitting ? "Submitting…" : reportSuccess ? "Submitted" : "Submit report"}</button>
+              </div>
+            </form>
           </section>
         </div>
       )}
