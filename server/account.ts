@@ -1,3 +1,4 @@
+
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const PROFILE_PHOTO_BUCKET = "profile-photos";
@@ -15,6 +16,7 @@ export interface AccountResponse {
   username: string | null;
   displayName: string | null;
   profilePhotoUrl: string | null;
+  googleProfilePhotoUrl: string | null;
 }
 
 export class AccountRequestError extends Error {
@@ -42,6 +44,31 @@ export function isStrongAccountPassword(password: string): boolean {
   );
 }
 
+function getGoogleProfilePhotoUrl(
+  userMetadata: Record<string, unknown> | null | undefined,
+): string | null {
+  const candidate = [
+    userMetadata?.avatar_url,
+    userMetadata?.picture,
+  ].find(
+    (value): value is string =>
+      typeof value === "string" && value.trim().length > 0,
+  );
+
+  if (!candidate) return null;
+
+  try {
+    const url = new URL(candidate.trim());
+
+    // Only accept secure image URLs from authentication metadata.
+    if (url.protocol !== "https:") return null;
+
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export async function getAccount(
   client: SupabaseClient,
   user: AuthenticatedAccountUser,
@@ -60,6 +87,7 @@ export async function getAccount(
     profile.display_name.trim()
       ? profile.display_name
       : null;
+
   const metadataDisplayName = [
     user.userMetadata?.display_name,
     user.userMetadata?.full_name,
@@ -72,13 +100,10 @@ export async function getAccount(
   const uploadedPhoto = await getProfilePhotoUrl(client, user.id).catch(
     () => null,
   );
-  const metadataPhoto = [
-    user.userMetadata?.avatar_url,
-    user.userMetadata?.picture,
-  ].find(
-    (value): value is string =>
-      typeof value === "string" && value.trim().length > 0,
-  ) ?? null;
+
+  const googleProfilePhotoUrl = getGoogleProfilePhotoUrl(
+    user.userMetadata,
+  );
 
   return {
     email: user.email,
@@ -87,7 +112,8 @@ export async function getAccount(
         ? profile.username
         : null,
     displayName: storedDisplayName ?? metadataDisplayName,
-    profilePhotoUrl: uploadedPhoto ?? metadataPhoto,
+    profilePhotoUrl: uploadedPhoto,
+    googleProfilePhotoUrl,
   };
 }
 
@@ -96,23 +122,26 @@ export async function getProfilePhotoUrl(
   userId: string,
 ): Promise<string | null> {
   const photoStorage = client.storage.from(PROFILE_PHOTO_BUCKET);
+
   const { data: files, error: listError } = await photoStorage.list(userId, {
     limit: 10,
     search: PROFILE_PHOTO_PATH,
   });
+
   if (listError) throw listError;
 
-  let profilePhotoUrl: string | null = null;
-  if (files?.some((file) => file.name === PROFILE_PHOTO_PATH)) {
-    const { data, error } = await photoStorage.createSignedUrl(
-      `${userId}/${PROFILE_PHOTO_PATH}`,
-      PROFILE_PHOTO_URL_TTL_SECONDS,
-    );
-    if (error) throw error;
-    profilePhotoUrl = data.signedUrl;
+  if (!files?.some((file) => file.name === PROFILE_PHOTO_PATH)) {
+    return null;
   }
 
-  return profilePhotoUrl;
+  const { data, error } = await photoStorage.createSignedUrl(
+    `${userId}/${PROFILE_PHOTO_PATH}`,
+    PROFILE_PHOTO_URL_TTL_SECONDS,
+  );
+
+  if (error) throw error;
+
+  return data.signedUrl;
 }
 
 export async function updateAccountUsername(
@@ -133,9 +162,11 @@ export async function updateAccountUsername(
     }
     throw error;
   }
+
   if (!data || typeof data.username !== "string") {
     throw new AccountRequestError(404, "Account profile not found.");
   }
+
   return data.username;
 }
 
@@ -157,6 +188,7 @@ export async function updateAccountPassword(
   const { error: updateError } = await client.auth.updateUser({
     password: newPassword,
   });
+
   if (updateError) {
     throw new AccountRequestError(
       400,

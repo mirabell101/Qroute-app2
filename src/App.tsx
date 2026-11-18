@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -14,6 +15,7 @@ import {
   getUserRole,
 } from "./lib/authSession";
 import type { QRouteRole } from "./lib/roles";
+
 import { SavedItemsProvider } from "./components/saved/SavedItemsContext";
 import { RecentSearchesProvider } from "./components/recent-searches/RecentSearchesContext";
 import { AccountProfileProvider } from "./components/account/AccountProfileContext";
@@ -29,12 +31,14 @@ import Resetpassword from "./pages/visitor/Resetpassword/Resetpassword";
 import ResetOTP from "./pages/visitor/ResetOTP/ResetOTP";
 import TermsAndConditions from "./pages/visitor/Legal/TermsAndCondition";
 import PrivacyPolicy from "./pages/visitor/Legal/PrivacyPolicy";
+
 import Profile from "./pages/registered-user/Profile/Profile";
 import Contribution from "./pages/registered-user/contribution/contribution";
 import Community from "./pages/registered-user/community/community";
 import PointsBadges from "./pages/registered-user/points-badges/points-badges";
 import Saved from "./pages/registered-user/saved/saved";
 import RecentSearches from "./pages/registered-user/recent-searches/recent-searches";
+
 import AdminBase from "./pages/admin/base/base";
 import Dashboard from "./pages/admin/dashboard/dashboard";
 import RouteManagement from "./pages/admin/route-management/route-management";
@@ -51,6 +55,7 @@ function hasRegisteredUserAccess(role: QRouteRole | null): boolean {
 function App() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+
   const [roleState, setRoleState] = useState<{
     userId: string | null;
     loaded: boolean;
@@ -159,7 +164,11 @@ function App() {
       if (event === "SIGNED_OUT") {
         setCurrentUserId(null);
         setAuthLoading(false);
-        setRoleState({ userId: null, loaded: true, role: null });
+        setRoleState({
+          userId: null,
+          loaded: true,
+          role: null,
+        });
         return;
       }
 
@@ -248,11 +257,17 @@ function App() {
       void loadRole();
     };
 
-    window.addEventListener(AUTH_ROLE_UPDATED_EVENT, handleRoleUpdated);
+    window.addEventListener(
+      AUTH_ROLE_UPDATED_EVENT,
+      handleRoleUpdated
+    );
 
     return () => {
       active = false;
-      window.removeEventListener(AUTH_ROLE_UPDATED_EVENT, handleRoleUpdated);
+      window.removeEventListener(
+        AUTH_ROLE_UPDATED_EVENT,
+        handleRoleUpdated
+      );
     };
   }, [currentUserId]);
 
@@ -291,9 +306,11 @@ function App() {
     return renderPage(currentUserId);
   };
 
-  // Administrative pages require the database role. Authentication alone is
-  // not enough, and the same rule applies to Google and password sessions.
-  const adminPage = (renderPage: () => ReactNode): ReactNode => {
+  // Administrative pages require the database role.
+  // The callback receives the authenticated admin's non-null user ID.
+  const adminPage = (
+    renderPage: (userId: string) => ReactNode
+  ): ReactNode => {
     if (authLoading || roleLoading) {
       return null;
     }
@@ -306,7 +323,7 @@ function App() {
       return <Navigate to="/home" replace />;
     }
 
-    return renderPage();
+    return renderPage(currentUserId);
   };
 
   return (
@@ -336,7 +353,10 @@ function App() {
                       replace
                     />
                   ) : authenticatedRootPath ? (
-                    <Navigate to={authenticatedRootPath} replace />
+                    <Navigate
+                      to={authenticatedRootPath}
+                      replace
+                    />
                   ) : authLoading || roleLoading ? null : (
                     <Landing
                       currentUserId={currentUserId}
@@ -345,6 +365,7 @@ function App() {
                   )
                 }
               />
+
               <Route
                 path="/base"
                 element={
@@ -356,6 +377,8 @@ function App() {
               />
 
               {/* Registered-user routes */}
+
+              {/* Home */}
               <Route
                 path="/home"
                 element={protectedPage((userId) => (
@@ -365,129 +388,184 @@ function App() {
                   />
                 ))}
               />
+
+              {/* Saved */}
               <Route
                 path="/saved"
-                element={protectedPage(() => <Saved />)}
+                element={protectedPage((userId) => (
+                  <Saved
+                    currentUserId={userId}
+                    onLogout={handleLogout}
+                  />
+                ))}
               />
+
+              {/* Recent searches intentionally supports visitors */}
               <Route
                 path="/recents"
                 element={
-                  authLoading ? null : (
+                  authLoading ? (
+                    <div className="min-h-screen grid place-items-center">
+                      <p className="text-sm text-gray-500">Loading...</p>
+                    </div>
+                  ) : (
                     <RecentSearches
                       key={currentUserId ?? "anonymous"}
                       currentUserId={currentUserId}
+                      onLogout={handleLogout}
                     />
                   )
                 }
               />
 
-        <Route
-          path="/contribution"
-          element={protectedPage((userId) => (
-            <Contribution
-              currentUserId={userId}
-              onLogout={handleLogout}
-            />
-          ))}
-        />
+              {/* Contribution */}
+              <Route
+                path="/contribution"
+                element={protectedPage((userId) => (
+                  <Contribution
+                    currentUserId={userId}
+                    onLogout={handleLogout}
+                  />
+                ))}
+              />
 
-        <Route
-          path="/profile"
-          element={protectedPage((userId) => (
-            <Profile
-              currentUserId={userId}
-              onLogout={handleLogout}
-            />
-          ))}
-        />
+              {/* Profile */}
+              <Route
+                path="/profile"
+                element={protectedPage((userId) => (
+                  <Profile
+                    currentUserId={userId}
+                    onLogout={handleLogout}
+                  />
+                ))}
+              />
 
-        <Route
-          path="/points-badges"
-          element={protectedPage(() => <PointsBadges />)}
-        />
+              {/* Points and badges */}
+              <Route
+                path="/points-badges"
+                element={protectedPage(() => (
+                  <PointsBadges />
+                ))}
+              />
 
-        <Route
-          path="/community"
-          element={
-            <Community
-              currentUserId={currentUserId}
-              onLogout={handleLogout}
-            />
-          }
-        />
+              {/* Community intentionally supports visitors */}
+              <Route
+                path="/community"
+                element={
+                  <Community
+                    currentUserId={currentUserId}
+                    onLogout={handleLogout}
+                  />
+                }
+              />
 
-        {/* Visitor routes */}
-        <Route
-          path="/auth/callback"
-          element={
-            <AuthCallback
-              authLoading={authLoading}
-              currentUserId={currentUserId}
-            />
-          }
-        />
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<SignUp />} />
-        <Route path="/otp" element={<OTP />} />
+              {/* Visitor routes */}
+              <Route
+                path="/auth/callback"
+                element={
+                  <AuthCallback
+                    authLoading={authLoading}
+                    currentUserId={currentUserId}
+                  />
+                }
+              />
 
-        <Route
-          path="/forgot-password"
-          element={<Forgotpassword />}
-        />
+              <Route path="/login" element={<Login />} />
+              <Route path="/signup" element={<SignUp />} />
+              <Route path="/otp" element={<OTP />} />
 
-        <Route path="/resetpassword" element={<Resetpassword />} />
-        <Route path="/reset-password" element={<Resetpassword />} />
-        <Route path="/reset-otp" element={<ResetOTP />} />
-        <Route
-          path="/terms-and-condition"
-          element={<TermsAndConditions />}
-        />
+              <Route
+                path="/forgot-password"
+                element={<Forgotpassword />}
+              />
 
-        <Route
-          path="/privacy-policy"
-          element={<PrivacyPolicy />}
-        />
+              <Route
+                path="/resetpassword"
+                element={<Resetpassword />}
+              />
+
+              <Route
+                path="/reset-password"
+                element={<Resetpassword />}
+              />
+
+              <Route
+                path="/reset-otp"
+                element={<ResetOTP />}
+              />
+
+              <Route
+                path="/terms-and-condition"
+                element={<TermsAndConditions />}
+              />
+
+              <Route
+                path="/privacy-policy"
+                element={<PrivacyPolicy />}
+              />
 
               {/* Admin routes require the admin role from user_roles */}
               <Route
                 path="/admin"
-                element={adminPage(() => <Navigate to="/admin/dashboard" replace />)}
+                element={adminPage(() => (
+                  <Navigate
+                    to="/admin/dashboard"
+                    replace
+                  />
+                ))}
               />
+
+              {/* Admin Base receives the authenticated admin ID and logout handler */}
               <Route
                 path="/admin/base"
-                element={adminPage(() => <AdminBase />)}
+                element={adminPage((userId) => (
+                  <AdminBase
+                    currentUserId={userId}
+                    onLogout={handleLogout}
+                  />
+                ))}
               />
+
               <Route
                 path="/admin/dashboard"
                 element={adminPage(() => <Dashboard />)}
               />
+
               <Route
                 path="/admin/routes"
                 element={adminPage(() => <RouteManagement />)}
               />
+
               <Route
                 path="/admin/post-management"
                 element={adminPage(() => <PostManagement />)}
               />
+
               <Route
                 path="/admin/reports"
                 element={adminPage(() => <Reports />)}
               />
+
               <Route
                 path="/admin/notifications"
                 element={adminPage(() => <Notifications />)}
               />
+
               <Route
                 path="/admin/users"
                 element={adminPage(() => <UserManagement />)}
               />
+
               <Route
                 path="/admin/settings"
                 element={adminPage(() => <Settings />)}
               />
 
               {/* Unknown routes */}
-              <Route path="*" element={<Navigate to="/" replace />} />
+              <Route
+                path="*"
+                element={<Navigate to="/" replace />}
+              />
             </Routes>
           </AccountProfileProvider>
         </SavedItemsProvider>

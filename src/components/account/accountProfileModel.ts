@@ -1,3 +1,4 @@
+
 import type { AccountData } from "@/lib/accountApi";
 
 export interface AccountProfileSnapshot {
@@ -61,15 +62,18 @@ export function getAccountInitials(
     account?.displayName?.trim() ||
     account?.username?.trim() ||
     account?.email.split("@")[0]?.trim();
+
   if (!name) return null;
 
   const parts = name.split(/\s+/).filter(Boolean);
+
   if (!parts.length) return null;
 
   const initials =
     parts.length > 1
       ? `${parts[0][0]}${parts[parts.length - 1][0]}`
       : parts[0].slice(0, 2);
+
   return initials.toUpperCase();
 }
 
@@ -102,32 +106,69 @@ export function loadAccountProfileOnce(
   loadAccount: (userId: string) => Promise<AccountData>,
 ): Promise<AccountProfileSnapshot> {
   const pending = pendingAccountProfileLoads.get(userId);
+
   if (pending) return pending;
 
   const request = loadAccountProfile(userId, loadAccount);
+
   pendingAccountProfileLoads.set(userId, request);
+
   void request.then(() => {
     if (pendingAccountProfileLoads.get(userId) === request) {
       pendingAccountProfileLoads.delete(userId);
     }
   });
+
   return request;
 }
 
 export function selectAccountAvatar(
   account: AccountData | null,
-  failedPhotoUrl: string | null,
+  failedPhotoUrls: readonly string[] = [],
 ): AccountAvatarView {
   const label = getAccountDisplayLabel(account) ?? "Profile";
-  const photoUrl = account?.profilePhotoUrl?.trim() || null;
 
-  if (photoUrl && photoUrl !== failedPhotoUrl) {
-    return { type: "photo", url: photoUrl, label };
+  const uploadedPhotoUrl = account?.profilePhotoUrl?.trim() || null;
+
+  if (
+    uploadedPhotoUrl &&
+    !failedPhotoUrls.includes(uploadedPhotoUrl)
+  ) {
+    return {
+      type: "photo",
+      url: uploadedPhotoUrl,
+      label,
+    };
+  }
+
+  const googlePhotoUrl =
+    account?.googleProfilePhotoUrl?.trim() || null;
+
+  if (
+    googlePhotoUrl &&
+    !failedPhotoUrls.includes(googlePhotoUrl)
+  ) {
+    return {
+      type: "photo",
+      url: googlePhotoUrl,
+      label,
+    };
   }
 
   const initials = getAccountInitials(account);
-  if (initials) return { type: "initials", initials, label };
-  return { type: "icon", label };
+
+  if (initials) {
+    return {
+      type: "initials",
+      initials,
+      label,
+    };
+  }
+
+  return {
+    type: "icon",
+    label,
+  };
 }
 
 export type AccountAvatarView =

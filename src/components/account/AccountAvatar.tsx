@@ -1,4 +1,5 @@
-import { useState } from "react";
+
+import { useEffect, useState } from "react";
 import { UserCircle } from "lucide-react";
 
 import type { AccountData } from "@/lib/accountApi";
@@ -15,8 +16,22 @@ export default function AccountAvatar({
   className,
   iconSize,
 }: AccountAvatarProps) {
-  const [failedPhotoUrl, setFailedPhotoUrl] = useState<string | null>(null);
-  const avatar = selectAccountAvatar(account, failedPhotoUrl);
+  const [failedPhotoUrls, setFailedPhotoUrls] = useState<string[]>([]);
+
+  const uploadedPhotoUrl = account?.profilePhotoUrl ?? null;
+  const googlePhotoUrl = account?.googleProfilePhotoUrl ?? null;
+
+  useEffect(() => {
+    setFailedPhotoUrls([]);
+  }, [uploadedPhotoUrl, googlePhotoUrl]);
+
+  const avatar = selectAccountAvatar(account, failedPhotoUrls);
+
+  function handlePhotoError(url: string) {
+    setFailedPhotoUrls((current) =>
+      current.includes(url) ? current : [...current, url],
+    );
+  }
 
   return (
     <span
@@ -29,10 +44,12 @@ export default function AccountAvatar({
           src={avatar.url}
           alt=""
           className="h-full w-full object-cover"
-          onError={() => setFailedPhotoUrl(avatar.url)}
+          onError={() => handlePhotoError(avatar.url)}
         />
       ) : avatar.type === "initials" ? (
-        <span className="text-sm font-semibold">{avatar.initials}</span>
+        <span className="text-sm font-semibold">
+          {avatar.initials}
+        </span>
       ) : (
         <UserCircle size={iconSize} strokeWidth={2} />
       )}

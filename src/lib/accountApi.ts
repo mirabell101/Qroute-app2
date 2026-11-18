@@ -1,3 +1,4 @@
+
 import { API_BASE_URL } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 
@@ -6,6 +7,7 @@ export interface AccountData {
   username: string | null;
   displayName: string | null;
   profilePhotoUrl: string | null;
+  googleProfilePhotoUrl: string | null;
 }
 
 const PROFILE_PHOTO_TYPES = new Set([
@@ -13,6 +15,7 @@ const PROFILE_PHOTO_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+
 const MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -23,26 +26,22 @@ function parseAccount(value: unknown): AccountData {
   if (
     !isRecord(value) ||
     typeof value.email !== "string" ||
-    !(
-      value.username === null ||
-      typeof value.username === "string"
-    ) ||
-    !(
-      value.displayName === null ||
-      typeof value.displayName === "string"
-    ) ||
-    !(
-      value.profilePhotoUrl === null ||
-      typeof value.profilePhotoUrl === "string"
-    )
+    !(value.username === null || typeof value.username === "string") ||
+    !(value.displayName === null || typeof value.displayName === "string") ||
+    !(value.profilePhotoUrl === null ||
+      typeof value.profilePhotoUrl === "string") ||
+    !(value.googleProfilePhotoUrl === null ||
+      typeof value.googleProfilePhotoUrl === "string")
   ) {
     throw new Error("Account service returned an invalid response.");
   }
+
   return {
     email: value.email,
     username: value.username,
     displayName: value.displayName,
     profilePhotoUrl: value.profilePhotoUrl,
+    googleProfilePhotoUrl: value.googleProfilePhotoUrl,
   };
 }
 
@@ -52,50 +51,67 @@ async function requestAccount(
   options: RequestInit = {},
 ): Promise<Record<string, unknown>> {
   const { data, error } = await supabase.auth.getSession();
+
   if (error) throw new Error(error.message);
+
   const session = data.session;
-  if (!session?.access_token) throw new Error("Please sign in to continue.");
+
+  if (!session?.access_token) {
+    throw new Error("Please sign in to continue.");
+  }
+
   if (session.user.id !== expectedUserId) {
     throw new Error("The active account changed. Please try again.");
   }
 
   const headers = new Headers(options.headers);
   headers.set("Authorization", `Bearer ${session.access_token}`);
+
   const response = await fetch(`${API_BASE_URL}/api/account${path}`, {
     ...options,
     headers,
   });
 
   let payload: unknown;
+
   try {
     payload = await response.json();
   } catch {
     if (!response.ok) {
       throw new Error(`Account request failed (HTTP ${response.status}).`);
     }
+
     throw new Error("Account service returned an invalid response.");
   }
+
   if (!response.ok) {
     const message =
       isRecord(payload) && typeof payload.message === "string"
         ? payload.message
         : `Account request failed (HTTP ${response.status}).`;
+
     throw new Error(message);
   }
+
   if (!isRecord(payload) || payload.success !== true) {
     throw new Error("Account service returned an invalid response.");
   }
+
   return payload;
 }
 
-function accountFromResponse(payload: Record<string, unknown>): AccountData {
+function accountFromResponse(
+  payload: Record<string, unknown>,
+): AccountData {
   return parseAccount(payload.account);
 }
 
 export async function getAccount(
   expectedUserId: string,
 ): Promise<AccountData> {
-  return accountFromResponse(await requestAccount("", expectedUserId));
+  return accountFromResponse(
+    await requestAccount("", expectedUserId),
+  );
 }
 
 export async function updateAccountUsername(
@@ -121,6 +137,7 @@ export async function updateAccountPassword(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ currentPassword, newPassword }),
   });
+
   if (typeof payload.message !== "string") {
     throw new Error("Account service returned an invalid response.");
   }
@@ -133,6 +150,7 @@ export async function uploadAccountPhoto(
   if (!PROFILE_PHOTO_TYPES.has(file.type)) {
     throw new Error("Please select a JPEG, PNG, or WebP image.");
   }
+
   if (file.size < 1 || file.size > MAX_PROFILE_PHOTO_BYTES) {
     throw new Error("Profile photos must be 5 MB or smaller.");
   }

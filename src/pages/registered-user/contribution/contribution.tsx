@@ -7,7 +7,6 @@ import {
   LocateFixed,
   MapPin,
   MessageSquare,
-  UserCircle,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -24,11 +23,16 @@ import {
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 
+import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
+
+import MapSidebar from "@/components/map-layout/MapSidebar";
+import MapHeader from "@/components/map-layout/MapHeader";
+import AccountAvatar from "@/components/account/AccountAvatar";
+import { useAccountProfile } from "@/components/account/accountProfileStore";
 
 import { getMapIcon } from "@/lib/mapIcons";
 import { attachMapImage, validateImage } from "@/lib/mapImages";
@@ -78,7 +82,7 @@ interface PhotoItem {
 interface RoutePoint {
   key: string;
   kind: PointKind;
-  existingId: number | null; // set when this is an already-approved point
+  existingId: number | null;
   name: string;
   description: string;
   stopType: StopKind;
@@ -187,7 +191,6 @@ function FlyTo({ position }: { position: Coordinates | null }) {
   return null;
 }
 
-// Fix the map size when it appears inside the modal.
 function InvalidateOnMount() {
   const map = useMap();
   useEffect(() => {
@@ -271,6 +274,7 @@ function PinMap({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+
       <InvalidateOnMount />
       <FlyTo position={focus ?? currentPosition} />
       <FitRouteLines
@@ -309,87 +313,88 @@ function PinMap({
 
       <Pane name="contributionPinPane" style={{ zIndex: 670 }} />
       <Pane name="selectedPointPane" style={{ zIndex: 680 }} />
+
       <Pane name="contributionMarkerPane" style={{ zIndex: 625 }}>
-      {mode !== "route" && pin && (
-        <Marker
-          position={pin}
-          draggable
-          pane="contributionPinPane"
-          eventHandlers={{
-            dragend: (event) => {
-              const { lat, lng } = (event.target as L.Marker).getLatLng();
-              onMovePin([lat, lng]);
-            },
-          }}
-        />
-      )}
-
-      {mode === "stop" &&
-        stopCandidates.map((point) => {
-          const key = pointKey(point.kind, point.id);
-          const selected = key === selectedStopReferenceKey;
-          return (
-            <CircleMarker
-              key={key}
-              pane={selected ? "selectedPointPane" : "contributionMarkerPane"}
-              center={[point.latitude, point.longitude]}
-              radius={selected ? 10 : 7}
-              bubblingMouseEvents={false}
-              pathOptions={{
-                color: "#ffffff",
-                weight: selected ? 3 : 2,
-                fillColor: selected ? "#f97316" : "#12395A",
-                fillOpacity: 0.9,
-              }}
-              eventHandlers={{ click: () => onPickStopReference(point) }}
-            >
-              <Tooltip>
-                {existingPointTypeLabel(point)}: {point.name}
-              </Tooltip>
-            </CircleMarker>
-          );
-        })}
-
-      {/* Existing approved points: tap one to add it to the route. */}
-      {mode === "route" &&
-        candidates.map((point) => {
-          const connected = connectedKeys.has(pointKey(point.kind, point.id));
-
-          return (
-            <CircleMarker
-              key={pointKey(point.kind, point.id)}
-              center={[point.latitude, point.longitude]}
-              radius={connected ? 9 : 7}
-              bubblingMouseEvents={false}
-              pathOptions={{
-                color: "#ffffff",
-                weight: 2,
-                fillColor: connected ? routeColor : "#6b7280",
-                fillOpacity: connected ? 0.95 : 0.7,
-              }}
-              eventHandlers={{ click: () => onPickExisting(point) }}
-            >
-              <Tooltip>{existingLabel(point)}</Tooltip>
-            </CircleMarker>
-          );
-        })}
-
-      {mode === "route" &&
-        routePoints.map((point, index) => (
+        {mode !== "route" && pin && (
           <Marker
-            key={point.key}
-            position={[point.latitude, point.longitude]}
-            icon={numberedIcon(index + 1, routeColor)}
-            draggable={point.existingId === null}
+            position={pin}
+            draggable
             pane="contributionPinPane"
             eventHandlers={{
               dragend: (event) => {
                 const { lat, lng } = (event.target as L.Marker).getLatLng();
-                onMoveRoutePoint(index, [lat, lng]);
+                onMovePin([lat, lng]);
               },
             }}
           />
-        ))}
+        )}
+
+        {mode === "stop" &&
+          stopCandidates.map((point) => {
+            const key = pointKey(point.kind, point.id);
+            const selected = key === selectedStopReferenceKey;
+
+            return (
+              <CircleMarker
+                key={key}
+                pane={selected ? "selectedPointPane" : "contributionMarkerPane"}
+                center={[point.latitude, point.longitude]}
+                radius={selected ? 10 : 7}
+                bubblingMouseEvents={false}
+                pathOptions={{
+                  color: "#ffffff",
+                  weight: selected ? 3 : 2,
+                  fillColor: selected ? "#f97316" : "#12395A",
+                  fillOpacity: 0.9,
+                }}
+                eventHandlers={{ click: () => onPickStopReference(point) }}
+              >
+                <Tooltip>
+                  {existingPointTypeLabel(point)}: {point.name}
+                </Tooltip>
+              </CircleMarker>
+            );
+          })}
+
+        {mode === "route" &&
+          candidates.map((point) => {
+            const connected = connectedKeys.has(pointKey(point.kind, point.id));
+
+            return (
+              <CircleMarker
+                key={pointKey(point.kind, point.id)}
+                center={[point.latitude, point.longitude]}
+                radius={connected ? 9 : 7}
+                bubblingMouseEvents={false}
+                pathOptions={{
+                  color: "#ffffff",
+                  weight: 2,
+                  fillColor: connected ? routeColor : "#6b7280",
+                  fillOpacity: connected ? 0.95 : 0.7,
+                }}
+                eventHandlers={{ click: () => onPickExisting(point) }}
+              >
+                <Tooltip>{existingLabel(point)}</Tooltip>
+              </CircleMarker>
+            );
+          })}
+
+        {mode === "route" &&
+          routePoints.map((point, index) => (
+            <Marker
+              key={point.key}
+              position={[point.latitude, point.longitude]}
+              icon={numberedIcon(index + 1, routeColor)}
+              draggable={point.existingId === null}
+              pane="contributionPinPane"
+              eventHandlers={{
+                dragend: (event) => {
+                  const { lat, lng } = (event.target as L.Marker).getLatLng();
+                  onMoveRoutePoint(index, [lat, lng]);
+                },
+              }}
+            />
+          ))}
       </Pane>
     </MapContainer>
   );
@@ -403,6 +408,10 @@ export default function Contribution({
   currentUserId,
   onLogout,
 }: ContributionProps) {
+  const { account, userId: profileUserId } = useAccountProfile();
+  const profileAccount =
+    profileUserId === currentUserId ? account : null;
+
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
@@ -445,22 +454,25 @@ export default function Contribution({
   const [locationMessage, setLocationMessage] = useState("");
   const autoPinned = useRef(false);
 
-  // The user's own submissions (the only place pending items are shown)
+  // The user's own submissions
   const [mine, setMine] = useState<MyContribution[]>([]);
   const [mineLoading, setMineLoading] = useState(true);
   const [mineError, setMineError] = useState("");
 
   const selectedType = types.find((item) => String(item.id) === vehicleTypeId);
+
   const typeVariants = variants.filter(
     (item) => String(item.transport_type_id) === vehicleTypeId
   );
+
   const selectedVariant = variants.find(
     (item) => String(item.id) === variantId
   );
+
   const isRail = selectedVariant?.fare_model === "matrix";
   const routeColor = safeColor(selectedType?.color);
 
-  // ---------- existing points: candidates + "connected to the last point" ----------
+  // ---------- existing points ----------
 
   const existingByKey = useMemo(
     () =>
@@ -478,8 +490,6 @@ export default function Contribution({
     [routePoints]
   );
 
-  // Only points of the chosen vehicle type (jeep and bus points are separate).
-  // Rail routes can only use train stations; skip points already in the route.
   const candidates = useMemo(
     () =>
       vehicleTypeId
@@ -495,9 +505,11 @@ export default function Contribution({
 
   const stopCandidates = useMemo(() => {
     if (!vehicleTypeId) return [];
+
     const isRailType = typeVariants.some(
       (variant) => variant.fare_model === "matrix"
     );
+
     return existingPoints.filter(
       (point) =>
         String(point.transportTypeId) === vehicleTypeId &&
@@ -508,14 +520,15 @@ export default function Contribution({
   }, [existingPoints, typeVariants, vehicleTypeId]);
 
   const lastPoint = routePoints[routePoints.length - 1];
+
   const lastExisting =
     lastPoint && lastPoint.existingId !== null
       ? existingByKey.get(pointKey(lastPoint.kind, lastPoint.existingId))
       : undefined;
 
-  // Points that share an approved route with the last point you added.
   const connectedKeys = useMemo(() => {
     if (!lastExisting) return new Set<string>();
+
     const routeIds = new Set(lastExisting.routeIds);
 
     return new Set(
@@ -528,22 +541,29 @@ export default function Contribution({
   const query = existingQuery.trim().toLowerCase();
   const matches = (p: ExistingPoint) =>
     !query || p.name.toLowerCase().includes(query);
+
   const isConnected = (p: ExistingPoint) =>
     connectedKeys.has(pointKey(p.kind, p.id));
 
-  const connectedList = candidates.filter((p) => isConnected(p) && matches(p));
+  const connectedList = candidates.filter(
+    (p) => isConnected(p) && matches(p)
+  );
+
   const otherTerminals = candidates.filter(
     (p) => p.kind === "terminal" && !isConnected(p) && matches(p)
   );
+
   const otherStops = candidates.filter(
     (p) => p.kind === "stop" && !isConnected(p) && matches(p)
   );
+
   const matchingStopCandidates = stopCandidates.filter(matches);
+
   const selectedStopReference = selectedStopReferenceKey
     ? existingByKey.get(selectedStopReferenceKey)
     : undefined;
 
-  // ---------- details of the selected point: routes through it ----------
+  // ---------- details of the selected point ----------
 
   const inspectPoint = inspectKey ? existingByKey.get(inspectKey) : undefined;
 
@@ -574,11 +594,15 @@ export default function Contribution({
 
   const stopReferenceRoutes = useMemo(() => {
     if (!selectedStopReferenceKey) return [];
+
     const routeIds = new Set(
       existingByKey.get(selectedStopReferenceKey)?.routeIds ?? []
     );
+
     return existingRoutes.filter(
-      (route) => routeIds.has(route.id) && route.keys.includes(selectedStopReferenceKey)
+      (route) =>
+        routeIds.has(route.id) &&
+        route.keys.includes(selectedStopReferenceKey)
     );
   }, [existingByKey, existingRoutes, selectedStopReferenceKey]);
 
@@ -600,7 +624,6 @@ export default function Contribution({
   const variantName = (variantIdValue: number) =>
     variants.find((v) => v.id === variantIdValue)?.name ?? "";
 
-  // Stops between the selected point and a target stop, in riding order.
   const segmentKeys = (
     route: ExistingRoute,
     anchor: string,
@@ -608,7 +631,9 @@ export default function Contribution({
   ): string[] => {
     const a = route.keys.indexOf(anchor);
     const b = route.keys.indexOf(target);
+
     if (a < 0 || b < 0 || a === b) return [];
+
     return a < b
       ? route.keys.slice(a + 1, b + 1)
       : route.keys.slice(b, a).reverse();
@@ -635,6 +660,7 @@ export default function Contribution({
 
   const loadCatalog = useCallback(async () => {
     setCatalogLoading(true);
+
     try {
       const catalog = await getTransitCatalog();
       setExistingPoints(catalog.points);
@@ -685,6 +711,7 @@ export default function Contribution({
 
   useEffect(() => {
     if (!notice) return;
+
     const timer = window.setTimeout(() => setNotice(""), 5000);
     return () => window.clearTimeout(timer);
   }, [notice]);
@@ -705,11 +732,11 @@ export default function Contribution({
           position.coords.latitude,
           position.coords.longitude,
         ];
+
         setCurrentPosition(next);
         setFocus(null);
         setLocationMessage("");
 
-        // Terminal/stop pins start at the user's position (they can drag it).
         if (!autoPinned.current) {
           autoPinned.current = true;
           setPin((existing) => existing ?? next);
@@ -763,7 +790,7 @@ export default function Contribution({
     resetForm();
     setShowModal(true);
     locate();
-    void loadCatalog(); // pick up anything approved since the page loaded
+    void loadCatalog();
   };
 
   const closeModal = () => {
@@ -772,7 +799,6 @@ export default function Contribution({
     resetForm();
   };
 
-  // Changing the vehicle drops existing points that belong to another type.
   const handleVehicleTypeChange = (value: string) => {
     setVehicleTypeId(value);
     setVariantId("");
@@ -799,7 +825,6 @@ export default function Contribution({
     });
   };
 
-  // Tap on empty map: a brand-new point (saved as pending).
   const handleMapPick = (position: Coordinates) => {
     if (kind !== "route") {
       setPin(position);
@@ -826,7 +851,6 @@ export default function Contribution({
     });
   };
 
-  // Several existing points at once (skips duplicates and rail mismatches).
   const addExistingKeys = (keys: string[]) => {
     setFormError("");
 
@@ -836,14 +860,23 @@ export default function Contribution({
           .filter((p) => p.existingId !== null)
           .map((p) => pointKey(p.kind, p.existingId as number))
       );
+
       const next = [...previous];
 
       for (const key of keys) {
         const point = existingByKey.get(key);
-        if (!point || used.has(key) || next.length >= MAX_ROUTE_POINTS) continue;
-        if (isRail && !(point.kind === "stop" && point.stopType === "train_station")) {
+
+        if (!point || used.has(key) || next.length >= MAX_ROUTE_POINTS) {
           continue;
         }
+
+        if (
+          isRail &&
+          !(point.kind === "stop" && point.stopType === "train_station")
+        ) {
+          continue;
+        }
+
         used.add(key);
         next.push(toRoutePoint(point));
       }
@@ -855,7 +888,6 @@ export default function Contribution({
     if (last) setFocus([last.latitude, last.longitude]);
   };
 
-  // Pick an existing approved point (dropdown or map dot) and show its routes.
   const addExistingPoint = (point: ExistingPoint) => {
     const key = pointKey(point.kind, point.id);
     addExistingKeys([key]);
@@ -883,7 +915,9 @@ export default function Contribution({
   const moveRoutePoint = (index: number, direction: -1 | 1) => {
     setRoutePoints((previous) => {
       const target = index + direction;
+
       if (target < 0 || target >= previous.length) return previous;
+
       const next = [...previous];
       [next[index], next[target]] = [next[target], next[index]];
       return next;
@@ -893,6 +927,7 @@ export default function Contribution({
   const removeRoutePoint = (index: number) => {
     const target = routePoints[index];
     if (target?.photo) URL.revokeObjectURL(target.photo.previewUrl);
+
     setRoutePoints((previous) => previous.filter((_, i) => i !== index));
   };
 
@@ -906,10 +941,12 @@ export default function Contribution({
 
     for (const file of files) {
       const problem = validateImage(file);
+
       if (problem) {
         setFormError(problem);
         continue;
       }
+
       accepted.push({ file, previewUrl: URL.createObjectURL(file) });
     }
 
@@ -927,7 +964,6 @@ export default function Contribution({
     });
   };
 
-  // One optional photo per route point (new or existing).
   const choosePointPhoto = (pointKeyValue: string) => {
     pointPhotoTarget.current = pointKeyValue;
     pointPhotoInputRef.current?.click();
@@ -943,6 +979,7 @@ export default function Contribution({
     if (!file || !target) return;
 
     const problem = validateImage(file);
+
     if (problem) {
       setFormError(problem);
       return;
@@ -953,7 +990,9 @@ export default function Contribution({
     setRoutePoints((previous) =>
       previous.map((point) => {
         if (point.key !== target) return point;
+
         if (point.photo) URL.revokeObjectURL(point.photo.previewUrl);
+
         return { ...point, photo: { file, previewUrl } };
       })
     );
@@ -963,6 +1002,7 @@ export default function Contribution({
     setRoutePoints((previous) =>
       previous.map((point) => {
         if (point.key !== pointKeyValue || !point.photo) return point;
+
         URL.revokeObjectURL(point.photo.previewUrl);
         return { ...point, photo: null };
       })
@@ -985,12 +1025,15 @@ export default function Contribution({
     }
 
     if (!variantId) return "Choose the variant of the vehicle.";
+
     if (routePoints.length < 2) {
       return "Add at least two points (start and end).";
     }
+
     if (routePoints.some((p) => p.existingId === null && !p.name.trim())) {
       return "Every new point needs a name.";
     }
+
     if (
       isRail &&
       routePoints.some(
@@ -1049,6 +1092,7 @@ export default function Contribution({
     setShowValidation(true);
 
     const problem = validate();
+
     if (problem) {
       setFormError(problem);
       return;
@@ -1057,7 +1101,6 @@ export default function Contribution({
     const input = buildInput();
     if (!input) return;
 
-    // Capture files before the form is reset.
     const pointFiles = routePoints.map((point) => point.photo?.file ?? null);
     const placeFiles = photos.map((photo) => photo.file);
 
@@ -1070,10 +1113,10 @@ export default function Contribution({
       let photoFailures = 0;
 
       if (input.kind === "route") {
-        // result.points is in the same order as the points that were sent.
         for (let i = 0; i < pointFiles.length; i += 1) {
           const file = pointFiles[i];
           const saved = result.points[i];
+
           if (!file || !saved) continue;
 
           const error = await attachMapImage(saved.kind, saved.id, file);
@@ -1086,6 +1129,7 @@ export default function Contribution({
             result.points[0].id,
             file
           );
+
           if (error) photoFailures += 1;
         }
       }
@@ -1093,6 +1137,7 @@ export default function Contribution({
       setShowModal(false);
       resetForm();
       void loadMine();
+
       setNotice(
         photoFailures > 0
           ? `Submitted for admin review, but ${photoFailures} photo(s) could not be uploaded.`
@@ -1137,125 +1182,95 @@ export default function Contribution({
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#f7f7f7]">
-      <aside className="absolute left-0 top-0 z-[2000] flex h-screen w-[220px] flex-col border-r border-white/10 bg-[#0f2a47] text-white sm:w-[230px] md:w-[240px] lg:w-[250px]">
-        <button
-          type="button"
-          onClick={() => {
-            window.location.href = "/home";
-          }}
-          title="Home"
-          className="absolute flex items-center justify-center rounded-lg transition-colors duration-200 hover:bg-white/10"
-          style={{ top: "30px", width: "100%", height: "75px" }}
-        >
+      {/* Shared sidebar */}
+      <MapSidebar
+        logo={
           <img
             src={qrouteWhiteLogo}
             alt="Qroute"
             className="max-h-full max-w-full object-contain"
           />
-        </button>
+        }
+        logoTitle="Home"
+        onLogoClick={() => {
+          window.location.href = "/home";
+        }}
+        items={navItems}
+        onItemClick={handleNavigation}
+      />
 
-        <nav className="absolute left-0 top-[145px] flex w-full flex-col gap-1.5 px-3">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = item.label === "Your Contribution";
+      {/* Shared header */}
+      <MapHeader>
+        <div className="flex w-[calc(100vw-330px)] min-h-[80px] items-start justify-between gap-6">
+          <div className="flex min-w-0 flex-col justify-center">
+            <h1 className="text-[26px] font-semibold tracking-[-0.4px] text-gray-900">
+              Your Contributions
+            </h1>
+            <p className="mt-1 max-w-[620px] text-[14px] text-gray-500">
+              Add terminals, stops and routes. An admin reviews each one before
+              it goes on the map.
+            </p>
+          </div>
 
-            return (
-              <button
-                key={item.label}
-                type="button"
-                onClick={() => handleNavigation(item.label)}
-                className={`group flex h-[46px] w-full items-center rounded-xl px-3 text-left transition-colors duration-200 ${
-                  isActive
-                    ? "bg-[#d9dee3] font-semibold text-[#0f2a47]"
-                    : "font-medium text-white hover:bg-[#d0d5db] hover:text-[#0f2a47]"
-                }`}
-              >
-                <span className="flex w-[28px] shrink-0 items-center justify-center">
-                  <Icon
-                    size={19}
-                    strokeWidth={1.8}
-                    className="transition-transform duration-200 group-hover:scale-110"
-                  />
-                </span>
-                <span
-                  className="ml-2 whitespace-nowrap"
-                  style={{ fontSize: "16px" }}
+          <div className="relative flex h-[55px] shrink-0 items-center gap-[20px]">
+            <button
+              type="button"
+              onClick={() => {
+                console.log("Notifications clicked", { currentUserId });
+              }}
+              title="Notifications"
+              className="group flex h-[45px] w-[45px] items-center justify-center rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)] transition-all duration-200 hover:scale-105 hover:bg-gray-100 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]"
+            >
+              <Bell
+                size={20}
+                strokeWidth={2}
+                className="transition-transform duration-200 group-hover:rotate-6"
+              />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowProfileMenu((previous) => !previous)}
+              title="Profile"
+              className="group flex h-[45px] w-[45px] items-center justify-center overflow-hidden rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)] transition-all duration-200 hover:scale-105 hover:bg-gray-100 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]"
+            >
+              <AccountAvatar
+                key={currentUserId}
+                account={profileAccount}
+                className="h-full w-full"
+                iconSize={21}
+              />
+            </button>
+
+            {showProfileMenu && (
+              <div className="absolute right-0 top-[58px] z-[4000] w-[150px] rounded-xl bg-white p-2 shadow-[0_4px_15px_rgba(0,0,0,0.18)]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    window.location.href = "/profile";
+                  }}
+                  className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
                 >
-                  {item.label}
-                </span>
-              </button>
-            );
-          })}
-        </nav>
-      </aside>
+                  Account
+                </button>
 
-      <header className="absolute left-[220px] right-0 top-0 z-[40] flex min-h-[130px] items-start justify-between bg-[#f7f7f7] px-[30px] pt-[35px] sm:left-[20px] md:left-[290px] lg:left-[300px]">
-        <div className="flex flex-col justify-center">
-          <h1 className="text-[26px] font-semibold tracking-[-0.4px] text-gray-900">
-            Your Contributions
-          </h1>
-          <p className="mt-1 text-[14px] text-gray-500">
-            Add terminals, stops and routes. An admin reviews each one before
-            it goes on the map.
-          </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    onLogout();
+                    window.location.href = "/";
+                  }}
+                  className="mt-1 w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                >
+                  Log Out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-
-        <div className="relative flex h-[55px] -translate-y-[5px] items-center gap-[20px]">
-          <button
-            type="button"
-            onClick={() => {
-              console.log("Notifications clicked", { currentUserId });
-            }}
-            title="Notifications"
-            className="group flex h-[45px] w-[45px] items-center justify-center rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)] transition-all duration-200 hover:scale-105 hover:bg-gray-100 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]"
-          >
-            <Bell
-              size={20}
-              strokeWidth={2}
-              className="transition-transform duration-200 group-hover:rotate-6"
-            />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowProfileMenu((previous) => !previous)}
-            title="Profile"
-            className="group flex h-[45px] w-[45px] items-center justify-center overflow-hidden rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)] transition-all duration-200 hover:scale-105 hover:bg-gray-100 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]"
-          >
-            <UserCircle
-              size={21}
-              strokeWidth={2}
-              className="transition-transform duration-200 group-hover:scale-105"
-            />
-          </button>
-
-          {showProfileMenu && (
-            <div className="absolute right-0 top-[58px] z-[4000] w-[150px] rounded-xl bg-white p-2 shadow-[0_4px_15px_rgba(0,0,0,0.18)]">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowProfileMenu(false);
-                  window.location.href = "/profile";
-                }}
-                className="w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-              >
-                Account
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowProfileMenu(false);
-                  onLogout();
-                  window.location.href = "/";
-                }}
-                className="mt-1 w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100"
-              >
-                Log Out
-              </button>
-            </div>
-          )}
-        </div>
-      </header>
+      </MapHeader>
 
       {/* ==================================================
           MY SUBMISSIONS
@@ -1273,6 +1288,7 @@ export default function Contribution({
             <div className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full bg-[#12395A] text-white transition-transform duration-200 group-hover:scale-105">
               <Plus size={21} strokeWidth={2.2} />
             </div>
+
             <div>
               <p className="text-[15px] font-semibold text-gray-900">
                 Add a contribution
@@ -1302,9 +1318,11 @@ export default function Contribution({
                 <div className="flex h-[58px] w-[58px] items-center justify-center rounded-full bg-[#f1f3f5]">
                   <Car size={27} strokeWidth={1.8} className="text-gray-400" />
                 </div>
+
                 <h2 className="mt-5 text-[17px] font-semibold text-gray-800">
                   Nothing to see here yet.
                 </h2>
+
                 <p className="mt-2 max-w-[380px] text-[13px] leading-[1.6] text-gray-500">
                   Your submitted contributions and their review statuses will
                   appear here.
@@ -1322,6 +1340,7 @@ export default function Contribution({
                     <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-[11px] font-semibold text-gray-700">
                       {kindLabel[item.kind]}
                     </span>
+
                     <p className="text-xs text-gray-500">
                       Submitted {formatDate(item.createdAt)}
                     </p>
@@ -1393,6 +1412,7 @@ export default function Contribution({
                   It stays hidden from everyone until an admin approves it.
                 </p>
               </div>
+
               <button
                 type="button"
                 aria-label="Close"
@@ -1418,6 +1438,7 @@ export default function Contribution({
                 <p className="mb-1.5 text-sm font-medium text-gray-700">
                   What are you adding?
                 </p>
+
                 <div className="grid grid-cols-3 gap-2">
                   {kindOptions.map((option) => (
                     <button
@@ -1436,6 +1457,7 @@ export default function Contribution({
                       <span className="block text-sm font-semibold">
                         {option.label}
                       </span>
+
                       <span
                         className={`mt-0.5 block text-[11px] leading-snug ${
                           kind === option.value
@@ -1450,7 +1472,7 @@ export default function Contribution({
                 </div>
               </div>
 
-              {/* Vehicle (every kind) + variant (routes) */}
+              {/* Vehicle + variant */}
               <div
                 className={`grid grid-cols-1 gap-3 ${
                   kind === "route" ? "sm:grid-cols-2" : ""
@@ -1463,6 +1485,7 @@ export default function Contribution({
                   >
                     Type of vehicle <span className="text-red-500">*</span>
                   </label>
+
                   <select
                     id="vehicle-type"
                     value={vehicleTypeId}
@@ -1474,15 +1497,20 @@ export default function Contribution({
                     <option value="" disabled>
                       Vehicle type
                     </option>
+
                     {types.map((type) => (
                       <option key={type.id} value={type.id}>
                         {type.name}
                       </option>
                     ))}
                   </select>
+
                   {optionsError && (
-                    <p className="mt-1 text-xs text-red-600">{optionsError}</p>
+                    <p className="mt-1 text-xs text-red-600">
+                      {optionsError}
+                    </p>
                   )}
+
                   {kind !== "route" && (
                     <p className="mt-1 text-xs text-gray-500">
                       Jeep and bus terminals and stops are kept separate.
@@ -1498,6 +1526,7 @@ export default function Contribution({
                     >
                       Variant <span className="text-red-500">*</span>
                     </label>
+
                     <select
                       id="route-variant"
                       value={variantId}
@@ -1512,6 +1541,7 @@ export default function Contribution({
                           ? "Choose a variant"
                           : "Pick a vehicle first"}
                       </option>
+
                       {typeVariants.map((variant) => (
                         <option key={variant.id} value={variant.id}>
                           {variant.name}
@@ -1535,6 +1565,7 @@ export default function Contribution({
                       : "Stop name"}{" "}
                   <span className="text-red-500">*</span>
                 </label>
+
                 <input
                   id="contribution-name"
                   value={name}
@@ -1559,6 +1590,7 @@ export default function Contribution({
                     >
                       Stop type
                     </label>
+
                     <select
                       id="stop-type"
                       value={stopType}
@@ -1579,6 +1611,7 @@ export default function Contribution({
                     >
                       Landmark / description
                     </label>
+
                     <input
                       id="stop-description"
                       value={description}
@@ -1599,6 +1632,7 @@ export default function Contribution({
                   >
                     Start from an existing terminal or stop
                   </label>
+
                   <input
                     id="existing-stop-reference"
                     aria-label="Search existing terminals and stops"
@@ -1608,6 +1642,7 @@ export default function Contribution({
                     placeholder="Search by name..."
                     className={`${fieldClass(false)} disabled:bg-gray-100`}
                   />
+
                   <div className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-lg border border-gray-200 bg-white p-1">
                     {!vehicleTypeId ? (
                       <p className="px-3 py-2 text-xs text-gray-500">
@@ -1633,6 +1668,7 @@ export default function Contribution({
                       matchingStopCandidates.map((point) => {
                         const key = pointKey(point.kind, point.id);
                         const selected = key === selectedStopReferenceKey;
+
                         return (
                           <button
                             key={key}
@@ -1653,8 +1689,10 @@ export default function Contribution({
                       })
                     )}
                   </div>
+
                   <p className="mt-1 text-xs text-gray-500">
-                    Selecting a point shows its routes for reference. It will not move the new-stop pin.
+                    Selecting a point shows its routes for reference. It will
+                    not move the new-stop pin.
                   </p>
                 </div>
               )}
@@ -1759,6 +1797,7 @@ export default function Contribution({
                       : "Pin the location"}{" "}
                     <span className="text-red-500">*</span>
                   </label>
+
                   <button
                     type="button"
                     onClick={locate}
@@ -1825,12 +1864,17 @@ export default function Contribution({
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-gray-900">
-                        {existingPointTypeLabel(selectedStopReference)}: {selectedStopReference.name}
+                        {existingPointTypeLabel(selectedStopReference)}:{" "}
+                        {selectedStopReference.name}
                       </p>
+
                       <p className="mt-1 text-xs text-gray-600">
-                        {selectedType?.name ?? "Transport type unavailable"} · {selectedStopReference.latitude.toFixed(5)}, {selectedStopReference.longitude.toFixed(5)}
+                        {selectedType?.name ?? "Transport type unavailable"} ·{" "}
+                        {selectedStopReference.latitude.toFixed(5)},{" "}
+                        {selectedStopReference.longitude.toFixed(5)}
                       </p>
                     </div>
+
                     <button
                       type="button"
                       aria-label="Clear selected reference point"
@@ -1854,6 +1898,7 @@ export default function Contribution({
                         const routeType = types.find(
                           (type) => type.id === route.transportTypeId
                         );
+
                         return (
                           <div
                             key={route.id}
@@ -1867,6 +1912,7 @@ export default function Contribution({
                                   backgroundColor: safeColor(routeType?.color),
                                 }}
                               />
+
                               <button
                                 type="button"
                                 aria-pressed={selectedPreviewRouteId === route.id}
@@ -1882,13 +1928,18 @@ export default function Contribution({
                                 {route.name}
                               </button>
                             </div>
+
                             <p className="ml-[18px] mt-0.5 text-xs text-gray-500">
-                              {routeType?.name ?? "Transport type unavailable"} · {variantName(route.variantId)} · {route.keys.length} points
+                              {routeType?.name ?? "Transport type unavailable"}{" "}
+                              · {variantName(route.variantId)} ·{" "}
+                              {route.keys.length} points
                             </p>
+
                             <ol className="ml-[18px] mt-2 space-y-1">
                               {route.keys.map((key, index) => {
                                 const point = existingByKey.get(key);
                                 if (!point) return null;
+
                                 return (
                                   <li
                                     key={key}
@@ -1901,8 +1952,10 @@ export default function Contribution({
                                     <span className="w-5 shrink-0 text-right text-gray-400">
                                       {index + 1}
                                     </span>
+
                                     <span className="truncate">
-                                      {existingPointTypeLabel(point)}: {point.name}
+                                      {existingPointTypeLabel(point)}:{" "}
+                                      {point.name}
                                     </span>
                                   </li>
                                 );
@@ -1924,11 +1977,13 @@ export default function Contribution({
                       <p className="text-sm font-semibold text-gray-900">
                         Routes through {existingLabel(inspectPoint)}
                       </p>
+
                       <p className="mt-0.5 text-xs text-gray-600">
                         Tap &ldquo;Add through here&rdquo; on the stop where you
                         got off. Every stop in between is added in order.
                       </p>
                     </div>
+
                     <button
                       type="button"
                       aria-label="Close route details"
@@ -1954,10 +2009,13 @@ export default function Contribution({
                         const anchorIndex = inspectKey
                           ? route.keys.indexOf(inspectKey)
                           : -1;
+
                         const firstKey = route.keys[0];
                         const lastKey = route.keys[route.keys.length - 1];
+
                         const firstName =
                           existingByKey.get(firstKey)?.name ?? "start";
+
                         const lastName =
                           existingByKey.get(lastKey)?.name ?? "end";
 
@@ -1980,6 +2038,7 @@ export default function Contribution({
                                 }`}
                               >
                                 {route.name}
+
                                 <span className="ml-2 text-xs font-normal text-gray-500">
                                   {variantName(route.variantId)} ·{" "}
                                   {route.keys.length} stops
@@ -1987,25 +2046,35 @@ export default function Contribution({
                               </button>
 
                               <div className="flex flex-wrap gap-1.5">
-                                {anchorIndex < route.keys.length - 1 && inspectKey && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      addExistingKeys(
-                                        segmentKeys(route, inspectKey, lastKey)
-                                      )
-                                    }
-                                    className="rounded-md border border-[#12395A] px-2 py-1 text-[11px] font-semibold text-[#12395A] hover:bg-[#12395A] hover:text-white"
-                                  >
-                                    Add all to {lastName}
-                                  </button>
-                                )}
+                                {anchorIndex < route.keys.length - 1 &&
+                                  inspectKey && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        addExistingKeys(
+                                          segmentKeys(
+                                            route,
+                                            inspectKey,
+                                            lastKey
+                                          )
+                                        )
+                                      }
+                                      className="rounded-md border border-[#12395A] px-2 py-1 text-[11px] font-semibold text-[#12395A] hover:bg-[#12395A] hover:text-white"
+                                    >
+                                      Add all to {lastName}
+                                    </button>
+                                  )}
+
                                 {anchorIndex > 0 && inspectKey && (
                                   <button
                                     type="button"
                                     onClick={() =>
                                       addExistingKeys(
-                                        segmentKeys(route, inspectKey, firstKey)
+                                        segmentKeys(
+                                          route,
+                                          inspectKey,
+                                          firstKey
+                                        )
                                       )
                                     }
                                     className="rounded-md border border-[#12395A] px-2 py-1 text-[11px] font-semibold text-[#12395A] hover:bg-[#12395A] hover:text-white"
@@ -2036,8 +2105,10 @@ export default function Contribution({
                                     <span className="w-5 shrink-0 text-right text-gray-400">
                                       {stopIndex + 1}
                                     </span>
+
                                     <span className="min-w-0 flex-1 truncate">
                                       {existingLabel(stop)}
+
                                       {stop.kind === "terminal" && (
                                         <span className="ml-1 text-gray-400">
                                           (Terminal)
@@ -2085,6 +2156,7 @@ export default function Contribution({
                   <p className="mb-1.5 text-sm font-medium text-gray-700">
                     Points ({routePoints.length})
                   </p>
+
                   <ol className="space-y-2">
                     {routePoints.map((point, index) => (
                       <li
@@ -2108,6 +2180,7 @@ export default function Contribution({
                                     ? "Station"
                                     : "Stop"}
                               </span>
+
                               <button
                                 type="button"
                                 title="Show the routes through this point"
@@ -2122,6 +2195,7 @@ export default function Contribution({
                                 className="min-w-0 flex-1 truncate text-left text-sm text-gray-800 hover:underline"
                               >
                                 {point.name}
+
                                 <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-800">
                                   Existing
                                 </span>
@@ -2179,6 +2253,7 @@ export default function Contribution({
                           >
                             <ImagePlus size={16} />
                           </button>
+
                           <button
                             type="button"
                             aria-label={`Move point ${index + 1} up`}
@@ -2188,6 +2263,7 @@ export default function Contribution({
                           >
                             ↑
                           </button>
+
                           <button
                             type="button"
                             aria-label={`Move point ${index + 1} down`}
@@ -2197,6 +2273,7 @@ export default function Contribution({
                           >
                             ↓
                           </button>
+
                           <button
                             type="button"
                             aria-label={`Remove point ${index + 1}`}
@@ -2214,9 +2291,11 @@ export default function Contribution({
                               alt={`Photo for point ${index + 1}`}
                               className="h-12 w-16 rounded-md border border-gray-200 object-cover"
                             />
+
                             <span className="min-w-0 flex-1 truncate text-xs text-gray-500">
                               {point.photo.file.name}
                             </span>
+
                             <button
                               type="button"
                               aria-label={`Remove photo from point ${index + 1}`}
@@ -2241,13 +2320,14 @@ export default function Contribution({
                 </div>
               )}
 
-              {/* Photos (terminal / stop) */}
+              {/* Photos */}
               {showPhotos && (
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
                     <label className="text-sm font-medium text-gray-700">
                       Photos (optional)
                     </label>
+
                     <span className="text-xs text-gray-500">
                       {photos.length}/{MAX_PHOTOS}
                     </span>
@@ -2264,6 +2344,7 @@ export default function Contribution({
                           alt={`Selected photo ${index + 1}`}
                           className="h-24 w-full object-cover"
                         />
+
                         <button
                           type="button"
                           aria-label={`Remove photo ${index + 1}`}
@@ -2282,9 +2363,11 @@ export default function Contribution({
                         className="flex min-h-[96px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 px-3 py-3 text-center transition-colors hover:border-[#12395A] hover:bg-gray-100"
                       >
                         <Plus size={22} className="mb-1 text-gray-500" />
+
                         <span className="text-sm font-medium text-gray-700">
                           Add photo
                         </span>
+
                         <span className="mt-0.5 text-xs text-gray-500">
                           JPG, PNG or WebP, up to 5 MB
                         </span>
@@ -2313,6 +2396,7 @@ export default function Contribution({
               >
                 Cancel
               </button>
+
               <button
                 type="button"
                 onClick={() => void handleSubmit()}
@@ -2330,6 +2414,7 @@ export default function Contribution({
         <div className="fixed bottom-5 right-5 z-[9000] max-w-sm rounded-xl bg-[#12395A] px-4 py-3 text-sm text-white shadow-xl">
           <div className="flex items-start gap-3">
             <p>{notice}</p>
+
             <button
               type="button"
               aria-label="Dismiss"
