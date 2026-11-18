@@ -7,6 +7,7 @@ import {
   createAdminRoute,
   deleteAdminPost,
   deleteAdminRoute,
+  getAdminCommunityPosts,
   getAdminReports,
   getAdminRoutes,
   getAdminSummary,
@@ -217,6 +218,15 @@ router.get("/users", async (_req: Request, res: Response) => {
     res.json({ success: true, users });
   } catch (error: unknown) {
     sendAdminError(res, error);
+  }
+});
+
+router.get("/posts", async (_req: Request, res: Response) => {
+  try {
+    const posts = await getAdminCommunityPosts(getSupabaseAdminClient());
+    res.json({ success: true, posts });
+  } catch (error: unknown) {
+    sendAdminError(res, error, "Unable to load community posts.");
   }
 });
 

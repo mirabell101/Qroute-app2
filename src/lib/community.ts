@@ -126,11 +126,14 @@ async function request<T>(path: string, options: RequestInit = {}, authenticated
   return payload as T;
 }
 
-export async function getCommunityPosts(): Promise<CommunityPost[]> {
+export async function getCommunityPosts(
+  scope: "feed" | "mine" = "feed",
+): Promise<CommunityPost[]> {
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   if (sessionError) throw new Error(sessionError.message);
 
   if (!sessionData.session) {
+    if (scope === "mine") throw new Error("Please sign in to view your posts.");
     const { data, error } = await supabase.rpc("get_public_community_data", {
       p_post_ids: null,
       p_include_posts: true,
@@ -140,7 +143,11 @@ export async function getCommunityPosts(): Promise<CommunityPost[]> {
     return ((data as PublicCommunityData | null)?.posts ?? []).map(toPublicCommunityPost);
   }
 
-  const result = await request<{ posts: CommunityPost[] }>("/posts", {}, true);
+  const result = await request<{ posts: CommunityPost[] }>(
+    `/posts?scope=${scope}`,
+    {},
+    true,
+  );
   return (result.posts ?? []).map(withPhotoUrls);
 }
 
@@ -254,17 +261,26 @@ export async function createCommunityPost(input: CommunityPostInput): Promise<Co
 
 export function withPhotoUrls(post: CommunityPost): CommunityPost {
   const photoPaths = normalizeCommunityPhotoPaths(post.photo_paths);
-  const buildUrl = post.is_hidden
-    ? (index: number) =>
-        `${API_BASE_URL}/api/admin/posts/${encodeURIComponent(post.id)}/photos/${index}`
-    : (index: number) => buildCommunityPhotoUrl(post.id, index);
-
   return {
     ...post,
     photo_paths: photoPaths,
     photos: photoPaths.map((path, index) => ({
       path,
-      url: buildUrl(index),
+      // The community photo endpoint validates the current user's access token
+      // when present, allowing an author to view their own hidden-post photos.
+      url: buildCommunityPhotoUrl(post.id, index),
+    })),
+  };
+}
+
+export function withAdminPhotoUrls(post: CommunityPost): CommunityPost {
+  const photoPaths = normalizeCommunityPhotoPaths(post.photo_paths);
+  return {
+    ...post,
+    photo_paths: photoPaths,
+    photos: photoPaths.map((path, index) => ({
+      path,
+      url: `${API_BASE_URL}/api/admin/posts/${encodeURIComponent(post.id)}/photos/${index}`,
     })),
   };
 }

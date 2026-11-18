@@ -1,5 +1,6 @@
 import { API_BASE_URL } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
+import type { CommunityPost } from "@/lib/community";
 
 export interface AdminRecentActivityItem {
   kind: "report" | "post";
@@ -371,6 +372,16 @@ export async function getAdminUsers(
 ): Promise<AdminUserRecord[]> {
   const payload = await requestAdmin("/users", expectedUserId);
   return parseAdminUsers(payload.users);
+}
+
+export async function getAdminCommunityPosts(
+  expectedUserId: string,
+): Promise<CommunityPost[]> {
+  const payload = await requestAdmin("/posts", expectedUserId);
+  if (!Array.isArray(payload.posts)) {
+    throw new Error("Admin service returned invalid community post data.");
+  }
+  return payload.posts as CommunityPost[];
 }
 
 export async function getAdminReports(

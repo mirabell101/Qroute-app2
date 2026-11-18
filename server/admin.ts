@@ -225,8 +225,7 @@ export async function getAdminSummary(
     recentActivity,
   };
 }
-
-export async function getAdminRoutes(
+  export async function getAdminRoutes(
   client: SupabaseClient,
 ): Promise<AdminRouteRecord[]> {
   const { data, error } = await client
@@ -435,6 +434,47 @@ export async function setCommunityPostVisibility(
   }
 }
 
+export async function getAdminCommunityPosts(client: SupabaseClient) {
+  const { data: posts, error: postsError } = await client
+    .from("community_posts")
+
+        .select(
+      "id, author_id, author_display_name, title, content, start_name, start_latitude, start_longitude, destination_name, destination_latitude, destination_longitude, transport_type_id, photo_paths, is_hidden, created_at, transport_types(name), community_post_comments(count)",
+    )
+    .order("created_at", { ascending: false })
+    .limit(500);
+
+  if (postsError) throw postsError;
+  const rows = posts ?? [];
+  if (!rows.length) return [];
+
+  const postIds = rows.map((post) => post.id);
+  const { data: votes, error: votesError } = await client
+    .from("community_post_votes")
+    .select("post_id, vote_type")
+    .in("post_id", postIds);
+  if (votesError) throw votesError;
+
+  const totals = new Map<string, { upvotes: number; downvotes: number }>();
+  for (const postId of postIds) totals.set(postId, { upvotes: 0, downvotes: 0 });
+  for (const vote of votes ?? []) {
+    const total = totals.get(vote.post_id);
+    if (!total) continue;
+    if (vote.vote_type === "upvote") total.upvotes += 1;
+    if (vote.vote_type === "downvote") total.downvotes += 1;
+  }
+
+  return rows.map((post) => ({
+    ...post,
+    transport_type: post.transport_types?.name ?? null,
+    comment_count: post.community_post_comments?.[0]?.count ?? 0,
+    upvotes: totals.get(post.id)?.upvotes ?? 0,
+    downvotes: totals.get(post.id)?.downvotes ?? 0,
+    transport_types: undefined,
+    community_post_comments: undefined,
+  }));
+}
+
 export async function deleteAdminPost(
   client: SupabaseClient,
   postId: string,
@@ -618,7 +658,8 @@ export async function createAdminRoute(
       .eq("id", route.id);
     if (cleanupError) {
       console.error(
-        "[admin] Route creation failed and the created route could not be removed:",
+
+              "[admin] Route creation failed and the created route could not be removed:",
         cleanupError.message,
       );
     }

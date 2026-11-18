@@ -81,6 +81,59 @@ const formatDate = (value: string) =>
     timeStyle: "short",
   });
 
+function CommunityPhoto({
+  src,
+  alt,
+  className,
+}: {
+  src: string;
+  alt: string;
+  className?: string;
+}) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let createdUrl: string | null = null;
+
+    const load = async () => {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      const headers = new Headers();
+      if (data.session?.access_token) {
+        headers.set("Authorization", `Bearer ${data.session.access_token}`);
+      }
+      const response = await fetch(src, { headers, cache: "no-store" });
+      if (!response.ok) throw new Error("Unable to load this community photo.");
+      const blob = await response.blob();
+      createdUrl = URL.createObjectURL(blob);
+      if (active) setObjectUrl(createdUrl);
+      else URL.revokeObjectURL(createdUrl);
+    };
+
+    void load().catch(() => {
+      if (active) setObjectUrl("");
+    });
+
+    return () => {
+      active = false;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [src]);
+
+  if (objectUrl === null) {
+    return <div aria-hidden="true" className={`${className ?? ""} animate-pulse bg-gray-100`} />;
+  }
+  if (!objectUrl) {
+    return <div role="img" aria-label="Photo unavailable" className={`${className ?? ""} flex items-center justify-center bg-gray-100 text-xs text-gray-500`}>Photo unavailable</div>;
+  }
+  return (
+    <a href={objectUrl} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border border-gray-200">
+      <img src={objectUrl} alt={alt} loading="lazy" className={className} />
+    </a>
+  );
+}
+
 export default function Community({
   currentUserId,
   onLogout,
@@ -179,8 +232,7 @@ export default function Community({
     });
     if (currentUserId) setVotesUserId(currentUserId);
   }, [currentUserId]);
-
-  const mergeCommunityComments = useCallback((postId: string, incoming: CommunityComment[]) => {
+    const mergeCommunityComments = useCallback((postId: string, incoming: CommunityComment[]) => {
     const seen = seenCommentIdsRef.current.get(postId) ?? new Set<string>();
     const pending = pendingCommentsRef.current.get(postId) ?? [];
     const existing = commentsRef.current[postId] ?? [];
@@ -237,7 +289,7 @@ export default function Community({
     setLoading(true);
     setError("");
     try {
-      const nextPosts = await getCommunityPosts();
+      const nextPosts = await getCommunityPosts(feedFilter === "My Posts" ? "mine" : "feed");
       setPosts(nextPosts);
       setSelectedPostId((current) =>
         current && nextPosts.some((post) => post.id === current)
@@ -253,21 +305,6 @@ export default function Community({
 
   useEffect(() => {
     let active = true;
-    void getCommunityPosts()
-      .then((nextPosts) => {
-        if (!active) return;
-        setPosts(nextPosts);
-        setSelectedPostId(nextPosts[0]?.id ?? null);
-      })
-      .catch((loadError: unknown) => {
-        if (active) setError(loadError instanceof Error ? loadError.message : "Unable to load community posts.");
-      })
-      .finally(() => {
-        if (active) {
-          setLoading(false);
-          setHasLoadedInitialPosts(true);
-        }
-      });
     void getTransitCatalog()
       .then((catalog) => { if (active) setLocations(catalog.points); })
       .catch(() => { if (active) setNotice("Transit point search is unavailable. You can still select locations on the map."); });
@@ -278,6 +315,37 @@ export default function Community({
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    const scope = feedFilter === "My Posts" ? "mine" : "feed";
+    void getCommunityPosts(scope)
+      .then((nextPosts) => {
+        if (!active) return;
+        setPosts(nextPosts);
+        setSelectedPostId((current) =>
+          current && nextPosts.some((post) => post.id === current)
+            ? current
+            : nextPosts[0]?.id ?? null,
+        );
+      })
+      .catch((loadError: unknown) => {
+        if (active) {
+          setPosts([]);
+          setSelectedPostId(null);
+          setError(loadError instanceof Error ? loadError.message : "Unable to load community posts.");
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+          setHasLoadedInitialPosts(true);
+        }
+      });
+    return () => { active = false; };
+  }, [feedFilter, currentUserId]);
 
   useEffect(() => {
     let active = true;
@@ -367,11 +435,11 @@ export default function Community({
       const openPostIds = Object.keys(commentsOpenRef.current)
         .filter((postId) => commentsOpenRef.current[postId]);
       const [freshPosts, ownVotes, freshComments] = await Promise.all([
-        getCommunityPosts(),
+        getCommunityPosts(feedFilter === "My Posts" ? "mine" : "feed"),
         getMyCommunityVotes(),
         getCommunityComments(openPostIds),
       ]);
-      if (!active) return;
+            if (!active) return;
 
       setPosts((previous) => freshPosts.map((freshPost) => {
         const previousPost = previous.find((post) => post.id === freshPost.id);
@@ -500,6 +568,7 @@ export default function Community({
     };
   }, [
     currentUserId,
+    feedFilter,
     canReceiveRealtime,
     communityAccessUserId,
     hasLoadedInitialPosts,
@@ -510,13 +579,8 @@ export default function Community({
     getVoteRevision,
   ]);
 
-  const visiblePosts = useMemo(
-    () =>
-      feedFilter === "My Posts"
-        ? posts.filter((post) => post.author_id === currentUserId)
-        : posts,
-    [feedFilter, posts, currentUserId],
-  );
+  // The API already applies the selected scope and visibility rules.
+  const visiblePosts = posts;
   const selectedPost = visiblePosts.find((post) => post.id === selectedPostId)
     ?? visiblePosts[0]
     ?? null;
@@ -574,8 +638,7 @@ export default function Community({
     setDestinationSearch("");
     setSelectedPhotos([]);
   };
-
-  const handlePhotoSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handlePhotoSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files ?? []);
     const remaining = MAX_PHOTOS - selectedPhotos.length;
     const nextFiles = selectedFiles.slice(0, remaining);
@@ -812,8 +875,7 @@ export default function Community({
             className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-sm outline-none focus:border-[#12395A]"
           />
         </label>
-        {query && (
-          <div className="absolute inset-x-3 top-[116px] z-[1000] max-h-44 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+        {query && (          <div className="absolute inset-x-3 top-[116px] z-[1000] max-h-44 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
             {results.length ? results.map((point) => (
               <button
                 type="button"
@@ -926,9 +988,12 @@ export default function Community({
                     {post.photos.length > 0 && (
                       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                         {post.photos.map((photo) => (
-                          <a key={photo.path} href={photo.url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-lg border border-gray-200">
-                            <img src={photo.url} alt={`Photo attached to ${post.title}`} loading="lazy" className="h-32 w-full object-cover" />
-                          </a>
+                          <CommunityPhoto
+                            key={photo.path}
+                            src={photo.url}
+                            alt={`Photo attached to ${post.title}`}
+                            className="h-32 w-full object-cover"
+                          />
                         ))}
                       </div>
                     )}
