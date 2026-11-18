@@ -31,7 +31,7 @@ import {
   LogOut,
 } from "lucide-react";
 
-export type ReportType = "Post" | "User" | "Route" | "General";
+export type ReportType = "Post" | "Comment" | "User";
 export type ReportStatus = "Pending" | "Reviewed" | "Dismissed";
 
 const navigationItems = [
@@ -461,7 +461,7 @@ export default function Reports() {
 
           {/* Report type filters */}
           <section className="mb-7 flex flex-wrap gap-2.5">
-            {["All", "Post", "User", "Route", "General"].map((type) => {
+            {["All", "Post", "Comment", "User"].map((type) => {
               const active = typeFilter === type;
 
               return (
@@ -689,7 +689,7 @@ export default function Reports() {
                     {selectedReport.reason}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    Report type: {selectedReport.type}
+                    Report target: {selectedReport.type}
                   </p>
                 </div>
               </div>
@@ -707,14 +707,14 @@ export default function Reports() {
                 <div className="rounded-xl bg-[#F4F8FC] p-4">
                   <p className="text-xs text-slate-500">Reported user</p>
                   <p className="mt-1 font-semibold text-[#102E4D]">
-                    @{selectedReport.reportedUser}
+                    {selectedReport.reportedUser}
                   </p>
                 </div>
 
                 <div className="rounded-xl bg-[#F4F8FC] p-4">
-                  <p className="text-xs text-slate-500">Reported by</p>
+                  <p className="text-xs text-slate-500">Reporter ID</p>
                   <p className="mt-1 font-semibold text-[#102E4D]">
-                    @{selectedReport.reporter}
+                    {selectedReport.reporter}
                   </p>
                 </div>
 

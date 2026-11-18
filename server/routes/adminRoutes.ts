@@ -90,8 +90,14 @@ function parseUuid(value: string): string | null {
 router.use(requireAuth, requireAdmin);
 
 router.get("/summary", async (_req: Request, res: Response) => {
+  const context = getVerifiedAdminContext(res);
+  if (!context) return;
+
   try {
-    const summary = await getAdminSummary(getSupabaseAdminClient());
+    const summary = await getAdminSummary(
+      getSupabaseAdminClient(),
+      getSupabaseClientForAccessToken(context.accessToken),
+    );
     res.json({ success: true, summary });
   } catch (error: unknown) {
     sendAdminError(res, error);
@@ -231,8 +237,13 @@ router.get("/posts", async (_req: Request, res: Response) => {
 });
 
 router.get("/reports", async (_req: Request, res: Response) => {
+  const context = getVerifiedAdminContext(res);
+  if (!context) return;
+
   try {
-    const reports = await getAdminReports(getSupabaseAdminClient());
+    const reports = await getAdminReports(
+      getSupabaseClientForAccessToken(context.accessToken),
+    );
     res.json({ success: true, reports });
   } catch (error: unknown) {
     sendAdminError(res, error);
@@ -240,9 +251,15 @@ router.get("/reports", async (_req: Request, res: Response) => {
 });
 
 router.patch("/reports/:id", async (req: Request, res: Response) => {
-  const id = Number(req.params.id);
-  const { status } = req.body;
-  if (!id || !["Pending", "Reviewed", "Dismissed"].includes(status)) {
+  const id = parseRouteId(req.params.id);
+  const status =
+    req.body && typeof req.body === "object"
+      ? (req.body as Record<string, unknown>).status
+      : undefined;
+  if (
+    !id ||
+    (status !== "Pending" && status !== "Reviewed" && status !== "Dismissed")
+  ) {
     res.status(400).json({
       success: false,
       message: "Valid report id and status are required.",
@@ -250,8 +267,15 @@ router.patch("/reports/:id", async (req: Request, res: Response) => {
     return;
   }
 
+  const context = getVerifiedAdminContext(res);
+  if (!context) return;
+
   try {
-    await updateAdminReportStatus(getSupabaseAdminClient(), id, status);
+    await updateAdminReportStatus(
+      getSupabaseClientForAccessToken(context.accessToken),
+      id,
+      status,
+    );
     res.json({ success: true });
   } catch (error: unknown) {
     sendAdminError(res, error);

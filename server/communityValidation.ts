@@ -1,3 +1,5 @@
+import { COMMUNITY_REPORT_REASONS } from "../src/lib/communityReport.ts";
+
 export interface CommunityPointInput {
   name: string;
   latitude: number;
@@ -13,9 +15,12 @@ export interface CommunityPostInput {
   photoPaths: string[];
 }
 
+export type CommunityReportTargetType = "post" | "comment" | "user";
+
 export interface CommunityReportInput {
-  reason: string;
-  description: string;
+  targetType: CommunityReportTargetType;
+  reason: (typeof COMMUNITY_REPORT_REASONS)[number];
+  description: string | null;
 }
 
 export function isCommunityPostId(value: string): boolean {
@@ -49,26 +54,44 @@ function parsePoint(value: unknown): CommunityPointInput | null {
 export function parseCommunityReportInput(
   value: unknown,
 ): ParseResult<CommunityReportInput> {
-  if (!value || typeof value !== "object") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { data: null, error: "Report details are required." };
   }
 
   const input = value as Record<string, unknown>;
+  const targetType = input.targetType;
   const reason = typeof input.reason === "string" ? input.reason.trim() : "";
+  const descriptionValue = input.description;
   const description =
-    typeof input.description === "string" ? input.description.trim() : "";
+    typeof descriptionValue === "string" ? descriptionValue.trim() : "";
 
-  if (!reason || reason.length > 120) {
-    return { data: null, error: "Reason must be between 1 and 120 characters." };
+  if (targetType !== "post" && targetType !== "comment" && targetType !== "user") {
+    return { data: null, error: "Select a valid report target." };
   }
-  if (!description || description.length > 2000) {
+  if (!COMMUNITY_REPORT_REASONS.some((option) => option === reason)) {
+    return { data: null, error: "Select a valid report reason." };
+  }
+  if (descriptionValue !== undefined && typeof descriptionValue !== "string") {
+    return { data: null, error: "Report details must be text." };
+  }
+  if (description.length > 2000) {
     return {
       data: null,
-      error: "Description must be between 1 and 2000 characters.",
+      error: "Report details must be 2000 characters or fewer.",
     };
   }
+  if (reason === "Other" && !description) {
+    return { data: null, error: "Please explain the other report reason." };
+  }
 
-  return { data: { reason, description }, error: null };
+  return {
+    data: {
+      targetType,
+      reason,
+      description: description || null,
+    },
+    error: null,
+  };
 }
 
 export function parseCommunityPostInput(value: unknown): ParseResult<CommunityPostInput> {

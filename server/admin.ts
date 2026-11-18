@@ -87,7 +87,11 @@ export interface AdminUserRecord {
 
 export interface AdminReportRecord {
   id: number;
-  type: "Post" | "User" | "Route" | "General";
+  type: "Post" | "Comment" | "User";
+  targetType: "post" | "comment" | "user";
+  postId: string | null;
+  commentId: string | null;
+  reportedUserId: string | null;
   reason: string;
   reportedContent: string;
   reporter: string;
@@ -99,6 +103,7 @@ export interface AdminReportRecord {
 
 export async function getAdminSummary(
   client: SupabaseClient,
+  reportClient: SupabaseClient,
 ): Promise<AdminSummary> {
   const [
     userRolesResult,
@@ -117,10 +122,12 @@ export async function getAdminSummary(
       .select("id", { count: "exact", head: true })
       .eq("is_deleted", false),
     client.from("community_posts").select("id", { count: "exact", head: true }),
-    client.from("reports").select("id", { count: "exact", head: true }),
-    client
-      .from("reports")
-      .select("id, type, reason, reported_content, created_at")
+    reportClient
+      .from("community_reports")
+      .select("id", { count: "exact", head: true }),
+    reportClient
+      .from("community_reports")
+      .select("id, target_type, reason, reported_content, created_at")
       .order("created_at", { ascending: false })
       .limit(recentActivityLimit),
     client
@@ -149,10 +156,8 @@ export async function getAdminSummary(
     registeredUserIds.add(row.user_id);
   }
 
-  // Report metrics are auxiliary: when the reports table cannot be read
-  // (for example, before its migration has been applied), the summary still
-  // returns the working core metrics with explicit nulls instead of
-  // fabricated zero totals.
+  // Report metrics are auxiliary: until community_reports is available to this
+  // Admin-scoped client, preserve core metrics with explicit nulls.
   let reports: number | null = null;
   if (reportsCountResult.error) {
     console.warn(
@@ -375,28 +380,69 @@ export async function getAdminReports(
   client: SupabaseClient,
 ): Promise<AdminReportRecord[]> {
   const { data, error } = await client
-    .from("reports")
-    .select("id, type, reason, reported_content, reporter, reported_user, status, description, created_at")
+    .from("community_reports")
+    .select(
+      "id, target_type, post_id, comment_id, reported_user_id, reported_user_name, reported_content, reporter_id, reason, status, description, created_at",
+    )
     .order("created_at", { ascending: false });
 
   if (error) throw error;
-  if (!Array.isArray(data)) return [];
+  if (!Array.isArray(data)) {
+    throw new Error("Admin reports returned an invalid database result.");
+  }
 
-  return data.map((row) => ({
-    id: Number(row.id),
-    type: row.type ?? "Post",
-    reason: row.reason ?? "",
-    reportedContent: row.reported_content ?? "",
-    reporter: row.reporter ?? "anonymous",
-    reportedUser: row.reported_user ?? "unknown",
-    date: new Date(row.created_at).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    }),
-    status: row.status ?? "Pending",
-    description: row.description ?? "",
-  }));
+  return data.map((row) => {
+    const type =
+      row.target_type === "post"
+        ? "Post"
+        : row.target_type === "comment"
+          ? "Comment"
+          : row.target_type === "user"
+            ? "User"
+            : null;
+    const id = Number(row.id);
+
+    if (
+      !type ||
+      !Number.isSafeInteger(id) ||
+      id < 1 ||
+      typeof row.reporter_id !== "string" ||
+      typeof row.reported_user_name !== "string" ||
+      typeof row.reported_content !== "string" ||
+      typeof row.reason !== "string" ||
+      (row.status !== "Pending" &&
+        row.status !== "Reviewed" &&
+        row.status !== "Dismissed") ||
+      typeof row.created_at !== "string" ||
+      (row.post_id !== null && typeof row.post_id !== "string") ||
+      (row.comment_id !== null && typeof row.comment_id !== "string") ||
+      (row.reported_user_id !== null &&
+        typeof row.reported_user_id !== "string") ||
+      (row.description !== null && typeof row.description !== "string")
+    ) {
+      throw new Error("Admin reports returned an invalid record.");
+    }
+
+    return {
+      id,
+      type,
+      targetType: row.target_type,
+      postId: row.post_id,
+      commentId: row.comment_id,
+      reportedUserId: row.reported_user_id,
+      reason: row.reason,
+      reportedContent: row.reported_content,
+      reporter: row.reporter_id,
+      reportedUser: row.reported_user_name,
+      date: new Date(row.created_at).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
+      status: row.status,
+      description: row.description ?? "",
+    };
+  });
 }
 
 export async function updateAdminReportStatus(
@@ -404,12 +450,15 @@ export async function updateAdminReportStatus(
   id: number,
   status: "Pending" | "Reviewed" | "Dismissed",
 ): Promise<void> {
-  const { error } = await client
-    .from("reports")
+  const { data: report, error } = await client
+    .from("community_reports")
     .update({ status, updated_at: new Date().toISOString() })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id")
+    .maybeSingle();
 
   if (error) throw error;
+  if (!report) throw new AdminNotFoundError("Community report not found.");
 }
 
 export async function setCommunityPostVisibility(

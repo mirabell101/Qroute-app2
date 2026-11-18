@@ -9,9 +9,15 @@ type QueryResult = {
 type AdminRouteStopInput = { kind: "terminal" | "stop"; id: number };
 
 type AdminServices = {
-  getAdminSummary: (client: never) => Promise<unknown>;
+  getAdminSummary: (client: never, reportClient: never) => Promise<unknown>;
   getAdminRoutes: (client: never) => Promise<unknown>;
   getAdminUsers: (client: never) => Promise<unknown>;
+  getAdminReports: (client: never) => Promise<unknown>;
+  updateAdminReportStatus: (
+    client: never,
+    reportId: number,
+    status: "Pending" | "Reviewed" | "Dismissed",
+  ) => Promise<unknown>;
   createAdminRoute: (
     client: never,
     input: {
@@ -177,15 +183,22 @@ describe("admin data services", () => {
           error: null,
         },
       ],
-      reports: [
+      community_reports: [
         { data: null, error: null, count: 3 },
         {
           data: [
             {
               id: 2,
-              type: "Post",
-              reason: "Spam report",
+              target_type: "post",
+              post_id: "post-1",
+              comment_id: null,
+              reported_user_id: "author-1",
+              reported_user_name: "Rider One",
+              reporter_id: "reporter-1",
+              reason: "Spam or misleading content",
               reported_content: "Repeated promotion",
+              description: null,
+              status: "Pending",
               created_at: "2026-11-02T10:00:00.000Z",
             },
           ],
@@ -195,7 +208,7 @@ describe("admin data services", () => {
     });
 
     const getAdminSummary = requireService(services?.getAdminSummary);
-    await expect(getAdminSummary(client as never)).resolves.toEqual({
+    await expect(getAdminSummary(client as never, client as never)).resolves.toEqual({
       registeredUsers: 2,
       routes: 17,
       communityPosts: 29,
@@ -203,7 +216,7 @@ describe("admin data services", () => {
       recentActivity: [
         {
           kind: "report",
-          title: "Spam report",
+          title: "Spam or misleading content",
           detail: "Repeated promotion",
           occurredAt: "2026-11-02T10:00:00.000Z",
         },
@@ -238,18 +251,18 @@ describe("admin data services", () => {
             error: null,
           },
         ],
-        reports: [
+        community_reports: [
           {
             data: null,
-            error: { message: "reports table unavailable" },
+            error: { message: "community_reports table unavailable" },
             count: null,
           },
-          { data: null, error: { message: "reports table unavailable" } },
+            { data: null, error: { message: "community_reports table unavailable" } },
         ],
       });
 
       const getAdminSummary = requireService(services?.getAdminSummary);
-      await expect(getAdminSummary(client as never)).resolves.toEqual({
+        await expect(getAdminSummary(client as never, client as never)).resolves.toEqual({
         registeredUsers: 1,
         routes: 5,
         communityPosts: 9,
@@ -384,14 +397,75 @@ describe("admin data services", () => {
         { data: null, error: null, count: 0 },
         { data: [], error: null },
       ],
-      reports: [
+      community_reports: [
         { data: null, error: null, count: 0 },
         { data: [], error: null },
       ],
     });
 
     const getAdminSummary = requireService(services?.getAdminSummary);
-    await expect(getAdminSummary(client as never)).rejects.toThrow("roles unavailable");
+    await expect(getAdminSummary(client as never, client as never)).rejects.toThrow("roles unavailable");
+  });
+
+  it("maps community report target identity and snapshots for Admin moderation", async () => {
+    const { client, from } = createClient({
+      community_reports: [{
+        data: [{
+          id: 7,
+          target_type: "comment",
+          post_id: "post-1",
+          comment_id: "comment-1",
+          reported_user_id: "author-1",
+          reported_user_name: "Comment Author",
+          reported_content: "Reported comment",
+          reporter_id: "reporter-1",
+          reason: "Harassment or bullying",
+          description: "Repeated targeting.",
+          status: "Pending",
+          created_at: "2026-11-02T10:00:00.000Z",
+        }],
+        error: null,
+      }],
+    });
+
+    const getAdminReports = requireService(services?.getAdminReports);
+    await expect(getAdminReports(client as never)).resolves.toEqual([{
+      id: 7,
+      type: "Comment",
+      targetType: "comment",
+      postId: "post-1",
+      commentId: "comment-1",
+      reportedUserId: "author-1",
+      reason: "Harassment or bullying",
+      reportedContent: "Reported comment",
+      reporter: "reporter-1",
+      reportedUser: "Comment Author",
+      date: "Nov 2, 2026",
+      status: "Pending",
+      description: "Repeated targeting.",
+    }]);
+    expect(from).toHaveBeenCalledWith("community_reports");
+  });
+
+  it("updates report status in community_reports", async () => {
+    const { client, from, writeCalls } = createClient({
+      community_reports: [{ data: { id: 7 }, error: null }],
+    });
+
+    const updateAdminReportStatus = requireService(
+      services?.updateAdminReportStatus,
+    );
+    await expect(
+      updateAdminReportStatus(client as never, 7, "Reviewed"),
+    ).resolves.toBeUndefined();
+    expect(from).toHaveBeenCalledWith("community_reports");
+    expect(writeCalls).toEqual([
+      expect.objectContaining({
+        table: "community_reports",
+        kind: "update",
+        payload: expect.objectContaining({ status: "Reviewed" }),
+      }),
+    ]);
   });
 
   it("rejects auth and profile failures instead of returning partial users", async () => {

@@ -7,6 +7,7 @@ import {
   getSupabaseAdminClient,
 } from "../supabaseClient.ts";
 import {
+  type CommunityReportInput,
   parseCommunityCommentInput,
   parseCommunityReportInput,
   isCommunityPostId,
@@ -24,6 +25,84 @@ import {
 const router = Router();
 
 const communityPhotoBucket = "community-post-photos";
+
+interface CommunityReportSnapshot {
+  postId: string;
+  commentId: string | null;
+  authorId: string;
+  authorName: string;
+  content: string;
+}
+
+async function submitCommunityReport(
+  res: Response,
+  supabase: ReturnType<typeof getSupabaseClientForAccessToken>,
+  reporterId: string,
+  input: CommunityReportInput,
+  snapshot: CommunityReportSnapshot,
+) {
+  const authorName = snapshot.authorName;
+  if (snapshot.authorId === reporterId) {
+    res.status(400).json({
+      success: false,
+      message: "You cannot report your own content or account.",
+    });
+    return;
+  }
+  if (
+    !snapshot.authorId ||
+    !authorName.trim() ||
+    authorName.trim().length > 120 ||
+    !snapshot.content.trim() ||
+    snapshot.content.length > 5000
+  ) {
+    sendDatabaseError(res, {
+      message: "Community target returned incomplete report details.",
+    });
+    return;
+  }
+
+  const { data: report, error } = await supabase
+    .from("community_reports")
+    .insert({
+      target_type: input.targetType,
+      post_id: snapshot.postId,
+      comment_id: snapshot.commentId,
+      reported_user_id: snapshot.authorId,
+      reported_user_name: authorName,
+      reported_content: snapshot.content,
+      reason: input.reason,
+      description: input.description,
+    })
+    .select("id")
+    .single();
+
+  if (error?.code === "23505") {
+    const targetLabel =
+      input.targetType === "user" ? "this user" :
+      input.targetType === "comment" ? "this comment" : "this post";
+    res.status(409).json({
+      success: false,
+      message: `You have already reported ${targetLabel}.`,
+    });
+    return;
+  }
+  if (error) {
+    sendDatabaseError(res, error);
+    return;
+  }
+  if (!report || !Number.isSafeInteger(report.id) || report.id < 1) {
+    sendDatabaseError(res, {
+      message: "Report insert returned an invalid report record.",
+    });
+    return;
+  }
+
+  res.status(201).json({
+    success: true,
+    report: { id: report.id },
+  });
+}
 
 const postFields =
   "id, author_id, author_display_name, title, content, start_name, start_latitude, start_longitude, destination_name, destination_latitude, destination_longitude, transport_type_id, photo_paths, is_hidden, created_at, transport_types(name), community_post_comments(count)";
@@ -445,10 +524,11 @@ router.get(
 
 /*
 |--------------------------------------------------------------------------
-| REPORT COMMUNITY POST
+| REPORT COMMUNITY POSTS, COMMENTS, AND AUTHORS
 |--------------------------------------------------------------------------
 |
-| Hidden posts cannot be reported through the regular user endpoint.
+| Targets are read through the registered user's RLS-scoped client and all
+| author/content fields are derived from those visible rows.
 |
 */
 
@@ -465,6 +545,7 @@ router.post(
       return;
     }
 
+    const user = res.locals.user as { id: string };
     const parsed = parseCommunityReportInput(req.body);
 
     if (parsed.error) {
@@ -474,16 +555,17 @@ router.post(
       });
       return;
     }
+    if (parsed.data.targetType !== "post" && parsed.data.targetType !== "user") {
+      res.status(400).json({
+        success: false,
+        message: "This target type is not valid for a Community post.",
+      });
+      return;
+    }
 
-    const user = res.locals.user as {
-      id: string;
-      email?: string | null;
-    };
-
-    const userSupabase =
-      res.locals.communitySupabase as ReturnType<
-        typeof getSupabaseClientForAccessToken
-      >;
+    const userSupabase = res.locals.communitySupabase as ReturnType<
+      typeof getSupabaseClientForAccessToken
+    >;
 
     try {
       const { data: post, error: postError } =
@@ -518,6 +600,7 @@ router.post(
 
       if (
         typeof post.author_id !== "string" ||
+        typeof post.author_display_name !== "string" ||
         typeof post.content !== "string"
       ) {
         sendDatabaseError(res, {
@@ -527,53 +610,12 @@ router.post(
         return;
       }
 
-      const { data: report, error: reportError } =
-        await getSupabaseAdminClient()
-          .from("reports")
-          .insert({
-            type: "Post",
-            reason: parsed.data.reason,
-            reported_content: post.content,
-            description: parsed.data.description,
-            reporter: user.email?.trim() || user.id,
-            reported_user:
-              typeof post.author_display_name === "string" &&
-              post.author_display_name.trim()
-                ? post.author_display_name.trim()
-                : post.author_id,
-            status: "Pending",
-            community_post_id: req.params.postId,
-            reporter_user_id: user.id,
-          })
-          .select("id")
-          .single();
-
-      if (reportError?.code === "23505") {
-        res.status(409).json({
-          success: false,
-          message: "You have already reported this post.",
-        });
-        return;
-      }
-
-      if (reportError) {
-        sendDatabaseError(res, reportError);
-        return;
-      }
-
-      if (!report || typeof report.id !== "number") {
-        sendDatabaseError(res, {
-          message:
-            "Report insert returned an invalid report record.",
-        });
-        return;
-      }
-
-      res.status(201).json({
-        success: true,
-        report: {
-          id: report.id,
-        },
+      await submitCommunityReport(res, userSupabase, user.id, parsed.data, {
+        postId: req.params.postId,
+        commentId: null,
+        authorId: post.author_id,
+        authorName: post.author_display_name,
+        content: post.content,
       });
     } catch (error: unknown) {
       sendDatabaseError(res, {
@@ -584,6 +626,108 @@ router.post(
         ...(error &&
         typeof error === "object" &&
         "code" in error
+          ? { code: String(error.code) }
+          : {}),
+      });
+    }
+  },
+);
+
+router.post(
+  "/comments/:commentId/reports",
+  requireAuth,
+  requireRegisteredUser,
+  async (req: Request, res: Response) => {
+    if (!isCommunityPostId(req.params.commentId)) {
+      res.status(400).json({
+        success: false,
+        message: "Invalid comment ID.",
+      });
+      return;
+    }
+
+    const parsed = parseCommunityReportInput(req.body);
+    if (parsed.error) {
+      res.status(400).json({
+        success: false,
+        message: parsed.error,
+      });
+      return;
+    }
+    if (parsed.data.targetType !== "comment" && parsed.data.targetType !== "user") {
+      res.status(400).json({
+        success: false,
+        message: "This target type is not valid for a Community comment.",
+      });
+      return;
+    }
+
+    const user = res.locals.user as { id: string };
+    const userSupabase = res.locals.communitySupabase as ReturnType<
+      typeof getSupabaseClientForAccessToken
+    >;
+
+    try {
+      const { data: comment, error: commentError } = await userSupabase
+        .from("community_post_comments")
+        .select("id, post_id, author_id, author_display_name, content")
+        .eq("id", req.params.commentId)
+        .maybeSingle();
+
+      if (commentError) {
+        sendDatabaseError(res, commentError);
+        return;
+      }
+      if (!comment) {
+        res.status(404).json({
+          success: false,
+          message: "Comment not found.",
+        });
+        return;
+      }
+      if (
+        typeof comment.post_id !== "string" ||
+        typeof comment.author_id !== "string" ||
+        typeof comment.author_display_name !== "string" ||
+        typeof comment.content !== "string"
+      ) {
+        sendDatabaseError(res, {
+          message: "Community comment returned incomplete report details.",
+        });
+        return;
+      }
+
+      const { data: visiblePost, error: postError } = await userSupabase
+        .from("community_posts")
+        .select("id")
+        .eq("id", comment.post_id)
+        .eq("is_hidden", false)
+        .maybeSingle();
+
+      if (postError) {
+        sendDatabaseError(res, postError);
+        return;
+      }
+      if (!visiblePost) {
+        res.status(404).json({
+          success: false,
+          message: "Comment not found.",
+        });
+        return;
+      }
+
+      await submitCommunityReport(res, userSupabase, user.id, parsed.data, {
+        postId: comment.post_id,
+        commentId: req.params.commentId,
+        authorId: comment.author_id,
+        authorName: comment.author_display_name,
+        content: comment.content,
+      });
+    } catch (error: unknown) {
+      sendDatabaseError(res, {
+        message:
+          error instanceof Error ? error.message : "Unknown database error",
+        ...(error && typeof error === "object" && "code" in error
           ? { code: String(error.code) }
           : {}),
       });
@@ -720,7 +864,7 @@ router.get(
       const { data, error } = await supabase
         .from("community_post_comments")
         .select(
-          "id, post_id, author_display_name, content, created_at",
+          "id, post_id, author_id, author_display_name, content, created_at",
         )
         .in("post_id", postIds)
         .order("created_at", { ascending: true });

@@ -7,8 +7,25 @@ import {
   toPublicCommunityPost,
   type PublicCommunityPostData,
 } from "@/lib/communityPublicData";
+import {
+  validateCommunityReportDraft,
+  type CommunityReportReason,
+  type CommunityReportTarget,
+} from "@/lib/communityReport";
+
+export {
+  COMMUNITY_REPORT_REASONS,
+  validateCommunityReportDraft,
+} from "@/lib/communityReport";
+export type {
+  CommunityReportReason,
+  CommunityReportTarget,
+} from "@/lib/communityReport";
 
 const COMMUNITY_PHOTO_BUCKET = "community-post-photos";
+const PROFILE_PHOTO_BUCKET = "profile-photos";
+const PROFILE_PHOTO_PATH = "profile";
+const PROFILE_PHOTO_URL_TTL_SECONDS = 3600;
 
 export interface CommunityPoint {
   name: string;
@@ -204,6 +221,39 @@ export async function getCommunityComments(postIds: string[]): Promise<Community
   return result.comments ?? [];
 }
 
+export async function getCommunityProfilePhotoUrls(
+  expectedUserId: string,
+  authorIds: string[],
+): Promise<Record<string, string>> {
+  const { data: sessionData, error: sessionError } =
+    await supabase.auth.getSession();
+  if (sessionError) throw new Error(sessionError.message);
+  if (!sessionData.session || sessionData.session.user.id !== expectedUserId) {
+    throw new Error("Please sign in to continue.");
+  }
+
+  const userIds = [...new Set(
+    authorIds.map((authorId) => authorId.trim()).filter(Boolean),
+  )];
+  if (!userIds.length) return {};
+
+  const paths = userIds.map((userId) => `${userId}/${PROFILE_PHOTO_PATH}`);
+  const { data, error } = await supabase.storage
+    .from(PROFILE_PHOTO_BUCKET)
+    .createSignedUrls(paths, PROFILE_PHOTO_URL_TTL_SECONDS);
+  if (error) throw new Error(error.message);
+
+  const userIdByPath = new Map(
+    paths.map((path, index) => [path, userIds[index]!]),
+  );
+  const urls: Record<string, string> = {};
+  for (const item of data ?? []) {
+    const userId = item.path ? userIdByPath.get(item.path) : undefined;
+    if (userId && item.signedUrl) urls[userId] = item.signedUrl;
+  }
+  return urls;
+}
+
 export async function getMyCommunityVotes(): Promise<CommunityVote[]> {
   const result = await request<{ votes: CommunityVote[] }>("/votes/me", {}, true);
   return result.votes ?? [];
@@ -219,21 +269,31 @@ export async function getCommunityVoteStates(postIds: string[]): Promise<Communi
   return result.states ?? [];
 }
 
-export async function reportCommunityPost(
-  postId: string,
-  reason: string,
-  description: string,
+export async function reportCommunityTarget(
+  target: CommunityReportTarget,
+  reason: CommunityReportReason,
+  description = "",
 ): Promise<CommunityReportResult> {
+  const validationError = validateCommunityReportDraft(reason, description);
+  if (validationError) throw new Error(validationError);
+
+  const isComment = target.kind === "comment" || target.kind === "comment-author";
+  const targetType = target.kind === "post" || target.kind === "comment"
+    ? target.kind
+    : "user";
+  const targetId = isComment ? target.commentId : target.postId;
+  const targetPath = isComment ? "comments" : "posts";
   const result = await request<{
     success?: unknown;
     report?: { id?: unknown };
   }>(
-    `/posts/${encodeURIComponent(postId)}/reports`,
+    `/${targetPath}/${encodeURIComponent(targetId)}/reports`,
     {
       method: "POST",
       body: JSON.stringify({
-        reason: reason.trim(),
-        description: description.trim(),
+        targetType,
+        reason,
+        ...(description.trim() ? { description: description.trim() } : {}),
       }),
     },
     true,

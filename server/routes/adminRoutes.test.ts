@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   adminResults: {} as Record<string, QueryResult[]>,
   requestFrom: vi.fn(),
   requestInsert: vi.fn(),
+  requestUpdate: vi.fn(),
   requestResults: {} as Record<string, QueryResult[]>,
   storageFrom: vi.fn(),
   storageRemove: vi.fn(),
@@ -84,6 +85,7 @@ describe("admin API authorization", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mocks.requestResults = {};
     mocks.getUser.mockImplementation(async (token: string) => {
       const users: Record<string, { id: string }> = {
         "admin-token": { id: "admin-1" },
@@ -111,7 +113,7 @@ describe("admin API authorization", () => {
           }
           const result = mocks.requestResults[table]?.shift();
           if (!result) throw new Error(`Unexpected request query for ${table}.`);
-          return createQuery(result, mocks.requestInsert);
+          return createQuery(result, mocks.requestInsert, mocks.requestUpdate);
         },
       }),
     );
@@ -132,14 +134,14 @@ describe("admin API authorization", () => {
           error: null,
         },
       ],
-      reports: [
+      community_reports: [
         { data: null, error: null, count: 3 },
         {
           data: [
             {
               id: 1,
-              type: "Post",
-              reason: "Spam report",
+              target_type: "post",
+              reason: "Spam or misleading content",
               reported_content: "Repeated promotion",
               created_at: "2026-11-02T00:00:00.000Z",
             },
@@ -192,7 +194,7 @@ describe("admin API authorization", () => {
     );
   });
 
-  it.each(["summary", "routes", "users"])(
+  it.each(["summary", "routes", "users", "reports"])(
     "rejects unauthenticated access to %s",
     async (endpoint) => {
       const response = await fetch(`${baseUrl}/api/admin/${endpoint}`);
@@ -233,6 +235,7 @@ describe("admin API authorization", () => {
     ["PATCH", "/routes/12", { name: "Renamed" }],
     ["DELETE", "/routes/12", null],
     ["DELETE", "/posts/post-1", null],
+    ["PATCH", "/reports/7", { status: "Reviewed" }],
     [
       "PATCH",
       "/posts/20000000-0000-4000-8000-000000000001/visibility",
@@ -276,6 +279,19 @@ describe("admin API authorization", () => {
   );
 
   it("allows an admin to read actual summary totals", async () => {
+    mocks.requestResults.community_reports = [
+      { data: null, error: null, count: 3 },
+      {
+        data: [{
+          id: 1,
+          target_type: "post",
+          reason: "Spam or misleading content",
+          reported_content: "Repeated promotion",
+          created_at: "2026-11-02T00:00:00.000Z",
+        }],
+        error: null,
+      },
+    ];
     const response = await fetch(`${baseUrl}/api/admin/summary`, {
       headers: { Authorization: "Bearer admin-token" },
     });
@@ -291,7 +307,7 @@ describe("admin API authorization", () => {
         recentActivity: [
           {
             kind: "report",
-            title: "Spam report",
+            title: "Spam or misleading content",
             detail: "Repeated promotion",
             occurredAt: "2026-11-02T00:00:00.000Z",
           },
@@ -304,6 +320,77 @@ describe("admin API authorization", () => {
         ],
       },
     });
+    expect(mocks.requestFrom).toHaveBeenCalledWith("community_reports");
+    expect(mocks.getSupabaseAdminClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists Community reports through the verified Admin token", async () => {
+    mocks.requestResults.community_reports = [{
+      data: [{
+        id: 7,
+        target_type: "comment",
+        post_id: "post-1",
+        comment_id: "comment-1",
+        reported_user_id: "author-1",
+        reported_user_name: "Comment Author",
+        reported_content: "Reported comment",
+        reporter_id: "reporter-1",
+        reason: "Harassment or bullying",
+        description: null,
+        status: "Pending",
+        created_at: "2026-11-02T10:00:00.000Z",
+      }],
+      error: null,
+    }];
+
+    const response = await fetch(`${baseUrl}/api/admin/reports`, {
+      headers: { Authorization: "Bearer admin-token" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      reports: [{
+        type: "Comment",
+        targetType: "comment",
+        postId: "post-1",
+        commentId: "comment-1",
+        reporter: "reporter-1",
+        reportedUser: "Comment Author",
+      }],
+    });
+    expect(mocks.requestFrom).toHaveBeenCalledWith("community_reports");
+    expect(mocks.getSupabaseAdminClient).not.toHaveBeenCalled();
+  });
+
+  it("updates Community report status through the verified Admin token", async () => {
+    mocks.requestResults.community_reports = [{ data: { id: 7 }, error: null }];
+
+    const response = await fetch(`${baseUrl}/api/admin/reports/7`, {
+      method: "PATCH",
+      headers: {
+        Authorization: "Bearer admin-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ status: "Reviewed" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.requestFrom).toHaveBeenCalledWith("community_reports");
+    expect(mocks.requestUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "Reviewed" }),
+    );
+    expect(mocks.getSupabaseAdminClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects a status update without a request body", async () => {
+    const response = await fetch(`${baseUrl}/api/admin/reports/7`, {
+      method: "PATCH",
+      headers: { Authorization: "Bearer admin-token" },
+    });
+
+    expect(response.status).toBe(400);
+    expect(mocks.requestFrom).not.toHaveBeenCalledWith("community_reports");
   });
 
   it("returns an error when dashboard data cannot be loaded", async () => {

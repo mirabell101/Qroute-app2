@@ -211,6 +211,77 @@ describe("admin API client", () => {
     expect(mocks.fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("loads community report identities and snapshots with the verified Admin token", async () => {
+    const report = {
+      id: 7,
+      type: "Comment",
+      targetType: "comment",
+      postId: "post-1",
+      commentId: "comment-1",
+      reportedUserId: "author-1",
+      reason: "Harassment or bullying",
+      reportedContent: "Reported comment",
+      reporter: "reporter-1",
+      reportedUser: "Comment Author",
+      date: "Nov 2, 2026",
+      status: "Pending",
+      description: "",
+    };
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, reports: [report] }),
+    });
+
+    await expect(getAdminApi().getAdminReports("admin-1")).resolves.toEqual([
+      report,
+    ]);
+    const [url, options] = mocks.fetch.mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toMatch(/\/api\/admin\/reports$/);
+    expect(new Headers(options.headers).get("Authorization")).toBe(
+      "Bearer admin-token",
+    );
+  });
+
+  it("rejects malformed community report records", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        reports: [{ id: "not-an-id", type: "Legacy" }],
+      }),
+    });
+
+    await expect(getAdminApi().getAdminReports("admin-1")).rejects.toThrow(
+      "Admin service returned invalid reports data.",
+    );
+  });
+
+  it("updates a report with the verified Admin token", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true }),
+    });
+
+    await expect(
+      getAdminApi().updateAdminReportStatus("admin-1", 7, "Reviewed"),
+    ).resolves.toBeUndefined();
+    const [url, options] = mocks.fetch.mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toMatch(/\/api\/admin\/reports\/7$/);
+    expect(new Headers(options.headers).get("Authorization")).toBe(
+      "Bearer admin-token",
+    );
+    expect(JSON.parse(String(options.body))).toEqual({ status: "Reviewed" });
+  });
+
   it("preserves route stop order from the server", async () => {
     mocks.fetch.mockResolvedValue({
       ok: true,

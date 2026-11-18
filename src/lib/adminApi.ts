@@ -65,7 +65,11 @@ export interface AdminUserRecord {
 
 export interface AdminReportRecord {
   id: number;
-  type: "Post" | "User" | "Route" | "General";
+  type: "Post" | "Comment" | "User";
+  targetType: "post" | "comment" | "user";
+  postId: string | null;
+  commentId: string | null;
+  reportedUserId: string | null;
   reason: string;
   reportedContent: string;
   reporter: string;
@@ -206,6 +210,31 @@ function isNullableCount(value: unknown): value is number | null {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isAdminReportRecord(value: unknown): value is AdminReportRecord {
+  return (
+    isRecord(value) &&
+    isPositiveInteger(value.id) &&
+    (value.type === "Post" ||
+      value.type === "Comment" ||
+      value.type === "User") &&
+    (value.targetType === "post" ||
+      value.targetType === "comment" ||
+      value.targetType === "user") &&
+    isNullableString(value.postId) &&
+    isNullableString(value.commentId) &&
+    isNullableString(value.reportedUserId) &&
+    typeof value.reason === "string" &&
+    typeof value.reportedContent === "string" &&
+    typeof value.reporter === "string" &&
+    typeof value.reportedUser === "string" &&
+    typeof value.date === "string" &&
+    (value.status === "Pending" ||
+      value.status === "Reviewed" ||
+      value.status === "Dismissed") &&
+    typeof value.description === "string"
+  );
 }
 
 function isAdminNotificationRecord(value: unknown): value is AdminNotificationRecord {
@@ -388,10 +417,13 @@ export async function getAdminReports(
   expectedUserId: string,
 ): Promise<AdminReportRecord[]> {
   const payload = await requestAdmin("/reports", expectedUserId);
-  if (!Array.isArray(payload.reports)) {
+  if (
+    !Array.isArray(payload.reports) ||
+    !payload.reports.every(isAdminReportRecord)
+  ) {
     throw new Error("Admin service returned invalid reports data.");
   }
-  return payload.reports as AdminReportRecord[];
+  return payload.reports;
 }
 
 export async function updateAdminReportStatus(

@@ -26,12 +26,13 @@ import {
   getCommunityAccess,
   getCommunityComments,
   getCommunityPost,
+  getCommunityProfilePhotoUrls,
   getCommunityPosts,
   getMyCommunityVotes,
   getCommunityVoteStates,
   removeCommunityVote,
   removeCommunityPostPhotos,
-  reportCommunityPost,
+  reportCommunityTarget,
   setCommunityVote,
   uploadCommunityPostPhotos,
 } from "@/lib/community";
@@ -45,8 +46,13 @@ import type {
   CommunityComment,
   CommunityPoint,
   CommunityPost,
+  CommunityReportTarget,
   CommunityVoteType,
 } from "@/lib/community";
+import {
+  COMMUNITY_REPORT_REASONS,
+  validateCommunityReportDraft,
+} from "@/lib/communityReport";
 import {
   getTransitCatalog,
   getTransportOptions,
@@ -134,6 +140,26 @@ function CommunityPhoto({
   );
 }
 
+function CommunityAuthorAvatar({ photoUrl }: { photoUrl?: string | null }) {
+  const [failedPhotoUrl, setFailedPhotoUrl] = useState<string | null>(null);
+  const fallback = (
+    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e8eef3] text-[#12395A]">
+      <UserCircle size={22} />
+    </span>
+  );
+
+  if (!photoUrl || failedPhotoUrl === photoUrl) return fallback;
+  return (
+    <img
+      src={photoUrl}
+      alt=""
+      aria-hidden="true"
+      onError={() => setFailedPhotoUrl(photoUrl)}
+      className="h-10 w-10 shrink-0 rounded-full object-cover"
+    />
+  );
+}
+
 export default function Community({
   currentUserId,
   onLogout,
@@ -143,6 +169,10 @@ export default function Community({
   const profileAccount = profileUserId === currentUserId ? account : null;
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const postsRef = useRef(posts);
+  const [communityPhotos, setCommunityPhotos] = useState<{
+    userId: string | null;
+    urls: Record<string, string | null>;
+  }>({ userId: null, urls: {} });
   const [votes, setVotes] = useState<Record<string, CommunityVoteType>>({});
   const [votesUserId, setVotesUserId] = useState<string | null>(null);
   const [communityAccessUserId, setCommunityAccessUserId] = useState<string | null>(null);
@@ -166,7 +196,7 @@ export default function Community({
   const [profileMenu, setProfileMenu] = useState(false);
   const [showCreatePost, setShowCreatePost] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [reportTarget, setReportTarget] = useState<CommunityPost | null>(null);
+  const [reportTarget, setReportTarget] = useState<CommunityReportTarget | null>(null);
   const [reportReason, setReportReason] = useState("");
   const [reportDetails, setReportDetails] = useState("");
   const [reportSubmitting, setReportSubmitting] = useState(false);
@@ -191,6 +221,16 @@ export default function Community({
   const isRegisteredUser = Boolean(
     currentUserId && currentUserId === communityAccessUserId && hasRegisteredRole,
   );
+  const communityAuthorIds = useMemo(() => [...new Set([
+    ...posts.map((post) => post.author_id),
+    ...Object.values(comments).flat().map((comment) => comment.author_id),
+  ].filter((authorId): authorId is string =>
+    typeof authorId === "string" && authorId.trim().length > 0,
+  ))].sort(), [posts, comments]);
+  const communityPhotoUrls =
+    isRegisteredUser && communityPhotos.userId === currentUserId
+      ? communityPhotos.urls
+      : {};
 
   const getVoteRevision = useCallback((postId: string) => voteRevisionRef.current.get(postId) ?? 0, []);
   const advanceVoteRevision = useCallback((postId: string) => {
@@ -369,6 +409,49 @@ export default function Community({
   }, [currentUserId]);
 
   useEffect(() => {
+    if (!currentUserId || !isRegisteredUser) return;
+
+    const existingUrls = communityPhotos.userId === currentUserId
+      ? communityPhotos.urls
+      : {};
+    const missingAuthorIds = communityAuthorIds.filter(
+      (authorId) => !Object.prototype.hasOwnProperty.call(existingUrls, authorId),
+    );
+    if (!missingAuthorIds.length) return;
+
+    let active = true;
+    void getCommunityProfilePhotoUrls(currentUserId, missingAuthorIds)
+      .then((urls) => {
+        if (!active) return;
+        setCommunityPhotos((previous) => {
+          const nextUrls = previous.userId === currentUserId
+            ? { ...previous.urls }
+            : {};
+          for (const authorId of missingAuthorIds) {
+            nextUrls[authorId] = urls[authorId] ?? null;
+          }
+          return { userId: currentUserId, urls: nextUrls };
+        });
+      })
+      .catch((photoError: unknown) => {
+        if (active) {
+          setError(
+            photoError instanceof Error
+              ? photoError.message
+              : "Unable to load Community profile pictures.",
+          );
+        }
+      });
+
+    return () => { active = false; };
+  }, [
+    currentUserId,
+    isRegisteredUser,
+    communityAuthorIds,
+    communityPhotos,
+  ]);
+
+  useEffect(() => {
     let active = true;
     if (!currentUserId) {
       return;
@@ -526,6 +609,20 @@ export default function Community({
           content: payload.content,
           created_at: payload.created_at,
         });
+        if (commentsOpenRef.current[payload.post_id]) {
+          void getCommunityComments([payload.post_id])
+            .then((freshComments) => {
+              if (active) mergeCommunityComments(payload.post_id, freshComments);
+            })
+            .catch((refreshError: unknown) => {
+              if (active) {
+                console.warn(
+                  "Could not refresh Community comment authors:",
+                  refreshError,
+                );
+              }
+            });
+        }
       });
 
     const handleChannelStatus = (status: string) => {
@@ -789,16 +886,16 @@ export default function Community({
     }
   };
 
-  const openReportDialog = (post: CommunityPost) => {
+  const openReportDialog = (target: CommunityReportTarget) => {
     if (!currentUserId || !isRegisteredUser) {
       if (currentUserId) {
-        setError("A registered-user account is required to report a post.");
+        setError("A registered-user account is required to submit a report.");
         return;
       }
       promptLogin();
       return;
     }
-    setReportTarget(post);
+    setReportTarget(target);
     setReportReason("");
     setReportDetails("");
     setReportError("");
@@ -814,17 +911,28 @@ export default function Community({
 
   const submitReport = async () => {
     if (!reportTarget || reportSubmitting || reportSuccess) return;
-    const reason = reportReason.trim();
+    const reason = COMMUNITY_REPORT_REASONS.find(
+      (option) => option === reportReason.trim(),
+    );
     const details = reportDetails.trim();
-    if (!reason || !details) {
-      setReportError("Enter a reason and a short description of the problem.");
+    if (!reason) {
+      setReportError("Select a valid report reason.");
+      return;
+    }
+    const validationError = validateCommunityReportDraft(reason, details);
+    if (validationError) {
+      setReportError(validationError);
       return;
     }
 
     setReportSubmitting(true);
     setReportError("");
     try {
-      await reportCommunityPost(reportTarget.id, reason, details);
+      await reportCommunityTarget(
+        reportTarget,
+        reason,
+        details,
+      );
       setReportSuccess("Report submitted. Thank you for helping keep the community safe.");
       setError("");
       setNotice("Your report was submitted successfully.");
@@ -972,7 +1080,7 @@ export default function Community({
                   <article key={post.id} className={`rounded-xl border bg-white p-4 shadow-sm ${selectedPost?.id === post.id ? "border-[#12395A] ring-1 ring-[#12395A]/15" : "border-gray-200"}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-3">
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e8eef3] text-[#12395A]"><UserCircle size={22} /></span>
+                        <CommunityAuthorAvatar photoUrl={communityPhotoUrls[post.author_id ?? ""]} />
                         <div className="min-w-0"><p className="truncate text-sm font-semibold">{post.author_display_name}</p><p className="text-xs text-gray-500">{formatDate(post.created_at)}</p></div>
                       </div>
                       <button type="button" onClick={() => setSelectedPostId(post.id)} className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold text-[#12395A] hover:bg-blue-50">View map</button>
@@ -1018,14 +1126,17 @@ export default function Community({
                       <button type="button" onClick={() => void reactToPost(post, "downvote")} aria-pressed={currentUserId === votesUserId && votes[post.id] === "downvote"} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm ${currentUserId === votesUserId && votes[post.id] === "downvote" ? "bg-red-50 text-red-700" : "text-gray-600 hover:bg-gray-100"}`}><ThumbsDown size={16} />{post.downvotes}</button>
                       <button type="button" onClick={() => void toggleComments(post.id)} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 hover:bg-gray-100"><MessageSquare size={16} />{post.comment_count} Comments</button>
                       {isRegisteredUser && (
-                        <button type="button" onClick={() => openReportDialog(post)} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 hover:bg-gray-100"><Flag size={16} />Report</button>
+                        <>
+                          <button type="button" onClick={() => openReportDialog({ kind: "post", postId: post.id })} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 hover:bg-gray-100"><Flag size={16} />Report post</button>
+                          <button type="button" onClick={() => openReportDialog({ kind: "post-author", postId: post.id })} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 hover:bg-gray-100"><Flag size={16} />Report author</button>
+                        </>
                       )}
                     </div>
 
                     {commentsOpen[post.id] && (
                       <div className="mt-2 space-y-2 border-t border-gray-100 pt-3">
                         {commentsLoading[post.id] && <p role="status" className="text-sm text-gray-500">Loading comments…</p>}
-                        {(comments[post.id] ?? []).map((comment) => <div key={comment.id} className="rounded-lg bg-gray-50 px-3 py-2"><div className="flex justify-between gap-3"><strong className="text-xs">{comment.author_display_name}</strong><time className="text-[11px] text-gray-500">{formatDate(comment.created_at)}</time></div><p className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-700">{comment.content}</p></div>)}
+                        {(comments[post.id] ?? []).map((comment) => <div key={comment.id} className="rounded-lg bg-gray-50 px-3 py-2"><div className="flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2"><CommunityAuthorAvatar photoUrl={communityPhotoUrls[comment.author_id ?? ""]} /><strong className="truncate text-xs">{comment.author_display_name}</strong></div><time className="shrink-0 text-[11px] text-gray-500">{formatDate(comment.created_at)}</time></div><p className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-700">{comment.content}</p>{isRegisteredUser && <div className="mt-1 flex gap-2"><button type="button" onClick={() => openReportDialog({ kind: "comment", commentId: comment.id })} className="inline-flex items-center gap-1 rounded px-1 py-1 text-xs text-gray-600 hover:bg-gray-100"><Flag size={13} />Report comment</button><button type="button" onClick={() => openReportDialog({ kind: "comment-author", commentId: comment.id })} className="inline-flex items-center gap-1 rounded px-1 py-1 text-xs text-gray-600 hover:bg-gray-100"><Flag size={13} />Report author</button></div>}</div>)}
                         {!commentsLoading[post.id] && (comments[post.id]?.length ?? 0) === 0 && <p className="text-sm text-gray-500">No comments yet.</p>}
                         {currentUserId && isRegisteredUser ? <div className="flex gap-2"><input maxLength={1000} value={commentDrafts[post.id] ?? ""} onChange={(event) => setCommentDrafts((previous) => ({ ...previous, [post.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") void submitComment(post.id); }} placeholder="Write a comment…" className="min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#12395A]" /><button type="button" onClick={() => void submitComment(post.id)} aria-label="Send comment" className="rounded-lg bg-[#12395A] px-3 text-white"><Send size={16} /></button></div> : <button type="button" onClick={currentUserId ? () => setError("A registered-user account is required to comment.") : promptLogin} className="text-sm font-medium text-[#12395A] underline">{currentUserId ? "Registered users can comment" : "Sign in to comment"}</button>}
                       </div>
@@ -1082,7 +1193,13 @@ export default function Community({
           <section role="dialog" aria-modal="true" aria-labelledby="community-report-title" className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 id="community-report-title" className="text-lg font-bold text-[#12395A]">Report this post</h2>
+                <h2 id="community-report-title" className="text-lg font-bold text-[#12395A]">
+                  {reportTarget.kind === "post"
+                    ? "Report this post"
+                    : reportTarget.kind === "comment"
+                      ? "Report this comment"
+                      : "Report this user"}
+                </h2>
                 <p className="mt-1 text-sm text-gray-500">Your report is sent to the QRoute admins for review.</p>
               </div>
               <button type="button" onClick={closeReportDialog} aria-label="Close report dialog" className="rounded-lg p-2 text-gray-500 hover:bg-gray-100"><X size={20} /></button>
@@ -1090,28 +1207,38 @@ export default function Community({
             <form className="mt-5 space-y-4" onSubmit={(event) => { event.preventDefault(); void submitReport(); }}>
               <label className="block text-sm font-medium text-gray-700">
                 Reason
-                <input
+                <select
                   autoFocus
-                  maxLength={120}
+                  required
                   value={reportReason}
-                  onChange={(event) => setReportReason(event.target.value)}
-                  placeholder="e.g. Spam or misleading information"
+                  onChange={(event) => {
+                    setReportReason(event.target.value);
+                    if (event.target.value !== "Other") setReportDetails("");
+                  }}
                   disabled={reportSubmitting || Boolean(reportSuccess)}
-                  className="mt-1 h-10 w-full rounded-lg border border-gray-200 px-3 outline-none focus:border-[#12395A] disabled:bg-gray-50"
-                />
+                  className="mt-1 h-10 w-full rounded-lg border border-gray-200 bg-white px-3 outline-none focus:border-[#12395A] disabled:bg-gray-50"
+                >
+                  <option value="">Select a reason</option>
+                  {COMMUNITY_REPORT_REASONS.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
               </label>
-              <label className="block text-sm font-medium text-gray-700">
-                Details
-                <textarea
-                  maxLength={2000}
-                  rows={5}
-                  value={reportDetails}
-                  onChange={(event) => setReportDetails(event.target.value)}
-                  placeholder="Tell the admins what is wrong with this post."
-                  disabled={reportSubmitting || Boolean(reportSuccess)}
-                  className="mt-1 w-full resize-y rounded-lg border border-gray-200 px-3 py-2 outline-none focus:border-[#12395A] disabled:bg-gray-50"
-                />
-              </label>
+              {reportReason === "Other" && (
+                <label className="block text-sm font-medium text-gray-700">
+                  Explanation (required)
+                  <textarea
+                    required
+                    maxLength={2000}
+                    rows={5}
+                    value={reportDetails}
+                    onChange={(event) => setReportDetails(event.target.value)}
+                    placeholder="Tell the admins why you are reporting this target."
+                    disabled={reportSubmitting || Boolean(reportSuccess)}
+                    className="mt-1 w-full resize-y rounded-lg border border-gray-200 px-3 py-2 outline-none focus:border-[#12395A] disabled:bg-gray-50"
+                  />
+                </label>
+              )}
               {reportError && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{reportError}</p>}
               {reportSuccess && <p role="status" className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">{reportSuccess}</p>}
               <div className="flex justify-end gap-2 border-t border-gray-100 pt-4">
