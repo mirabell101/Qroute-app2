@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
         "/api": {
           target:
             env.QROUTE_API_PROXY_TARGET ||
-            `http://127.0.0.1:${env.PORT || "3001"}`,
+            `http://127.0.0.1:${env.PORT || "3000"}`,
           changeOrigin: true,
           configure: (proxy) => {
             // The browser talks to Vite at its own origin; CORS applies only
