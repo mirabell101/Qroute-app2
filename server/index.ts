@@ -1,46 +1,61 @@
 
 import "dotenv/config";
-import authRoutes from './routes/authRoutes.ts';
-import accountRoutes from "./routes/accountRoutes.ts";
-import adminRoutes from "./routes/adminRoutes.ts";
-import communityRoutes from "./routes/communityRoutes.ts";
-import recentSearchesRoutes from "./routes/recentSearchesRoutes.ts";
+
 import express, {
   type Request,
   type Response,
   type NextFunction,
 } from "express";
 
+import authRoutes from "./routes/authRoutes.ts";
+import accountRoutes from "./routes/accountRoutes.ts";
+import adminRoutes from "./routes/adminRoutes.ts";
+import communityRoutes from "./routes/communityRoutes.ts";
+import recentSearchesRoutes from "./routes/recentSearchesRoutes.ts";
+
 import {
   getSupabaseClient,
   getSupabaseUrlSafe,
   isSupabaseConfigured,
 } from "./supabaseClient.ts";
+
 import { getAllowedOrigins } from "./origins.ts";
 
+// =====================================================
+// APPLICATION INITIALIZATION
+// =====================================================
+
 const app = express();
-const port = Number(process.env.PORT) || 3001;
-const host = process.env.QROUTE_SERVER_HOST || "0.0.0.0";
+
 const startedAt = Date.now();
 
 const allowedOrigins = getAllowedOrigins();
 
-const allowedMethods = new Set([
+const allowedMethods = [
   "GET",
   "POST",
   "PUT",
   "PATCH",
   "DELETE",
   "OPTIONS",
-]);
-const allowedHeaders = new Set(["content-type", "authorization"]);
+];
 
-// CORS must run before JSON parsing and routes so browser preflights can finish.
+const allowedHeaders = [
+  "Content-Type",
+  "Authorization",
+];
+
+// =====================================================
+// CORS CONFIGURATION
+// Must run before routes and JSON parsing.
+// =====================================================
+
 app.use((req, res, next) => {
   const origin = req.get("Origin");
 
   if (origin) {
     const normalizedOrigin = origin.replace(/\/$/, "");
+
     if (!allowedOrigins.has(normalizedOrigin)) {
       res.status(403).json({
         status: "error",
@@ -49,21 +64,36 @@ app.use((req, res, next) => {
       return;
     }
 
-    res.setHeader("Access-Control-Allow-Origin", normalizedOrigin);
+    res.setHeader(
+      "Access-Control-Allow-Origin",
+      normalizedOrigin
+    );
+
     res.vary("Origin");
   }
 
   if (req.method === "OPTIONS") {
-    const requestedMethod = req.get("Access-Control-Request-Method")?.toUpperCase();
-    const requestedHeaders = (req.get("Access-Control-Request-Headers") ?? "")
+    const requestedMethod = req
+      .get("Access-Control-Request-Method")
+      ?.toUpperCase();
+
+    const requestedHeaders = (
+      req.get("Access-Control-Request-Headers") ?? ""
+    )
       .split(",")
       .map((header) => header.trim().toLowerCase())
       .filter(Boolean);
 
+    const allowedHeadersLowercase = allowedHeaders.map(
+      (header) => header.toLowerCase()
+    );
+
     if (
       !requestedMethod ||
-      !allowedMethods.has(requestedMethod) ||
-      requestedHeaders.some((header) => !allowedHeaders.has(header))
+      !allowedMethods.includes(requestedMethod) ||
+      requestedHeaders.some(
+        (header) => !allowedHeadersLowercase.includes(header)
+      )
     ) {
       res.status(400).json({
         status: "error",
@@ -72,11 +102,20 @@ app.use((req, res, next) => {
       return;
     }
 
-    res.setHeader("Access-Control-Allow-Methods", [...allowedMethods].join(", "));
-    if (requestedHeaders.length) {
-      res.setHeader("Access-Control-Allow-Headers", requestedHeaders.join(", "));
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      allowedMethods.join(", ")
+    );
+
+    if (requestedHeaders.length > 0) {
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        requestedHeaders.join(", ")
+      );
     }
+
     res.setHeader("Access-Control-Max-Age", "600");
+
     res.status(204).end();
     return;
   }
@@ -84,23 +123,43 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+// =====================================================
+// BODY PARSING
+// =====================================================
+
+app.use(express.json({ limit: "1mb" }));
+
+// =====================================================
+// API ROUTES
+// =====================================================
+
 app.use("/api/auth", authRoutes);
 app.use("/api/account", accountRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/community", communityRoutes);
 app.use("/api/recent-searches", recentSearchesRoutes);
 
-// Express server health check
-app.get("/api/health", (_req: Request, res: Response) => {
-  res.status(200).json({
-    status: "ok",
-    uptime: Number(process.uptime().toFixed(2)),
-    startedAt: new Date(startedAt).toISOString(),
-  });
-});
+// =====================================================
+// GENERAL HEALTH CHECK
+// GET /api/health
+// =====================================================
 
-// Supabase Auth service connectivity check
+app.get(
+  "/api/health",
+  (_req: Request, res: Response) => {
+    res.status(200).json({
+      status: "ok",
+      uptime: Number(process.uptime().toFixed(2)),
+      startedAt: new Date(startedAt).toISOString(),
+    });
+  }
+);
+
+// =====================================================
+// SUPABASE AUTH HEALTH CHECK
+// GET /api/db/health
+// =====================================================
+
 app.get(
   "/api/db/health",
   async (_req: Request, res: Response) => {
@@ -110,11 +169,11 @@ app.get(
     if (!isSupabaseConfigured() || !url || !key) {
       res.status(503).json({
         status: "error",
-        database: "supabase",
+        service: "supabase-auth",
         configured: false,
         connected: false,
         message:
-          "Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in .env",
+          "Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in your environment variables.",
       });
       return;
     }
@@ -122,16 +181,17 @@ app.get(
     const started = Date.now();
 
     try {
-      // Verify that the Supabase client can be initialized.
       getSupabaseClient();
 
-      // Check whether Supabase Auth is reachable.
-      const response = await fetch(`${url}/auth/v1/health`, {
-        method: "GET",
-        headers: {
-          apikey: key,
-        },
-      });
+      const response = await fetch(
+        `${url}/auth/v1/health`,
+        {
+          method: "GET",
+          headers: {
+            apikey: key,
+          },
+        }
+      );
 
       if (!response.ok) {
         console.error(
@@ -157,22 +217,31 @@ app.get(
       });
     } catch (error: unknown) {
       const message =
-        error instanceof Error ? error.message : "Unknown error";
+        error instanceof Error
+          ? error.message
+          : "Unknown error";
 
-      console.error("[server] Supabase health check failed:", message);
+      console.error(
+        "[server] Supabase health check failed:",
+        message
+      );
 
       res.status(503).json({
         status: "error",
         service: "supabase-auth",
         configured: true,
         connected: false,
-        message: "Could not reach Supabase",
+        message: "Could not reach Supabase.",
       });
     }
   }
 );
 
-// Supabase roles table connectivity check
+// =====================================================
+// SUPABASE ROLES TABLE HEALTH CHECK
+// GET /api/db/roles
+// =====================================================
+
 app.get(
   "/api/db/roles",
   async (_req: Request, res: Response) => {
@@ -182,7 +251,7 @@ app.get(
         table: "roles",
         configured: false,
         connected: false,
-        message: "Supabase is not configured",
+        message: "Supabase is not configured.",
       });
       return;
     }
@@ -225,30 +294,71 @@ app.get(
       });
     } catch (error: unknown) {
       const message =
-        error instanceof Error ? error.message : "Unknown error";
+        error instanceof Error
+          ? error.message
+          : "Unknown error";
 
-      console.error("[server] Roles health check failed:", message);
+      console.error(
+        "[server] Roles health check failed:",
+        message
+      );
 
       res.status(503).json({
         status: "error",
         table: "roles",
         configured: true,
         connected: false,
-        message: "Could not query the roles table",
+        message: "Could not query the roles table.",
       });
     }
   }
 );
 
-// 404 handler
-app.use((_req: Request, res: Response) => {
-  res.status(404).json({
-    status: "error",
-    message: "Not found",
-  });
-});
+// =====================================================
+// API 404 HANDLER
+// =====================================================
 
-// Error handler
+app.use(
+  "/api",
+  (_req: Request, res: Response) => {
+    res.status(404).json({
+      status: "error",
+      message: "API endpoint not found.",
+    });
+  }
+);
+
+// =====================================================
+// JSON PARSING ERROR HANDLER
+// =====================================================
+
+app.use(
+  (
+    err: unknown,
+    _req: Request,
+    res: Response,
+    next: NextFunction
+  ) => {
+    if (
+      err instanceof SyntaxError &&
+      "status" in err &&
+      err.status === 400
+    ) {
+      res.status(400).json({
+        status: "error",
+        message: "Invalid JSON request body.",
+      });
+      return;
+    }
+
+    next(err);
+  }
+);
+
+// =====================================================
+// GLOBAL ERROR HANDLER
+// =====================================================
+
 app.use(
   (
     err: unknown,
@@ -256,19 +366,26 @@ app.use(
     res: Response,
     _next: NextFunction
   ) => {
-    void _next;
-    console.error("[server] Unhandled error:", err);
+    console.error(
+      "[server] Unhandled error:",
+      err
+    );
+
+    if (res.headersSent) {
+      return;
+    }
 
     res.status(500).json({
       status: "error",
-      message: "Internal server error",
+      message: "Internal server error.",
     });
   }
 );
 
-app.listen(port, host, () => {
-  console.log(`[server] listening on ${host}:${port}`);
-});
-
+// =====================================================
+// EXPORT EXPRESS APP
+// Vercel handles server startup in production.
+// server/dev.ts handles local startup.
+// =====================================================
 
 export default app;

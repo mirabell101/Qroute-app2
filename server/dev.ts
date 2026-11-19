@@ -1,11 +1,13 @@
 
-process.env.QROUTE_SERVER_HOST = "127.0.0.1";
+import "dotenv/config";
 
-const { default: app } = await import("./index.ts");
+import app from "./index.ts";
 
-const port = Number(process.env.PORT) || 3001;
-const host = process.env.QROUTE_SERVER_HOST || "127.0.0.1";
+const port = Number(process.env.PORT) || 3000;
+const host = "127.0.0.1";
 
 app.listen(port, host, () => {
-  console.log(`QRoute API server running at http://${host}:${port}`);
+  console.log(
+    `[server] listening on http://${host}:${port}`
+  );
 });
