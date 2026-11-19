@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Bell,
   Car,
+  EyeOff,
   Flag,
   Home as HomeIcon,
   ImagePlus,
@@ -272,7 +273,8 @@ export default function Community({
     });
     if (currentUserId) setVotesUserId(currentUserId);
   }, [currentUserId]);
-    const mergeCommunityComments = useCallback((postId: string, incoming: CommunityComment[]) => {
+
+  const mergeCommunityComments = useCallback((postId: string, incoming: CommunityComment[]) => {
     const seen = seenCommentIdsRef.current.get(postId) ?? new Set<string>();
     const pending = pendingCommentsRef.current.get(postId) ?? [];
     const existing = commentsRef.current[postId] ?? [];
@@ -522,7 +524,7 @@ export default function Community({
         getMyCommunityVotes(),
         getCommunityComments(openPostIds),
       ]);
-            if (!active) return;
+      if (!active) return;
 
       setPosts((previous) => freshPosts.map((freshPost) => {
         const previousPost = previous.find((post) => post.id === freshPost.id);
@@ -735,7 +737,8 @@ export default function Community({
     setDestinationSearch("");
     setSelectedPhotos([]);
   };
-    const handlePhotoSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+
+  const handlePhotoSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(event.target.files ?? []);
     const remaining = MAX_PHOTOS - selectedPhotos.length;
     const nextFiles = selectedFiles.slice(0, remaining);
@@ -983,7 +986,8 @@ export default function Community({
             className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-sm outline-none focus:border-[#12395A]"
           />
         </label>
-        {query && (          <div className="absolute inset-x-3 top-[116px] z-[1000] max-h-44 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+        {query && (
+          <div className="absolute inset-x-3 top-[116px] z-[1000] max-h-44 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
             {results.length ? results.map((point) => (
               <button
                 type="button"
@@ -1081,7 +1085,22 @@ export default function Community({
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-3">
                         <CommunityAuthorAvatar photoUrl={communityPhotoUrls[post.author_id ?? ""]} />
-                        <div className="min-w-0"><p className="truncate text-sm font-semibold">{post.author_display_name}</p><p className="text-xs text-gray-500">{formatDate(post.created_at)}</p></div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold">{post.author_display_name}</p>
+                          <p className="text-xs text-gray-500">{formatDate(post.created_at)}</p>
+
+                          {feedFilter === "My Posts" && post.is_hidden && (
+                            <div className="mt-2">
+                              <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700">
+                                <EyeOff size={14} />
+                                Hidden
+                              </span>
+                              <p className="mt-1 text-xs leading-relaxed text-red-600">
+                                This post is hidden from the public feed. Only you and authorized moderators can view it.
+                              </p>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <button type="button" onClick={() => setSelectedPostId(post.id)} className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold text-[#12395A] hover:bg-blue-50">View map</button>
                     </div>
