@@ -1,28 +1,36 @@
+
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import type { FormEvent } from "react";
 
 import { updateAccountDisplayName } from "@/lib/accountApi";
 
 interface DisplayNameGAuthProps {
   userId: string;
+  onComplete: (savedName: string) => void;
 }
 
 export default function DisplayNameGAuth({
   userId,
+  onComplete,
 }: DisplayNameGAuthProps) {
-  const navigate = useNavigate();
-
   const [displayName, setDisplayName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (
+    event: FormEvent<HTMLFormElement>,
+  ) => {
     event.preventDefault();
 
     const normalizedName = displayName.trim();
 
-    if (normalizedName.length < 2 || normalizedName.length > 50) {
-      setError("Display Name must be between 2 and 50 characters.");
+    if (
+      normalizedName.length < 2 ||
+      normalizedName.length > 50
+    ) {
+      setError(
+        "Display Name must be between 2 and 50 characters.",
+      );
       return;
     }
 
@@ -35,11 +43,19 @@ export default function DisplayNameGAuth({
         normalizedName,
       );
 
-      if (!savedName) {
-        throw new Error("Unable to verify the saved Display Name.");
+      if (
+        typeof savedName !== "string" ||
+        savedName.trim().length < 2 ||
+        savedName.trim().length > 50
+      ) {
+        throw new Error(
+          "Unable to verify the saved Display Name.",
+        );
       }
 
-      navigate("/home", { replace: true });
+      // Notify App.tsx that the stored Display Name
+      // has been successfully saved and verified.
+      onComplete(savedName.trim());
     } catch (err: unknown) {
       setError(
         err instanceof Error
@@ -62,7 +78,10 @@ export default function DisplayNameGAuth({
           Before continuing to QRoute, please provide your Display Name.
         </p>
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+        <form
+          onSubmit={handleSubmit}
+          className="mt-6 space-y-4"
+        >
           <div>
             <label
               htmlFor="displayName"
@@ -79,7 +98,9 @@ export default function DisplayNameGAuth({
               minLength={2}
               maxLength={50}
               value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
+              onChange={(event) =>
+                setDisplayName(event.target.value)
+              }
               disabled={loading}
               placeholder="Enter your Display Name"
               className="mt-1 w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
@@ -87,14 +108,21 @@ export default function DisplayNameGAuth({
           </div>
 
           {error && (
-            <p className="text-sm text-red-600" role="alert">
+            <p
+              className="text-sm text-red-600"
+              role="alert"
+            >
               {error}
             </p>
           )}
 
           <button
             type="submit"
-            disabled={loading || displayName.trim().length < 2}
+            disabled={
+              loading ||
+              displayName.trim().length < 2 ||
+              displayName.trim().length > 50
+            }
             className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? "Saving..." : "Save and Continue"}

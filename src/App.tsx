@@ -132,6 +132,11 @@ function App() {
   const [displayNameStatus, setDisplayNameStatus] =
     useState<DisplayNameStatus>("not_required");
 
+  // Allows the stored Display Name verification to be
+  // explicitly refreshed without changing the user ID.
+  const [displayNameRefreshVersion, setDisplayNameRefreshVersion] =
+    useState(0);
+
   const [roleState, setRoleState] = useState<{
     userId: string | null;
     loaded: boolean;
@@ -142,8 +147,6 @@ function App() {
     role: null,
   });
 
-  // A role is loading whenever the current user ID does not match
-  // the ID associated with the completed role lookup.
   const roleLoading =
     currentUserId !== null &&
     (!roleState.loaded ||
@@ -224,10 +227,23 @@ function App() {
           setIsGoogleUser(false);
           setDisplayNameStatus("not_required");
         } else {
+          const verifiedGoogleUser =
+            isGoogleAuthenticatedUser(user);
+
           setCurrentUserId(user.id);
-          setIsGoogleUser(
-            isGoogleAuthenticatedUser(user),
-          );
+          setIsGoogleUser(verifiedGoogleUser);
+
+          // Recheck the stored name on session validation,
+          // even when the user ID has not changed.
+          if (verifiedGoogleUser) {
+            setDisplayNameStatus("loading");
+
+            setDisplayNameRefreshVersion(
+              (previous) => previous + 1,
+            );
+          } else {
+            setDisplayNameStatus("not_required");
+          }
         }
 
         setAuthLoading(false);
@@ -269,23 +285,30 @@ function App() {
         // INITIAL_SESSION is verified by validateSession().
         if (event === "INITIAL_SESSION") return;
 
+        const authenticatedGoogleUser =
+          isGoogleAuthenticatedUser(
+            session?.user ?? null,
+          );
+
         setCurrentUserId(
           session?.user.id ?? null,
         );
 
-        setIsGoogleUser(
-          isGoogleAuthenticatedUser(
-            session?.user ?? null,
-          ),
-        );
+        setIsGoogleUser(authenticatedGoogleUser);
 
         setDisplayNameStatus(
           session
-            ? isGoogleAuthenticatedUser(session.user)
+            ? authenticatedGoogleUser
               ? "loading"
               : "not_required"
             : "not_required",
         );
+
+        if (session && authenticatedGoogleUser) {
+          setDisplayNameRefreshVersion(
+            (previous) => previous + 1,
+          );
+        }
 
         setAuthLoading(false);
       },
@@ -386,9 +409,9 @@ function App() {
   }, [currentUserId]);
 
   /**
-   * Verify the stored Display Name for Google-authenticated users.
+   * Verify the actual stored Display Name for Google users.
    *
-   * Only the actual stored profiles.display_name is considered.
+   * This never uses Google metadata as a substitute.
    */
   useEffect(() => {
     let active = true;
@@ -442,7 +465,29 @@ function App() {
     return () => {
       active = false;
     };
-  }, [currentUserId, isGoogleUser]);
+  }, [
+    currentUserId,
+    isGoogleUser,
+    displayNameRefreshVersion,
+  ]);
+
+  /**
+   * Explicitly refresh the stored Display Name status.
+   *
+   * This can be called after the completion page successfully
+   * saves the Display Name.
+   */
+  const refreshDisplayNameStatus = (): void => {
+    if (!currentUserId || !isGoogleUser) {
+      return;
+    }
+
+    setDisplayNameStatus("loading");
+
+    setDisplayNameRefreshVersion(
+      (previous) => previous + 1,
+    );
+  };
 
   /**
    * Sign out locally.
@@ -466,10 +511,7 @@ function App() {
   };
 
   /**
-   * Central protected-page guard.
-   *
-   * Google accounts without a stored Display Name cannot enter
-   * registered-user pages until the completion page is finished.
+   * Central registered-user page guard.
    */
   const protectedPage = (
     renderPage: (userId: string) => ReactNode,
@@ -508,8 +550,9 @@ function App() {
   };
 
   /**
-   * The Display Name page is protected by authentication and role.
-   * It is intentionally exempt from the normal Display Name guard.
+   * Display Name completion route.
+   *
+   * This route is exempt from the normal Display Name guard.
    */
   const displayNamePage = (): ReactNode => {
     if (authLoading || roleLoading) {
@@ -552,12 +595,16 @@ function App() {
     return (
       <DisplayNameGAuth
         userId={currentUserId}
+        onComplete={refreshDisplayNameStatus}
       />
     );
   };
 
   /**
-   * Administrative pages require the database role.
+   * Administrative page guard.
+   *
+   * Admins who authenticated through Google must also have
+   * a verified stored Display Name before entering admin pages.
    */
   const adminPage = (
     renderPage: (userId: string) => ReactNode,
@@ -572,6 +619,25 @@ function App() {
 
     if (currentUserRole !== "admin") {
       return <Navigate to="/home" replace />;
+    }
+
+    if (isGoogleUser) {
+      if (displayNameStatus === "loading") {
+        return null;
+      }
+
+      if (displayNameStatus === "error") {
+        return <DisplayNameVerificationError />;
+      }
+
+      if (displayNameStatus === "missing") {
+        return (
+          <Navigate
+            to="/register-user/display-name-gauth"
+            replace
+          />
+        );
+      }
     }
 
     return renderPage(currentUserId);
