@@ -18,8 +18,14 @@ const PROFILE_PHOTO_TYPES = new Set([
 
 const MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function isRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
 }
 
 function parseAccount(value: unknown): AccountData {
@@ -106,6 +112,73 @@ function accountFromResponse(
   return parseAccount(payload.account);
 }
 
+/**
+ * Retrieves the stored Display Name directly.
+ * This endpoint intentionally does not use Google metadata fallback.
+ */
+export async function getStoredAccountDisplayName(
+  expectedUserId: string,
+): Promise<string | null> {
+  const payload = await requestAccount(
+    "/display-name",
+    expectedUserId,
+  );
+
+  if (!("displayName" in payload)) {
+    throw new Error("Unable to verify your Display Name.");
+  }
+
+  const displayName = payload.displayName;
+
+  if (
+    displayName === null ||
+    (typeof displayName === "string" && !displayName.trim())
+  ) {
+    return null;
+  }
+
+  if (typeof displayName !== "string") {
+    throw new Error("Account service returned an invalid Display Name.");
+  }
+
+  return displayName.trim();
+}
+
+/**
+ * Saves the Display Name and validates the returned value.
+ */
+export async function updateAccountDisplayName(
+  expectedUserId: string,
+  displayName: string,
+): Promise<string> {
+  const normalizedName = displayName.trim();
+
+  const payload = await requestAccount(
+    "/display-name",
+    expectedUserId,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        displayName: normalizedName,
+      }),
+    },
+  );
+
+  if (
+    typeof payload.displayName !== "string" ||
+    !payload.displayName.trim()
+  ) {
+    throw new Error(
+      "The Display Name could not be verified after saving.",
+    );
+  }
+
+  return payload.displayName.trim();
+}
+
 export async function getAccount(
   expectedUserId: string,
 ): Promise<AccountData> {
@@ -121,7 +194,9 @@ export async function updateAccountUsername(
   return accountFromResponse(
     await requestAccount("", expectedUserId, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ username }),
     }),
   );
@@ -132,11 +207,20 @@ export async function updateAccountPassword(
   currentPassword: string,
   newPassword: string,
 ): Promise<void> {
-  const payload = await requestAccount("/password", expectedUserId, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ currentPassword, newPassword }),
-  });
+  const payload = await requestAccount(
+    "/password",
+    expectedUserId,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        currentPassword,
+        newPassword,
+      }),
+    },
+  );
 
   if (typeof payload.message !== "string") {
     throw new Error("Account service returned an invalid response.");
@@ -151,14 +235,19 @@ export async function uploadAccountPhoto(
     throw new Error("Please select a JPEG, PNG, or WebP image.");
   }
 
-  if (file.size < 1 || file.size > MAX_PROFILE_PHOTO_BYTES) {
+  if (
+    file.size < 1 ||
+    file.size > MAX_PROFILE_PHOTO_BYTES
+  ) {
     throw new Error("Profile photos must be 5 MB or smaller.");
   }
 
   return accountFromResponse(
     await requestAccount("/photo", expectedUserId, {
       method: "PUT",
-      headers: { "Content-Type": file.type },
+      headers: {
+        "Content-Type": file.type,
+      },
       body: file,
     }),
   );

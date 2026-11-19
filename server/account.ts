@@ -5,6 +5,9 @@ const PROFILE_PHOTO_BUCKET = "profile-photos";
 const PROFILE_PHOTO_PATH = "profile";
 const PROFILE_PHOTO_URL_TTL_SECONDS = 60 * 60;
 
+const MIN_DISPLAY_NAME_LENGTH = 2;
+const MAX_DISPLAY_NAME_LENGTH = 50;
+
 export interface AuthenticatedAccountUser {
   id: string;
   email: string;
@@ -69,6 +72,80 @@ function getGoogleProfilePhotoUrl(
   }
 }
 
+/**
+ * Retrieves the actual stored Display Name from profiles.
+ *
+ * This intentionally does not fall back to Google metadata.
+ * A missing, empty, or whitespace-only stored Display Name
+ * is considered incomplete.
+ */
+export async function getStoredAccountDisplayName(
+  client: SupabaseClient,
+  userId: string,
+): Promise<string | null> {
+  const { data, error } = await client
+    .from("profiles")
+    .select("display_name")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  if (
+    !data ||
+    typeof data.display_name !== "string" ||
+    !data.display_name.trim()
+  ) {
+    return null;
+  }
+
+  return data.display_name.trim();
+}
+
+/**
+ * Saves a Display Name to the authenticated user's profiles row
+ * and verifies the returned database value.
+ */
+export async function updateAccountDisplayName(
+  client: SupabaseClient,
+  userId: string,
+  displayName: string,
+): Promise<string> {
+  const normalizedDisplayName = displayName.trim();
+
+  if (
+    normalizedDisplayName.length < MIN_DISPLAY_NAME_LENGTH ||
+    normalizedDisplayName.length > MAX_DISPLAY_NAME_LENGTH
+  ) {
+    throw new AccountRequestError(
+      400,
+      `Display Name must be between ${MIN_DISPLAY_NAME_LENGTH} and ${MAX_DISPLAY_NAME_LENGTH} characters.`,
+    );
+  }
+
+  const { data, error } = await client
+    .from("profiles")
+    .update({ display_name: normalizedDisplayName })
+    .eq("id", userId)
+    .select("display_name")
+    .maybeSingle();
+
+  if (error) throw error;
+
+  if (
+    !data ||
+    typeof data.display_name !== "string" ||
+    !data.display_name.trim()
+  ) {
+    throw new AccountRequestError(
+      404,
+      "Account profile not found or Display Name was not saved.",
+    );
+  }
+
+  return data.display_name.trim();
+}
+
 export async function getAccount(
   client: SupabaseClient,
   user: AuthenticatedAccountUser,
@@ -97,9 +174,10 @@ export async function getAccount(
       typeof value === "string" && value.trim().length > 0,
   ) ?? null;
 
-  const uploadedPhoto = await getProfilePhotoUrl(client, user.id).catch(
-    () => null,
-  );
+  const uploadedPhoto = await getProfilePhotoUrl(
+    client,
+    user.id,
+  ).catch(() => null);
 
   const googleProfilePhotoUrl = getGoogleProfilePhotoUrl(
     user.userMetadata,
@@ -123,10 +201,13 @@ export async function getProfilePhotoUrl(
 ): Promise<string | null> {
   const photoStorage = client.storage.from(PROFILE_PHOTO_BUCKET);
 
-  const { data: files, error: listError } = await photoStorage.list(userId, {
-    limit: 10,
-    search: PROFILE_PHOTO_PATH,
-  });
+  const { data: files, error: listError } = await photoStorage.list(
+    userId,
+    {
+      limit: 10,
+      search: PROFILE_PHOTO_PATH,
+    },
+  );
 
   if (listError) throw listError;
 
@@ -158,13 +239,20 @@ export async function updateAccountUsername(
 
   if (error) {
     if ("code" in error && error.code === "23505") {
-      throw new AccountRequestError(409, "That username is already in use.");
+      throw new AccountRequestError(
+        409,
+        "That username is already in use.",
+      );
     }
+
     throw error;
   }
 
   if (!data || typeof data.username !== "string") {
-    throw new AccountRequestError(404, "Account profile not found.");
+    throw new AccountRequestError(
+      404,
+      "Account profile not found.",
+    );
   }
 
   return data.username;
@@ -182,7 +270,10 @@ export async function updateAccountPassword(
   });
 
   if (error || data.user?.id !== user.id || !data.session) {
-    throw new AccountRequestError(400, "Your current password is incorrect.");
+    throw new AccountRequestError(
+      400,
+      "Your current password is incorrect.",
+    );
   }
 
   const { error: updateError } = await client.auth.updateUser({
