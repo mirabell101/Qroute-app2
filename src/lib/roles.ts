@@ -40,5 +40,5 @@ export function isKnownRole(role: string | null | undefined): role is QRouteRole
 }
 
 export function roleLandingPath(role: string | null | undefined): string {
-  return role === "admin" ? "/admin/dashboard" : "/home";
+  return role === "admin" ? "/admin/base" : "/home";
 }
