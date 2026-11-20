@@ -426,30 +426,28 @@ describe("admin API client", () => {
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
-  it("sends route creation payloads and returns the created route id", async () => {
+  it("sends moderation decisions through the Route Management API", async () => {
     mocks.fetch.mockResolvedValue({
       ok: true,
-      status: 201,
-      json: async () => ({ success: true, route: { id: 99 } }),
+      status: 200,
+      json: async () => ({ success: true }),
     });
 
     await expect(
-      getAdminApi().createAdminRoute("admin-1", {
-        name: "Quezon Loop",
-        transportTypeId: 3,
-        variantId: 8,
-        stops: [
-          { kind: "terminal", id: 3 },
-          { kind: "stop", id: 6 },
-        ],
-      }),
-    ).resolves.toBe(99);
+      getAdminApi().moderateRouteManagementRecord(
+        "admin-1",
+        "stop",
+        12,
+        "reject",
+        "Duplicate stop",
+      ),
+    ).resolves.toBeUndefined();
 
     const [url, options] = mocks.fetch.mock.calls[0] as [
       string,
       RequestInit,
     ];
-    expect(url).toMatch(/\/api\/admin\/routes$/);
+    expect(url).toMatch(/\/api\/route-management\/moderation\/stop\/12$/);
     expect(options.method).toBe("POST");
     expect(new Headers(options.headers).get("Authorization")).toBe(
       "Bearer admin-token",
@@ -458,34 +456,32 @@ describe("admin API client", () => {
       "application/json",
     );
     expect(JSON.parse(options.body as string)).toEqual({
-      name: "Quezon Loop",
-      transportTypeId: 3,
-      variantId: 8,
-      stops: [
-        { kind: "terminal", id: 3 },
-        { kind: "stop", id: 6 },
-      ],
+      action: "reject",
+      moderation_note: "Duplicate stop",
     });
   });
 
-  it("rejects malformed route creation responses", async () => {
+  it("updates managed transit records through the Route Management API", async () => {
     mocks.fetch.mockResolvedValue({
       ok: true,
-      status: 201,
-      json: async () => ({ success: true, route: { id: "ninety-nine" } }),
+      status: 200,
+      json: async () => ({ success: true }),
     });
 
-    await expect(
-      getAdminApi().createAdminRoute("admin-1", {
-        name: "Quezon Loop",
-        transportTypeId: 3,
-        variantId: 8,
-        stops: [
-          { kind: "terminal", id: 3 },
-          { kind: "stop", id: 6 },
-        ],
-      }),
-    ).rejects.toThrow("Admin service returned an invalid response.");
+    await getAdminApi().updateRouteManagementRecord("admin-1", "route", 12, {
+      name: "Renamed Loop",
+      transport_type_id: 3,
+      is_active: false,
+    });
+
+    const [url, options] = mocks.fetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/api\/route-management\/records\/route\/12$/);
+    expect(options.method).toBe("PATCH");
+    expect(JSON.parse(options.body as string)).toEqual({
+      name: "Renamed Loop",
+      transport_type_id: 3,
+      is_active: false,
+    });
   });
 
   it("sends route update payloads to the route endpoint", async () => {

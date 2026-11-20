@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   adminUpdate: vi.fn(),
   adminResults: {} as Record<string, QueryResult[]>,
   requestFrom: vi.fn(),
+  requestRpc: vi.fn(),
   requestInsert: vi.fn(),
   requestUpdate: vi.fn(),
   requestResults: {} as Record<string, QueryResult[]>,
@@ -30,10 +31,18 @@ vi.mock("../supabaseClient.ts", () => ({
 }));
 
 let adminRouter: express.Router | undefined;
+let routeManagementRouter: express.Router | undefined;
 
 beforeAll(async () => {
   try {
     adminRouter = (await import("./adminRoutes.ts")).default;
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("Cannot find module")) {
+      throw error;
+    }
+  }
+  try {
+    routeManagementRouter = (await import("./routeManagementRoutes.ts")).default;
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes("Cannot find module")) {
       throw error;
@@ -86,10 +95,12 @@ describe("admin API authorization", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mocks.requestResults = {};
+    mocks.requestRpc.mockResolvedValue({ data: { id: 12 }, error: null });
     mocks.getUser.mockImplementation(async (token: string) => {
       const users: Record<string, { id: string }> = {
         "admin-token": { id: "admin-1" },
         "user-token": { id: "user-1" },
+        "moderator-token": { id: "moderator-1" },
       };
       const user = users[token] ?? null;
       return {
@@ -99,13 +110,19 @@ describe("admin API authorization", () => {
     });
     mocks.getSupabaseClientForAccessToken.mockImplementation(
       (token: string) => ({
+        rpc: mocks.requestRpc,
         from: (table: string) => {
           mocks.requestFrom(table);
           if (table === "user_roles") {
             return createQuery({
               data: [
                 {
-                  role: token === "admin-token" ? "admin" : "registered_user",
+                  role:
+                    token === "admin-token"
+                      ? "admin"
+                      : token === "moderator-token"
+                        ? "moderator"
+                        : "registered_user",
                 },
               ],
               error: null,
@@ -174,6 +191,9 @@ describe("admin API authorization", () => {
 
     const app = express();
     app.use(express.json());
+    if (routeManagementRouter) {
+      app.use("/api/route-management", routeManagementRouter);
+    }
     if (adminRouter) {
       app.use("/api/admin", adminRouter);
     } else {
@@ -346,7 +366,6 @@ describe("admin API authorization", () => {
     const response = await fetch(`${baseUrl}/api/admin/reports`, {
       headers: { Authorization: "Bearer admin-token" },
     });
-
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       success: true,
@@ -361,6 +380,117 @@ describe("admin API authorization", () => {
     });
     expect(mocks.requestFrom).toHaveBeenCalledWith("community_reports");
     expect(mocks.getSupabaseAdminClient).not.toHaveBeenCalled();
+  });
+
+  it("allows an Admin to change a registered user's role", async () => {
+    mocks.adminResults.user_roles = [
+      { data: { user_id: "user-1", role: "moderator" }, error: null },
+    ];
+
+    const response = await fetch(
+      `${baseUrl}/api/admin/users/20000000-0000-4000-8000-000000000001/role`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ role: "moderator" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.adminUpdate).toHaveBeenCalledWith({ role: "moderator" });
+  });
+
+  it("rejects a Moderator from changing user roles", async () => {
+    const response = await fetch(
+      `${baseUrl}/api/admin/users/20000000-0000-4000-8000-000000000001/role`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: "Bearer moderator-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ role: "moderator" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.getSupabaseAdminClient).not.toHaveBeenCalled();
+  });
+
+  it("allows a verified Moderator to read every Route Management category", async () => {
+    mocks.requestResults = {
+      routes: [{ data: [], error: null }],
+      stops: [{ data: [], error: null }],
+      terminals: [{ data: [], error: null }],
+      transport_types: [{ data: [], error: null }],
+    };
+
+    const response = await fetch(`${baseUrl}/api/route-management`, {
+      headers: { Authorization: "Bearer moderator-token" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      records: {
+        routes: [],
+        stops: [],
+        terminals: [],
+        transportTypes: [],
+      },
+    });
+  });
+
+  it("allows a verified Moderator to approve a pending contribution", async () => {
+    const response = await fetch(
+      `${baseUrl}/api/route-management/moderation/stop/12`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer moderator-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "approve" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.requestRpc).toHaveBeenCalledWith(
+      "manage_transit_record",
+      expect.objectContaining({
+        p_entity_type: "stop",
+        p_action: "approve",
+        p_entity_id: 12,
+      }),
+    );
+  });
+
+  it("does not allow a Moderator to edit managed transit records", async () => {
+    const response = await fetch(
+      `${baseUrl}/api/route-management/records/stop/12`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: "Bearer moderator-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: "Changed" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.requestRpc).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Registered User from Route Management", async () => {
+    const response = await fetch(`${baseUrl}/api/route-management`, {
+      headers: { Authorization: "Bearer user-token" },
+    });
+
+    expect(response.status).toBe(403);
   });
 
   it("updates Community report status through the verified Admin token", async () => {
@@ -409,17 +539,7 @@ describe("admin API authorization", () => {
     });
   });
 
-  it("creates a route for an admin", async () => {
-    mocks.adminResults = {
-      transport_variants: [
-        { data: { id: 8, transport_type_id: 3 }, error: null },
-      ],
-      terminals: [{ data: [{ id: 3 }], error: null }],
-      stops: [{ data: [{ id: 6 }], error: null }],
-      routes: [{ data: { id: 99 }, error: null }],
-      route_stops: [{ data: null, error: null }],
-    };
-
+  it("does not allow route creation outside the Contributions workflow", async () => {
     const response = await fetch(`${baseUrl}/api/admin/routes`, {
       method: "POST",
       headers: {
@@ -437,70 +557,11 @@ describe("admin API authorization", () => {
       }),
     });
 
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toEqual({
-      success: true,
-      route: { id: 99 },
-    });
-  });
-
-  it("rejects invalid route creation payloads", async () => {
-    const response = await fetch(`${baseUrl}/api/admin/routes`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer admin-token",
-      },
-      body: JSON.stringify({ name: "" }),
-    });
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      success: false,
-      message: "Route name must be between 1 and 180 characters.",
-    });
+    expect(response.status).toBe(404);
     expect(mocks.getSupabaseAdminClient).not.toHaveBeenCalled();
   });
 
-  it("rejects a variant that does not belong to the selected transport type", async () => {
-    mocks.adminResults = {
-      transport_variants: [
-        { data: { id: 8, transport_type_id: 4 }, error: null },
-      ],
-    };
-
-    const response = await fetch(`${baseUrl}/api/admin/routes`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer admin-token",
-      },
-      body: JSON.stringify({
-        name: "Quezon Loop",
-        transportTypeId: 3,
-        variantId: 8,
-        stops: [
-          { kind: "terminal", id: 3 },
-          { kind: "stop", id: 6 },
-        ],
-      }),
-    });
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      success: false,
-      message: "The selected variant does not belong to the selected transport type.",
-    });
-  });
-
   it("updates a route for an admin", async () => {
-    mocks.adminResults = {
-      routes: [
-        { data: { id: 12, transport_type_id: 3, variant_id: 8 }, error: null },
-        { data: null, error: null },
-      ],
-    };
-
     const response = await fetch(`${baseUrl}/api/admin/routes/12`, {
       method: "PATCH",
       headers: {
@@ -512,12 +573,22 @@ describe("admin API authorization", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ success: true });
+    expect(mocks.requestRpc).toHaveBeenCalledWith(
+      "manage_transit_record",
+      expect.objectContaining({
+        p_entity_type: "route",
+        p_action: "update",
+        p_entity_id: 12,
+        p_payload: { name: "Renamed Loop" },
+      }),
+    );
   });
 
   it("rejects route updates for a missing route", async () => {
-    mocks.adminResults = {
-      routes: [{ data: null, error: null }],
-    };
+    mocks.requestRpc.mockResolvedValue({
+      data: null,
+      error: { code: "P0002", message: "Route not found." },
+    });
 
     const response = await fetch(`${baseUrl}/api/admin/routes/12`, {
       method: "PATCH",
@@ -536,10 +607,6 @@ describe("admin API authorization", () => {
   });
 
   it("deletes a route for an admin", async () => {
-    mocks.adminResults = {
-      routes: [{ data: { id: 12 }, error: null }],
-    };
-
     const response = await fetch(`${baseUrl}/api/admin/routes/12`, {
       method: "DELETE",
       headers: { Authorization: "Bearer admin-token" },
@@ -547,15 +614,21 @@ describe("admin API authorization", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ success: true });
+    expect(mocks.requestRpc).toHaveBeenCalledWith(
+      "manage_transit_record",
+      expect.objectContaining({
+        p_entity_type: "route",
+        p_action: "archive",
+        p_entity_id: 12,
+      }),
+    );
   });
 
   it("rejects deleting a route that never existed", async () => {
-    mocks.adminResults = {
-      routes: [
-        { data: null, error: null },
-        { data: null, error: null },
-      ],
-    };
+    mocks.requestRpc.mockResolvedValue({
+      data: null,
+      error: { code: "P0002", message: "Route not found." },
+    });
 
     const response = await fetch(`${baseUrl}/api/admin/routes/12`, {
       method: "DELETE",

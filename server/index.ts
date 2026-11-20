@@ -10,6 +10,7 @@ import express, {
 import authRoutes from "./routes/authRoutes.ts";
 import accountRoutes from "./routes/accountRoutes.ts";
 import adminRoutes from "./routes/adminRoutes.ts";
+import routeManagementRoutes from "./routes/routeManagementRoutes.ts";
 import communityRoutes from "./routes/communityRoutes.ts";
 import recentSearchesRoutes from "./routes/recentSearchesRoutes.ts";
 
@@ -136,6 +137,7 @@ app.use(express.json({ limit: "1mb" }));
 app.use("/api/auth", authRoutes);
 app.use("/api/account", accountRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/route-management", routeManagementRoutes);
 app.use("/api/community", communityRoutes);
 app.use("/api/recent-searches", recentSearchesRoutes);
 

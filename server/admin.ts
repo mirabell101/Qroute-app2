@@ -1,6 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
-  AdminRouteCreateInput,
   AdminRouteStopInput,
   AdminRouteUpdateInput,
 } from "./adminValidation.ts";
@@ -52,6 +51,7 @@ interface AdminRoutePoint {
   latitude: number;
   longitude: number;
   is_approved: boolean;
+  moderation_status: "pending" | "approved" | "rejected";
 }
 
 interface AdminRouteStop {
@@ -74,6 +74,7 @@ export interface AdminRouteRecord {
   is_banned: boolean;
   is_deleted: boolean;
   moderation_status: "pending" | "approved" | "rejected";
+  moderation_note: string | null;
   transport_types: { name: string; color: string } | null;
   transport_variants: {
     id: number;
@@ -84,11 +85,42 @@ export interface AdminRouteRecord {
   route_stops: AdminRouteStop[];
 }
 
+export interface AdminTransitPointRecord {
+  id: number;
+  name: string;
+  description?: string | null;
+  stop_type?: "road_stop" | "train_station" | null;
+  latitude: number;
+  longitude: number;
+  transport_type_id: number | null;
+  is_active: boolean | null;
+  is_approved: boolean | null;
+  is_banned: boolean | null;
+  is_deleted: boolean | null;
+  moderation_status: "pending" | "approved" | "rejected";
+  moderation_note: string | null;
+  transport_types: { name: string; color: string } | null;
+}
+
+export interface AdminTransportTypeRecord {
+  id: number;
+  name: string;
+  color: string;
+}
+
+export interface AdminRouteManagementData {
+  routes: AdminRouteRecord[];
+  stops: AdminTransitPointRecord[];
+  terminals: AdminTransitPointRecord[];
+  transportTypes: AdminTransportTypeRecord[];
+}
+
 export interface AdminUserRecord {
   id: string;
   email: string | null;
   username: string | null;
   createdAt: string;
+  role: "registered_user" | "moderator";
   banned?: boolean;
 }
 
@@ -208,13 +240,14 @@ export async function getAdminRoutes(
       is_banned,
       is_deleted,
       moderation_status,
+      moderation_note,
       transport_types ( name, color ),
       transport_variants ( id, code, name, fare_model ),
       route_stops (
         route_id,
         stop_order,
-        terminals ( id, name, latitude, longitude, is_approved ),
-        stops ( id, name, description, stop_type, latitude, longitude, is_approved )
+        terminals ( id, name, latitude, longitude, is_approved, moderation_status ),
+        stops ( id, name, description, stop_type, latitude, longitude, is_approved, moderation_status )
       )
     `,
     )
@@ -244,13 +277,55 @@ export async function getAdminRoutes(
   });
 }
 
+export async function getAdminRouteManagementData(
+  client: SupabaseClient,
+): Promise<AdminRouteManagementData> {
+  const [routes, stopsResult, terminalsResult, typesResult] = await Promise.all([
+    getAdminRoutes(client),
+    client
+      .from("stops")
+      .select(
+        "id, name, description, stop_type, latitude, longitude, transport_type_id, is_active, is_approved, is_banned, is_deleted, moderation_status, moderation_note, transport_types(name, color)",
+      )
+      .order("name", { ascending: true }),
+    client
+      .from("terminals")
+      .select(
+        "id, name, latitude, longitude, transport_type_id, is_active, is_approved, is_banned, is_deleted, moderation_status, moderation_note, transport_types(name, color)",
+      )
+      .order("name", { ascending: true }),
+    client
+      .from("transport_types")
+      .select("id, name, color")
+      .order("name", { ascending: true }),
+  ]);
+
+  if (stopsResult.error) throw stopsResult.error;
+  if (terminalsResult.error) throw terminalsResult.error;
+  if (typesResult.error) throw typesResult.error;
+  if (
+    !Array.isArray(stopsResult.data) ||
+    !Array.isArray(terminalsResult.data) ||
+    !Array.isArray(typesResult.data)
+  ) {
+    throw new Error("Route Management returned incomplete database results.");
+  }
+
+  return {
+    routes,
+    stops: stopsResult.data as AdminTransitPointRecord[],
+    terminals: terminalsResult.data as AdminTransitPointRecord[],
+    transportTypes: typesResult.data as AdminTransportTypeRecord[],
+  };
+}
+
 export async function getAdminUsers(
   client: SupabaseClient,
 ): Promise<AdminUserRecord[]> {
   const { data: roleRows, error: roleError } = await client
     .from("user_roles")
-    .select("user_id")
-    .eq("role", "registered_user");
+    .select("user_id, role")
+    .in("role", ["registered_user", "moderator"]);
 
   if (roleError) throw roleError;
 
@@ -258,17 +333,21 @@ export async function getAdminUsers(
     throw new Error("Admin user query returned incomplete role data.");
   }
 
-  const registeredUserIds = new Set<string>();
+  const userRoles = new Map<string, AdminUserRecord["role"]>();
 
   for (const row of roleRows) {
-    if (typeof row.user_id !== "string" || !row.user_id) {
+    if (
+      typeof row.user_id !== "string" ||
+      !row.user_id ||
+      (row.role !== "registered_user" && row.role !== "moderator")
+    ) {
       throw new Error("Admin user query returned an invalid user-role record.");
     }
 
-    registeredUserIds.add(row.user_id);
+    userRoles.set(row.user_id, row.role);
   }
 
-  if (registeredUserIds.size === 0) return [];
+  if (userRoles.size === 0) return [];
 
   const authUsers = [];
 
@@ -293,7 +372,7 @@ export async function getAdminUsers(
     authUsers.map((user) => [user.id, user]),
   );
 
-  const missingUserId = [...registeredUserIds].find(
+  const missingUserId = [...userRoles.keys()].find(
     (id) => !authUsersById.has(id),
   );
 
@@ -302,7 +381,7 @@ export async function getAdminUsers(
   }
 
   const profileUsernames = new Map<string, string | null>();
-  const ids = [...registeredUserIds];
+  const ids = [...userRoles.keys()];
 
   for (let start = 0; start < ids.length; start += profileBatchSize) {
     const batch = ids.slice(start, start + profileBatchSize);
@@ -333,8 +412,8 @@ export async function getAdminUsers(
     }
   }
 
-  return [...registeredUserIds]
-    .map((id) => {
+  return [...userRoles]
+    .map(([id, role]) => {
       const user = authUsersById.get(id);
 
       if (!user) {
@@ -352,6 +431,7 @@ export async function getAdminUsers(
         email: user.email ?? null,
         username: profileUsernames.get(id) ?? null,
         createdAt: user.created_at,
+        role,
       };
 
       if (isBanned) {
@@ -361,6 +441,26 @@ export async function getAdminUsers(
       return record;
     })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export async function updateAdminUserRole(
+  client: SupabaseClient,
+  userId: string,
+  role: AdminUserRecord["role"],
+): Promise<void> {
+  const { data, error } = await client
+    .from("user_roles")
+    .update({ role })
+    .eq("user_id", userId)
+    .in("role", ["registered_user", "moderator"])
+    .select("user_id")
+    .maybeSingle();
+
+  if (error) throw error;
+
+  if (!data) {
+    throw new AdminNotFoundError("Registered user was not found.");
+  }
 }
 
 export async function getAdminReports(
@@ -584,144 +684,6 @@ function toRouteStopRows(
   }));
 }
 
-async function verifyRouteVariant(
-  client: SupabaseClient,
-  transportTypeId: number,
-  variantId: number,
-): Promise<void> {
-  const { data, error } = await client
-    .from("transport_variants")
-    .select("id, transport_type_id")
-    .eq("id", variantId)
-    .maybeSingle();
-
-  if (error) throw error;
-
-  if (!data) {
-    throw new AdminInputError("Choose a valid transport variant.");
-  }
-
-  if (data.transport_type_id !== transportTypeId) {
-    throw new AdminInputError(
-      "The selected variant does not belong to the selected transport type.",
-    );
-  }
-}
-
-async function verifyRoutePoints(
-  client: SupabaseClient,
-  stops: AdminRouteStopInput[],
-): Promise<void> {
-  const terminalIds = [
-    ...new Set(
-      stops
-        .filter((stop) => stop.kind === "terminal")
-        .map((stop) => stop.id),
-    ),
-  ];
-
-  const stopIds = [
-    ...new Set(
-      stops.filter((stop) => stop.kind === "stop").map((stop) => stop.id),
-    ),
-  ];
-
-  if (terminalIds.length > 0) {
-    const { data, error } = await client
-      .from("terminals")
-      .select("id")
-      .in("id", terminalIds);
-
-    if (error) throw error;
-
-    const foundIds = new Set(
-      (Array.isArray(data) ? data : []).map((row) => row.id),
-    );
-
-    if (foundIds.size !== terminalIds.length) {
-      throw new AdminInputError(
-        "One or more selected terminals could not be found.",
-      );
-    }
-  }
-
-  if (stopIds.length > 0) {
-    const { data, error } = await client
-      .from("stops")
-      .select("id")
-      .in("id", stopIds);
-
-    if (error) throw error;
-
-    const foundIds = new Set(
-      (Array.isArray(data) ? data : []).map((row) => row.id),
-    );
-
-    if (foundIds.size !== stopIds.length) {
-      throw new AdminInputError(
-        "One or more selected stops could not be found.",
-      );
-    }
-  }
-}
-
-export async function createAdminRoute(
-  client: SupabaseClient,
-  input: AdminRouteCreateInput,
-  adminUserId: string,
-): Promise<{ id: number }> {
-  await verifyRouteVariant(client, input.transportTypeId, input.variantId);
-  await verifyRoutePoints(client, input.stops);
-
-  const { data: route, error: routeError } = await client
-    .from("routes")
-    .insert({
-      name: input.name,
-      transport_type_id: input.transportTypeId,
-      variant_id: input.variantId,
-      fare_area_id: null,
-      created_by: adminUserId,
-      is_active: true,
-      is_approved: true,
-      moderation_status: "approved",
-      moderation_note: null,
-      moderated_by: adminUserId,
-      moderated_at: new Date().toISOString(),
-      is_banned: false,
-      is_deleted: false,
-    })
-    .select("id")
-    .single();
-
-  if (routeError) throw routeError;
-
-  if (!route || typeof route.id !== "number") {
-    throw new Error("Route creation returned an incomplete result.");
-  }
-
-  const { error: stopsError } = await client
-    .from("route_stops")
-    .insert(toRouteStopRows(route.id, input.stops));
-
-  if (stopsError) {
-    const { error: cleanupError } = await client
-      .from("routes")
-      .delete()
-      .eq("id", route.id);
-
-    if (cleanupError) {
-      console.error(
-        "[admin] Route creation failed and the created route could not be removed:",
-        cleanupError.message,
-      );
-    }
-
-    throw stopsError;
-  }
-
-  return { id: route.id };
-}
-
 async function replaceRouteStops(
   client: SupabaseClient,
   routeId: number,
@@ -776,104 +738,60 @@ export async function updateAdminRoute(
   client: SupabaseClient,
   routeId: number,
   input: AdminRouteUpdateInput,
-  adminUserId: string,
 ): Promise<void> {
-  const { data: route, error: fetchError } = await client
-    .from("routes")
-    .select("id, transport_type_id, variant_id")
-    .eq("id", routeId)
-    .eq("is_deleted", false)
-    .maybeSingle();
-
-  if (fetchError) throw fetchError;
-
-  if (!route) {
-    throw new AdminNotFoundError("Route not found.");
-  }
-
   const updates: Record<string, unknown> = {};
-
-  const nextTransportTypeId =
-    input.transportTypeId ?? route.transport_type_id;
-
-  const nextVariantId = input.variantId ?? route.variant_id;
-
-  if (input.transportTypeId !== undefined || input.variantId !== undefined) {
-    await verifyRouteVariant(client, nextTransportTypeId, nextVariantId);
-    updates.transport_type_id = nextTransportTypeId;
-    updates.variant_id = nextVariantId;
+  if (input.name !== undefined) updates.name = input.name;
+  if (input.transportTypeId !== undefined) {
+    updates.transport_type_id = input.transportTypeId;
   }
-
-  if (input.name !== undefined) {
-    updates.name = input.name;
-  }
-
-  if (input.moderationStatus !== undefined) {
-    updates.moderation_status = input.moderationStatus;
-    updates.is_approved = input.moderationStatus === "approved";
-    updates.moderated_by = adminUserId;
-    updates.moderated_at = new Date().toISOString();
-  }
-
-  if (input.moderationNote !== undefined) {
-    updates.moderation_note = input.moderationNote;
-  }
-
-  if (input.isActive !== undefined) {
-    updates.is_active = input.isActive;
-  }
-
+  if (input.variantId !== undefined) updates.variant_id = input.variantId;
+  if (input.isActive !== undefined) updates.is_active = input.isActive;
   if (input.stops !== undefined) {
-    await verifyRoutePoints(client, input.stops);
+    updates.stops = input.stops.map(({ kind, id }) => ({ kind, id }));
+  }
+  if (input.moderationStatus !== undefined) {
+    if (input.moderationStatus === "pending") {
+      throw new AdminInputError(
+        "A moderated route cannot be returned to pending.",
+      );
+    }
+    updates.moderation_status = input.moderationStatus;
+    updates.moderation_note =
+      input.moderationStatus === "rejected"
+        ? input.moderationNote ?? null
+        : null;
   }
 
   if (Object.keys(updates).length > 0) {
-    const { error: updateError } = await client
-      .from("routes")
-      .update(updates)
-      .eq("id", routeId);
+    const { error } = await client.rpc("manage_transit_record", {
+      p_entity_type: "route",
+      p_action: "update",
+      p_entity_id: routeId,
+      p_payload: updates,
+    });
 
-    if (updateError) throw updateError;
-  }
-
-  if (input.stops !== undefined) {
-    await replaceRouteStops(client, routeId, input.stops);
+    if (error?.code === "P0002") {
+      throw new AdminNotFoundError("Route not found.");
+    }
+    if (error) throw error;
   }
 }
 
 export async function deleteAdminRoute(
   client: SupabaseClient,
   routeId: number,
-  adminUserId: string,
 ): Promise<void> {
-  const { data: deleted, error } = await client
-    .from("routes")
-    .update({
-      is_deleted: true,
-      deleted_at: new Date().toISOString(),
-      deleted_by: adminUserId,
-      is_active: false,
-    })
-    .eq("id", routeId)
-    .eq("is_deleted", false)
-    .select("id")
-    .maybeSingle();
+  const { error } = await client.rpc("manage_transit_record", {
+    p_entity_type: "route",
+    p_action: "archive",
+    p_entity_id: routeId,
+    p_payload: {},
+  });
 
-  if (error) throw error;
-
-  if (deleted) return;
-
-  const { data: existing, error: lookupError } = await client
-    .from("routes")
-    .select("id")
-    .eq("id", routeId)
-    .maybeSingle();
-
-  if (lookupError) throw lookupError;
-
-  if (!existing) {
+  if (error?.code === "P0002") {
     throw new AdminNotFoundError("Route not found.");
   }
+  if (error) throw error;
 }
 
 export async function toggleAdminUserBan(

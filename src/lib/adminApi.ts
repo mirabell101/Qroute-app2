@@ -30,6 +30,7 @@ interface AdminRoutePoint {
   latitude: number;
   longitude: number;
   is_approved: boolean | null;
+  moderation_status?: "pending" | "approved" | "rejected";
 }
 
 interface AdminRouteStop {
@@ -52,6 +53,7 @@ export interface AdminRouteRecord {
   is_banned: boolean;
   is_deleted: boolean;
   moderation_status: "pending" | "approved" | "rejected";
+  moderation_note?: string | null;
   transport_types: { name: string; color: string } | null;
   transport_variants: {
     id: number;
@@ -62,11 +64,42 @@ export interface AdminRouteRecord {
   route_stops: AdminRouteStop[];
 }
 
+export interface AdminTransitPointRecord {
+  id: number;
+  name: string;
+  description?: string | null;
+  stop_type?: "road_stop" | "train_station" | null;
+  latitude: number;
+  longitude: number;
+  transport_type_id: number | null;
+  is_active: boolean | null;
+  is_approved: boolean | null;
+  is_banned: boolean | null;
+  is_deleted: boolean | null;
+  moderation_status: "pending" | "approved" | "rejected";
+  moderation_note: string | null;
+  transport_types: { name: string; color: string } | null;
+}
+
+export interface AdminTransportTypeRecord {
+  id: number;
+  name: string;
+  color: string;
+}
+
+export interface AdminRouteManagementData {
+  routes: AdminRouteRecord[];
+  stops: AdminTransitPointRecord[];
+  terminals: AdminTransitPointRecord[];
+  transportTypes: AdminTransportTypeRecord[];
+}
+
 export interface AdminUserRecord {
   id: string;
   email: string | null;
   username: string | null;
   createdAt: string;
+  role: "registered_user" | "moderator";
   banned?: boolean;
 }
 
@@ -106,13 +139,6 @@ export interface AdminRouteStopPayload {
   id: number;
 }
 
-export interface AdminRouteCreatePayload {
-  name: string;
-  transportTypeId: number;
-  variantId: number;
-  stops: AdminRouteStopPayload[];
-}
-
 export interface AdminRouteUpdatePayload {
   name?: string;
   transportTypeId?: number;
@@ -133,6 +159,10 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
+}
+
+function isNullableBoolean(value: unknown): value is boolean | null {
+  return value === null || typeof value === "boolean";
 }
 
 function isNullableRecord(
@@ -209,6 +239,55 @@ function isAdminRouteRecord(value: unknown): value is AdminRouteRecord {
   return (
     isNullableRecord(value.transport_types, isTransportType) &&
     isNullableRecord(value.transport_variants, isTransportVariant)
+  );
+}
+
+function isAdminTransitPointRecord(
+  value: unknown,
+): value is AdminTransitPointRecord {
+  if (
+    !isRecord(value) ||
+    !isNonNegativeInteger(value.id) ||
+    typeof value.name !== "string" ||
+    !(value.description === undefined || isNullableString(value.description)) ||
+    !(
+      value.stop_type === undefined ||
+      value.stop_type === null ||
+      value.stop_type === "road_stop" ||
+      value.stop_type === "train_station"
+    ) ||
+    typeof value.latitude !== "number" ||
+    !Number.isFinite(value.latitude) ||
+    typeof value.longitude !== "number" ||
+    !Number.isFinite(value.longitude) ||
+    !(value.transport_type_id === null || isNonNegativeInteger(value.transport_type_id)) ||
+    !isNullableBoolean(value.is_active) ||
+    !isNullableBoolean(value.is_approved) ||
+    !isNullableBoolean(value.is_banned) ||
+    !isNullableBoolean(value.is_deleted) ||
+    !["pending", "approved", "rejected"].includes(
+      String(value.moderation_status),
+    ) ||
+    !isNullableString(value.moderation_note)
+  ) {
+    return false;
+  }
+
+  return isNullableRecord(
+    value.transport_types,
+    (record) =>
+      typeof record.name === "string" && typeof record.color === "string",
+  );
+}
+
+function isAdminTransportTypeRecord(
+  value: unknown,
+): value is AdminTransportTypeRecord {
+  return (
+    isRecord(value) &&
+    isNonNegativeInteger(value.id) &&
+    typeof value.name === "string" &&
+    typeof value.color === "string"
   );
 }
 
@@ -328,7 +407,8 @@ function parseAdminUsers(value: unknown): AdminUserRecord[] {
         typeof user.id === "string" &&
         isNullableString(user.email) &&
         isNullableString(user.username) &&
-        typeof user.createdAt === "string",
+        typeof user.createdAt === "string" &&
+        (user.role === "registered_user" || user.role === "moderator"),
     )
   ) {
     throw new Error("Admin service returned an invalid response.");
@@ -353,7 +433,8 @@ function parseAdminNotifications(value: unknown): AdminNotificationList {
   };
 }
 
-async function requestAdmin(
+async function requestApi(
+  basePath: string,
   path: string,
   expectedUserId: string,
   options?: {
@@ -361,6 +442,8 @@ async function requestAdmin(
     body?: unknown;
   },
 ): Promise<Record<string, unknown>> {
+  const serviceName =
+    basePath === "/api/admin" ? "Admin" : "Route Management";
   const { data, error } = await supabase.auth.getSession();
 
   if (error) throw new Error(error.message);
@@ -375,7 +458,7 @@ async function requestAdmin(
     throw new Error("The active account changed. Please try again.");
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/admin${path}`, {
+  const response = await fetch(`${API_BASE_URL}${basePath}${path}`, {
     method: options?.method ?? "GET",
     headers: {
       Authorization: `Bearer ${session.access_token}`,
@@ -390,26 +473,48 @@ async function requestAdmin(
     payload = await response.json();
   } catch {
     if (!response.ok) {
-      throw new Error(`Admin request failed (HTTP ${response.status}).`);
+      throw new Error(`${serviceName} request failed (HTTP ${response.status}).`);
     }
 
-    throw new Error("Admin service returned an invalid response.");
+    throw new Error(`${serviceName} service returned an invalid response.`);
   }
 
   if (!response.ok) {
     const message =
       isRecord(payload) && typeof payload.message === "string"
         ? payload.message
-        : `Admin request failed (HTTP ${response.status}).`;
+        : `${serviceName} request failed (HTTP ${response.status}).`;
 
     throw new Error(message);
   }
 
   if (!isRecord(payload) || payload.success !== true) {
-    throw new Error("Admin service returned an invalid response.");
+    throw new Error(`${serviceName} service returned an invalid response.`);
   }
 
   return payload;
+}
+
+function requestAdmin(
+  path: string,
+  expectedUserId: string,
+  options?: {
+    method?: string;
+    body?: unknown;
+  },
+): Promise<Record<string, unknown>> {
+  return requestApi("/api/admin", path, expectedUserId, options);
+}
+
+function requestRouteManagement(
+  path: string,
+  expectedUserId: string,
+  options?: {
+    method?: string;
+    body?: unknown;
+  },
+): Promise<Record<string, unknown>> {
+  return requestApi("/api/route-management", path, expectedUserId, options);
 }
 
 export async function getAdminSummary(
@@ -424,6 +529,92 @@ export async function getAdminRoutes(
 ): Promise<AdminRouteRecord[]> {
   const payload = await requestAdmin("/routes", expectedUserId);
   return parseAdminRoutes(payload.routes);
+}
+
+export async function getRouteManagementData(
+  expectedUserId: string,
+): Promise<AdminRouteManagementData> {
+  const payload = await requestRouteManagement("/", expectedUserId);
+  if (
+    !isRecord(payload.records) ||
+    !Array.isArray(payload.records.routes) ||
+    !payload.records.routes.every(isAdminRouteRecord) ||
+    !Array.isArray(payload.records.stops) ||
+    !payload.records.stops.every(isAdminTransitPointRecord) ||
+    !Array.isArray(payload.records.terminals) ||
+    !payload.records.terminals.every(isAdminTransitPointRecord) ||
+    !Array.isArray(payload.records.transportTypes) ||
+    !payload.records.transportTypes.every(isAdminTransportTypeRecord)
+  ) {
+    throw new Error("Route Management returned an invalid response.");
+  }
+
+  return {
+    routes: payload.records.routes,
+    stops: payload.records.stops,
+    terminals: payload.records.terminals,
+    transportTypes: payload.records.transportTypes,
+  };
+}
+
+export type RouteManagementEntityType = "route" | "stop" | "terminal";
+
+export async function moderateRouteManagementRecord(
+  expectedUserId: string,
+  entityType: RouteManagementEntityType,
+  id: number,
+  action: "approve" | "reject",
+  moderationNote?: string,
+): Promise<void> {
+  await requestRouteManagement(`/moderation/${entityType}/${id}`, expectedUserId, {
+    method: "POST",
+    body: { action, ...(moderationNote ? { moderation_note: moderationNote } : {}) },
+  });
+}
+
+export async function updateRouteManagementRecord(
+  expectedUserId: string,
+  entityType: RouteManagementEntityType,
+  id: number,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  await requestRouteManagement(`/records/${entityType}/${id}`, expectedUserId, {
+    method: "PATCH",
+    body: payload,
+  });
+}
+
+export async function archiveRouteManagementRecord(
+  expectedUserId: string,
+  entityType: RouteManagementEntityType,
+  id: number,
+): Promise<void> {
+  await requestRouteManagement(`/records/${entityType}/${id}`, expectedUserId, {
+    method: "DELETE",
+  });
+}
+
+export async function createAdminTransportType(
+  expectedUserId: string,
+  name: string,
+  color: string,
+): Promise<void> {
+  await requestRouteManagement("/transport-types", expectedUserId, {
+    method: "POST",
+    body: { name, color },
+  });
+}
+
+export async function updateAdminTransportType(
+  expectedUserId: string,
+  id: number,
+  name: string,
+  color: string,
+): Promise<void> {
+  await requestRouteManagement(`/transport-types/${id}`, expectedUserId, {
+    method: "PATCH",
+    body: { name, color },
+  });
 }
 
 export async function getAdminUsers(
@@ -491,23 +682,15 @@ export async function toggleAdminUserBan(
   });
 }
 
-export async function createAdminRoute(
+export async function setAdminUserRole(
   expectedUserId: string,
-  payload: AdminRouteCreatePayload,
-): Promise<number> {
-  const response = await requestAdmin("/routes", expectedUserId, {
-    method: "POST",
-    body: payload,
+  id: string,
+  role: AdminUserRecord["role"],
+): Promise<void> {
+  await requestAdmin(`/users/${id}/role`, expectedUserId, {
+    method: "PATCH",
+    body: { role },
   });
-
-  if (
-    !isRecord(response.route) ||
-    !isNonNegativeInteger(response.route.id)
-  ) {
-    throw new Error("Admin service returned an invalid response.");
-  }
-
-  return response.route.id;
 }
 
 export async function updateAdminRoute(

@@ -4,7 +4,6 @@ import requireAuth from "../middleware/requireAuth.ts";
 import {
   AdminInputError,
   AdminNotFoundError,
-  createAdminRoute,
   deleteAdminPost,
   deleteAdminRoute,
   getAdminCommunityPosts,
@@ -14,6 +13,7 @@ import {
   getAdminUsers,
   setCommunityPostVisibility,
   toggleAdminUserBan,
+  updateAdminUserRole,
   updateAdminReportStatus,
   updateAdminRoute,
 } from "../admin.ts";
@@ -24,7 +24,6 @@ import {
   markAdminNotificationRead,
 } from "../adminNotifications.ts";
 import {
-  parseAdminRouteCreateInput,
   parseAdminRouteUpdateInput,
 } from "../adminValidation.ts";
 import {
@@ -174,60 +173,6 @@ router.get("/routes", async (_req: Request, res: Response) => {
   }
 });
 
-router.post("/routes", async (req: Request, res: Response) => {
-  const parsed = parseAdminRouteCreateInput(req.body);
-
-  if (parsed.error) {
-    res.status(400).json({
-      success: false,
-      message: parsed.error,
-    });
-
-    return;
-  }
-
-  const adminUserId = getAdminUserId(res);
-
-  if (!adminUserId) {
-    res.status(401).json({
-      success: false,
-      message: "Authentication required.",
-    });
-
-    return;
-  }
-
-  try {
-    const route = await createAdminRoute(
-      getSupabaseAdminClient(),
-      parsed.data,
-      adminUserId,
-    );
-
-    await recordAdminAudit({
-      adminUserId,
-      categoryKey: "route_management",
-      actionKey: "route_created",
-      actionTitle: "Route created",
-      description: `Created the route "${parsed.data.name}".`,
-      targetType: "route",
-      targetId: String(route.id),
-      targetLabel: parsed.data.name,
-      metadata: {
-        routeId: route.id,
-        routeName: parsed.data.name,
-        transportTypeId: parsed.data.transportTypeId,
-        variantId: parsed.data.variantId,
-        stopCount: parsed.data.stops.length,
-      },
-    });
-
-    res.status(201).json({ success: true, route });
-  } catch (error: unknown) {
-    sendAdminError(res, error, "Unable to create the route.");
-  }
-});
-
 router.patch("/routes/:id", async (req: Request, res: Response) => {
   const id = parseRouteId(req.params.id);
 
@@ -251,9 +196,8 @@ router.patch("/routes/:id", async (req: Request, res: Response) => {
     return;
   }
 
-  const adminUserId = getAdminUserId(res);
-
-  if (!adminUserId) {
+  const accessToken = getAccessToken(res);
+  if (!accessToken) {
     res.status(401).json({
       success: false,
       message: "Authentication required.",
@@ -264,45 +208,10 @@ router.patch("/routes/:id", async (req: Request, res: Response) => {
 
   try {
     await updateAdminRoute(
-      getSupabaseAdminClient(),
+      getSupabaseClientForAccessToken(accessToken),
       id,
       parsed.data,
-      adminUserId,
     );
-
-    const changes: string[] = [];
-
-    if (parsed.data.name !== undefined) changes.push("name");
-    if (parsed.data.transportTypeId !== undefined) {
-      changes.push("transport type");
-    }
-    if (parsed.data.variantId !== undefined) changes.push("variant");
-    if (parsed.data.stops !== undefined) changes.push("stops");
-    if (parsed.data.isActive !== undefined) changes.push("active status");
-    if (parsed.data.moderationStatus !== undefined) {
-      changes.push("moderation status");
-    }
-    if (parsed.data.moderationNote !== undefined) {
-      changes.push("moderation note");
-    }
-
-    await recordAdminAudit({
-      adminUserId,
-      categoryKey: "route_management",
-      actionKey: "route_updated",
-      actionTitle: "Route updated",
-      description: `Updated ${changes.length > 0 ? changes.join(", ") : "route details"} for route #${id}.`,
-      targetType: "route",
-      targetId: String(id),
-      targetLabel: parsed.data.name ?? `Route #${id}`,
-      metadata: {
-        routeId: id,
-        changedFields: changes,
-        moderationStatus: parsed.data.moderationStatus ?? null,
-        isActive: parsed.data.isActive ?? null,
-        stopCount: parsed.data.stops?.length ?? null,
-      },
-    });
 
     res.json({ success: true });
   } catch (error: unknown) {
@@ -322,9 +231,8 @@ router.delete("/routes/:id", async (req: Request, res: Response) => {
     return;
   }
 
-  const adminUserId = getAdminUserId(res);
-
-  if (!adminUserId) {
+  const accessToken = getAccessToken(res);
+  if (!accessToken) {
     res.status(401).json({
       success: false,
       message: "Authentication required.",
@@ -334,22 +242,10 @@ router.delete("/routes/:id", async (req: Request, res: Response) => {
   }
 
   try {
-    await deleteAdminRoute(getSupabaseAdminClient(), id, adminUserId);
-
-    await recordAdminAudit({
-      adminUserId,
-      categoryKey: "route_management",
-      actionKey: "route_deleted",
-      actionTitle: "Route deleted",
-      description: `Soft-deleted route #${id}.`,
-      targetType: "route",
-      targetId: String(id),
-      targetLabel: `Route #${id}`,
-      metadata: {
-        routeId: id,
-        deletionType: "soft_delete",
-      },
-    });
+    await deleteAdminRoute(
+      getSupabaseClientForAccessToken(accessToken),
+      id,
+    );
 
     res.json({ success: true });
   } catch (error: unknown) {
@@ -368,6 +264,65 @@ router.get("/users", async (_req: Request, res: Response) => {
     res.json({ success: true, users });
   } catch (error: unknown) {
     sendAdminError(res, error);
+  }
+});
+
+router.patch("/users/:id/role", async (req: Request, res: Response) => {
+  const userId = parseUuid(req.params.id);
+  const role =
+    req.body && typeof req.body === "object"
+      ? (req.body as Record<string, unknown>).role
+      : undefined;
+
+  if (
+    !userId ||
+    (role !== "registered_user" && role !== "moderator")
+  ) {
+    res.status(400).json({
+      success: false,
+      message: "Valid user id and role are required.",
+    });
+    return;
+  }
+
+  const adminUserId = getAdminUserId(res);
+  if (!adminUserId) {
+    res.status(401).json({
+      success: false,
+      message: "Authentication required.",
+    });
+    return;
+  }
+
+  try {
+    await updateAdminUserRole(
+      getSupabaseAdminClient(),
+      userId,
+      role,
+    );
+    await recordAdminAudit({
+      adminUserId,
+      categoryKey: "user_management",
+      actionKey:
+        role === "moderator"
+          ? "moderator_assigned"
+          : "moderator_revoked",
+      actionTitle:
+        role === "moderator"
+          ? "Moderator role assigned"
+          : "Moderator role revoked",
+      description:
+        role === "moderator"
+          ? "Assigned the Moderator role to a registered user."
+          : "Changed a Moderator account back to Registered User.",
+      targetType: "user",
+      targetId: userId,
+      metadata: { role },
+    });
+
+    res.json({ success: true });
+  } catch (error: unknown) {
+    sendAdminError(res, error, "Unable to update the user's role.");
   }
 });
 

@@ -6,6 +6,7 @@ import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import {
   getAdminUsers,
+  setAdminUserRole,
   toggleAdminUserBan,
   type AdminUserRecord,
 } from "@/lib/adminApi";
@@ -77,6 +78,7 @@ export default function UserManagement() {
   const [retryCount, setRetryCount] = useState(0);
   const [pendingUserId, setPendingUserId] = useState<string | null>(null);
   const [isBanning, setIsBanning] = useState(false);
+  const [updatingRoleUserId, setUpdatingRoleUserId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const handleLogout = async () => {
@@ -118,6 +120,33 @@ export default function UserManagement() {
       );
     } finally {
       setIsBanning(false);
+    }
+  };
+
+  const handleToggleModerator = async (targetUserId: string) => {
+    const targetUser = users.find((user) => user.id === targetUserId);
+    if (!targetUser || !userId) return;
+
+    const role =
+      targetUser.role === "moderator" ? "registered_user" : "moderator";
+    setUpdatingRoleUserId(targetUserId);
+    setActionError(null);
+
+    try {
+      await setAdminUserRole(userId, targetUserId, role);
+      setUsers((current) =>
+        current.map((user) =>
+          user.id === targetUserId ? { ...user, role } : user,
+        ),
+      );
+    } catch (error: unknown) {
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "Unable to update the user's role.",
+      );
+    } finally {
+      setUpdatingRoleUserId(null);
     }
   };
 
@@ -447,13 +476,22 @@ export default function UserManagement() {
             ))}
           </section>
 
+          {actionError && (
+            <p
+              role="alert"
+              className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+            >
+              {actionError}
+            </p>
+          )}
+
           {/* User table */}
           <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_3px_14px_rgba(15,23,42,0.035)]">
             <div className="flex flex-col gap-1 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
               <div>
                 <h4 className="font-bold text-slate-900">User Accounts</h4>
                 <p className="mt-1 text-xs text-slate-500">
-                  Accounts with the registered_user database role.
+                  Registered User and Moderator accounts.
                 </p>
               </div>
 
@@ -505,7 +543,7 @@ export default function UserManagement() {
 
                       <td className="px-5 py-4">
                         <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-                          Registered user
+                          {user.role === "moderator" ? "Moderator" : "Registered user"}
                         </span>
                       </td>
 
@@ -550,6 +588,18 @@ export default function UserManagement() {
                               <BanIcon size={14} />
                             )}
                             {user.banned ? "Unban" : "Ban"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleModerator(user.id)}
+                            disabled={updatingRoleUserId === user.id}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {updatingRoleUserId === user.id
+                              ? "Saving..."
+                              : user.role === "moderator"
+                                ? "Revoke Moderator"
+                                : "Make Moderator"}
                           </button>
                         </div>
                       </td>

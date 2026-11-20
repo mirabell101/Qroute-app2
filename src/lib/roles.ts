@@ -7,9 +7,18 @@
  */
 export const DEFAULT_USER_ROLE = "registered_user" as const;
 
-export type QRouteRole = "admin" | typeof DEFAULT_USER_ROLE;
+export const MODERATOR_ROLE = "moderator" as const;
 
-const KNOWN_ROLES: readonly string[] = ["admin", DEFAULT_USER_ROLE];
+export type QRouteRole =
+  | "admin"
+  | typeof MODERATOR_ROLE
+  | typeof DEFAULT_USER_ROLE;
+
+const KNOWN_ROLES: readonly string[] = [
+  "admin",
+  MODERATOR_ROLE,
+  DEFAULT_USER_ROLE,
+];
 
 /**
  * Picks the highest-privilege role that QRoute actually recognises.
@@ -28,6 +37,10 @@ export function resolveUserRole(
     return "admin";
   }
 
+  if (roles.includes(MODERATOR_ROLE)) {
+    return MODERATOR_ROLE;
+  }
+
   if (roles.includes(DEFAULT_USER_ROLE)) {
     return DEFAULT_USER_ROLE;
   }
@@ -40,5 +53,7 @@ export function isKnownRole(role: string | null | undefined): role is QRouteRole
 }
 
 export function roleLandingPath(role: string | null | undefined): string {
-  return role === "admin" ? "/admin/base" : "/home";
+  if (role === "admin") return "/admin/base";
+  if (role === MODERATOR_ROLE) return "/admin/routes";
+  return "/home";
 }

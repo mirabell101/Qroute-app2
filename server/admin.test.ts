@@ -11,22 +11,15 @@ type AdminRouteStopInput = { kind: "terminal" | "stop"; id: number };
 type AdminServices = {
   getAdminSummary: (client: never, reportClient: never) => Promise<unknown>;
   getAdminRoutes: (client: never) => Promise<unknown>;
+  getAdminRouteManagementData: (
+    client: never,
+  ) => Promise<{ routes: unknown[] }>;
   getAdminUsers: (client: never) => Promise<unknown>;
   getAdminReports: (client: never) => Promise<unknown>;
   updateAdminReportStatus: (
     client: never,
     reportId: number,
     status: "Pending" | "Reviewed" | "Dismissed",
-  ) => Promise<unknown>;
-  createAdminRoute: (
-    client: never,
-    input: {
-      name: string;
-      transportTypeId: number;
-      variantId: number;
-      stops: AdminRouteStopInput[];
-    },
-    adminUserId: string,
   ) => Promise<unknown>;
   updateAdminRoute: (
     client: never,
@@ -40,12 +33,10 @@ type AdminServices = {
       isActive?: boolean;
       stops?: AdminRouteStopInput[];
     },
-    adminUserId: string,
   ) => Promise<unknown>;
   deleteAdminRoute: (
     client: never,
     routeId: number,
-    adminUserId: string,
   ) => Promise<unknown>;
   deleteAdminPost: (client: never, postId: string) => Promise<unknown>;
 };
@@ -128,6 +119,7 @@ function createClient(results: Record<string, QueryResult[]>) {
     return createQuery(table, result, (call) => writeCalls.push(call));
   });
   const listUsers = vi.fn();
+  const rpc = vi.fn().mockResolvedValue({ data: { id: 12 }, error: null });
   const storageRemove = vi.fn<() => StorageResult>(() => ({
     data: null,
     error: null,
@@ -135,12 +127,14 @@ function createClient(results: Record<string, QueryResult[]>) {
   const storageFrom = vi.fn(() => ({ remove: storageRemove }));
   const client = {
     from,
+    rpc,
     auth: { admin: { listUsers } },
     storage: { from: storageFrom },
   };
   return {
     client,
     from,
+    rpc,
     listUsers,
     writeCalls,
     storageFrom,
@@ -324,14 +318,101 @@ describe("admin data services", () => {
     ]);
   });
 
-  it("returns registered auth users with profile usernames and no invented status", async () => {
+  it("returns the supplied pending route without changing its moderation fields", async () => {
+    const pendingRoute = {
+      id: 3,
+      name: "NOVA BAYAN TO QCU",
+      transport_type_id: 1,
+      fare_area_id: null,
+      is_active: true,
+      is_approved: false,
+      is_banned: false,
+      is_deleted: false,
+      moderation_status: "pending",
+      moderation_note: null,
+      transport_types: { name: "Jeepney", color: "#123456" },
+      transport_variants: null,
+      route_stops: [
+        {
+          route_id: 3,
+          stop_order: 2,
+          terminals: null,
+          stops: {
+            id: 5,
+            name: "QCU",
+            latitude: 14.71,
+            longitude: 121.06,
+            is_approved: true,
+            moderation_status: "approved",
+            description: null,
+            stop_type: "road_stop",
+          },
+        },
+        {
+          route_id: 3,
+          stop_order: 1,
+          terminals: {
+            id: 4,
+            name: "NOVA BAYAN",
+            latitude: 14.65,
+            longitude: 121.05,
+            is_approved: true,
+            moderation_status: "approved",
+          },
+          stops: null,
+        },
+      ],
+    };
+    const { client } = createClient({
+      routes: [{ data: [pendingRoute], error: null }],
+      stops: [{ data: [], error: null }],
+      terminals: [{ data: [], error: null }],
+      transport_types: [{ data: [], error: null }],
+    });
+
+    const getAdminRouteManagementData = requireService(
+      services?.getAdminRouteManagementData,
+    );
+    const data = await getAdminRouteManagementData(client as never);
+
+    expect(data.routes).toContainEqual(
+      expect.objectContaining({
+        id: 3,
+        name: "NOVA BAYAN TO QCU",
+        is_active: true,
+        is_approved: false,
+        is_deleted: false,
+        is_banned: false,
+        moderation_status: "pending",
+        route_stops: [
+          expect.objectContaining({
+            stop_order: 1,
+            terminals: expect.objectContaining({
+              latitude: 14.65,
+              longitude: 121.05,
+            }),
+          }),
+          expect.objectContaining({
+            stop_order: 2,
+            stops: expect.objectContaining({
+              latitude: 14.71,
+              longitude: 121.06,
+            }),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("returns registered users and Moderators with their database roles", async () => {
     const { client, listUsers } = createClient({
       user_roles: [
         {
           data: [
-            { user_id: "user-1" },
-            { user_id: "user-2" },
-            { user_id: "user-2" },
+            { user_id: "user-1", role: "registered_user" },
+            { user_id: "user-2", role: "registered_user" },
+            { user_id: "user-2", role: "registered_user" },
+            { user_id: "moderator-1", role: "moderator" },
           ],
           error: null,
         },
@@ -341,6 +422,7 @@ describe("admin data services", () => {
           data: [
             { id: "user-1", username: "rider_one" },
             { id: "user-2", username: null },
+            { id: "moderator-1", username: "route_mod" },
           ],
           error: null,
         },
@@ -360,6 +442,11 @@ describe("admin data services", () => {
             created_at: "2026-01-01T00:00:00.000Z",
           },
           {
+            id: "moderator-1",
+            email: "moderator@example.com",
+            created_at: "2025-12-15T00:00:00.000Z",
+          },
+          {
             id: "admin-1",
             email: "admin@example.com",
             created_at: "2025-12-01T00:00:00.000Z",
@@ -376,12 +463,21 @@ describe("admin data services", () => {
         email: "one@example.com",
         username: "rider_one",
         createdAt: "2026-01-02T00:00:00.000Z",
+        role: "registered_user",
       },
       {
         id: "user-2",
         email: "two@example.com",
         username: null,
         createdAt: "2026-01-01T00:00:00.000Z",
+        role: "registered_user",
+      },
+      {
+        id: "moderator-1",
+        email: "moderator@example.com",
+        username: "route_mod",
+        createdAt: "2025-12-15T00:00:00.000Z",
+        role: "moderator",
       },
     ]);
     expect(listUsers).toHaveBeenCalledWith({ page: 1, perPage: 1000 });
@@ -509,126 +605,8 @@ describe("admin data services", () => {
     );
   });
 
-  it("creates a route only after validating every reference", async () => {
-    const { client, from, writeCalls } = createClient({
-      transport_variants: [
-        { data: { id: 8, transport_type_id: 3 }, error: null },
-      ],
-      terminals: [{ data: [{ id: 3 }], error: null }],
-      stops: [{ data: [{ id: 6 }], error: null }],
-      routes: [{ data: { id: 99 }, error: null }],
-      route_stops: [{ data: null, error: null }],
-    });
-
-    const createAdminRoute = requireService(services?.createAdminRoute);
-    await expect(
-      createAdminRoute(
-        client as never,
-        {
-          name: "Quezon Loop",
-          transportTypeId: 3,
-          variantId: 8,
-          stops: [
-            { kind: "terminal", id: 3 },
-            { kind: "stop", id: 6 },
-          ],
-        },
-        "admin-1",
-      ),
-    ).resolves.toEqual({ id: 99 });
-
-    expect(from).toHaveBeenCalledTimes(5);
-    expect(writeCalls).toEqual([
-      {
-        table: "routes",
-        kind: "insert",
-        payload: {
-          name: "Quezon Loop",
-          transport_type_id: 3,
-          variant_id: 8,
-          fare_area_id: null,
-          created_by: "admin-1",
-          is_active: true,
-          is_approved: true,
-          moderation_status: "approved",
-          moderation_note: null,
-          moderated_by: "admin-1",
-          moderated_at: expect.any(String),
-          is_banned: false,
-          is_deleted: false,
-        },
-      },
-      {
-        table: "route_stops",
-        kind: "insert",
-        payload: [
-          { route_id: 99, stop_order: 1, terminal_id: 3, stop_id: null },
-          { route_id: 99, stop_order: 2, terminal_id: null, stop_id: 6 },
-        ],
-      },
-    ]);
-  });
-
-  it("removes a just-created route when its stops cannot be saved", async () => {
-    const { client, from, writeCalls } = createClient({
-      transport_variants: [
-        { data: { id: 8, transport_type_id: 3 }, error: null },
-      ],
-      terminals: [{ data: [{ id: 3 }], error: null }],
-      stops: [{ data: [{ id: 6 }], error: null }],
-      routes: [
-        { data: { id: 42 }, error: null },
-        { data: null, error: null },
-      ],
-      route_stops: [
-        { data: null, error: { message: "stops insert failed" } },
-      ],
-    });
-
-    const createAdminRoute = requireService(services?.createAdminRoute);
-    await expect(
-      createAdminRoute(
-        client as never,
-        {
-          name: "Quezon Loop",
-          transportTypeId: 3,
-          variantId: 8,
-          stops: [
-            { kind: "terminal", id: 3 },
-            { kind: "stop", id: 6 },
-          ],
-        },
-        "admin-1",
-      ),
-    ).rejects.toThrow("stops insert failed");
-
-    expect(from).toHaveBeenCalledTimes(6);
-    expect(writeCalls[writeCalls.length - 1]).toEqual({
-      table: "routes",
-      kind: "delete",
-      payload: null,
-    });
-  });
-
   it("updates route details and replaces the ordered stops", async () => {
-    const { client, writeCalls } = createClient({
-      routes: [
-        { data: { id: 12, transport_type_id: 3, variant_id: 8 }, error: null },
-        { data: null, error: null },
-      ],
-      terminals: [{ data: [{ id: 3 }], error: null }],
-      stops: [{ data: [{ id: 6 }], error: null }],
-      route_stops: [
-        {
-          data: [
-            { route_id: 12, stop_order: 1, terminal_id: 5, stop_id: null },
-          ],
-          error: null,
-        },
-        { data: null, error: null },
-        { data: null, error: null },
-      ],
-    });
+    const { client, rpc } = createClient({});
 
     const updateAdminRoute = requireService(services?.updateAdminRoute);
     await expect(
@@ -643,37 +621,33 @@ describe("admin data services", () => {
             { kind: "stop", id: 6 },
           ],
         },
-        "admin-1",
       ),
     ).resolves.toBeUndefined();
 
-    expect(writeCalls).toEqual([
+    expect(rpc).toHaveBeenCalledWith(
+      "manage_transit_record",
       {
-        table: "routes",
-        kind: "update",
-        payload: {
+        p_entity_type: "route",
+        p_action: "update",
+        p_entity_id: 12,
+        p_payload: {
           name: "Renamed Loop",
           moderation_status: "approved",
-          is_approved: true,
-          moderated_by: "admin-1",
-          moderated_at: expect.any(String),
+          moderation_note: null,
+          stops: [
+            { kind: "terminal", id: 3 },
+            { kind: "stop", id: 6 },
+          ],
         },
       },
-      { table: "route_stops", kind: "delete", payload: null },
-      {
-        table: "route_stops",
-        kind: "insert",
-        payload: [
-          { route_id: 12, stop_order: 1, terminal_id: 3, stop_id: null },
-          { route_id: 12, stop_order: 2, terminal_id: null, stop_id: 6 },
-        ],
-      },
-    ]);
+    );
   });
 
   it("rejects updates for a missing route", async () => {
-    const { client } = createClient({
-      routes: [{ data: null, error: null }],
+    const { client, rpc } = createClient({});
+    rpc.mockResolvedValue({
+      data: null,
+      error: { code: "P0002", message: "route not found" },
     });
 
     const updateAdminRoute = requireService(services?.updateAdminRoute);
@@ -682,60 +656,48 @@ describe("admin data services", () => {
         client as never,
         12,
         { name: "Renamed Loop" },
-        "admin-1",
       ),
     ).rejects.toThrow("Route not found.");
   });
 
   it("soft-deletes a live route", async () => {
-    const { client, writeCalls } = createClient({
-      routes: [{ data: { id: 12 }, error: null }],
-    });
+    const { client, rpc } = createClient({});
 
     const deleteAdminRoute = requireService(services?.deleteAdminRoute);
     await expect(
-      deleteAdminRoute(client as never, 12, "admin-1"),
+      deleteAdminRoute(client as never, 12),
     ).resolves.toBeUndefined();
 
-    expect(writeCalls).toEqual([
+    expect(rpc).toHaveBeenCalledWith(
+      "manage_transit_record",
       {
-        table: "routes",
-        kind: "update",
-        payload: {
-          is_deleted: true,
-          deleted_at: expect.any(String),
-          deleted_by: "admin-1",
-          is_active: false,
-        },
+        p_entity_type: "route",
+        p_action: "archive",
+        p_entity_id: 12,
+        p_payload: {},
       },
-    ]);
+    );
   });
 
   it("treats deleting an already-deleted route as success", async () => {
-    const { client } = createClient({
-      routes: [
-        { data: null, error: null },
-        { data: { id: 12 }, error: null },
-      ],
-    });
+    const { client } = createClient({});
 
     const deleteAdminRoute = requireService(services?.deleteAdminRoute);
     await expect(
-      deleteAdminRoute(client as never, 12, "admin-1"),
+      deleteAdminRoute(client as never, 12),
     ).resolves.toBeUndefined();
   });
 
   it("rejects deleting a route that never existed", async () => {
-    const { client } = createClient({
-      routes: [
-        { data: null, error: null },
-        { data: null, error: null },
-      ],
+    const { client, rpc } = createClient({});
+    rpc.mockResolvedValue({
+      data: null,
+      error: { code: "P0002", message: "missing route" },
     });
 
     const deleteAdminRoute = requireService(services?.deleteAdminRoute);
     await expect(
-      deleteAdminRoute(client as never, 12, "admin-1"),
+      deleteAdminRoute(client as never, 12),
     ).rejects.toThrow("Route not found.");
   });
 

@@ -609,6 +609,7 @@ function App() {
    */
   const adminPage = (
     renderPage: (userId: string) => ReactNode,
+    allowedRoles: readonly QRouteRole[] = ["admin"],
   ): ReactNode => {
     if (authLoading || roleLoading) {
       return null;
@@ -618,7 +619,7 @@ function App() {
       return <Navigate to="/login" replace />;
     }
 
-    if (currentUserRole !== "admin") {
+    if (!currentUserRole || !allowedRoles.includes(currentUserRole)) {
       return <Navigate to="/home" replace />;
     }
 
@@ -893,7 +894,7 @@ function App() {
                 path="/admin/routes"
                 element={adminPage(() => (
                   <RouteManagement />
-                ))}
+                ), ["admin", "moderator"])}
               />
 
               <Route

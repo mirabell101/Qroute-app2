@@ -43,6 +43,7 @@ export type ContributionInput =
 export interface SubmitResult {
   routeId: number | null;
   points: { kind: PointKind; id: number }[];
+  moderationStatus: "pending" | "approved";
 }
 
 export interface MyContribution {
@@ -82,6 +83,40 @@ export interface TransitCatalog {
 }
 
 export const pointKey = (kind: PointKind, id: number) => `${kind}-${id}`;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isSubmitPoint(
+  value: unknown,
+): value is { kind: PointKind; id: number } {
+  return (
+    isRecord(value) &&
+    (value.kind === "terminal" || value.kind === "stop") &&
+    typeof value.id === "number" &&
+    Number.isSafeInteger(value.id)
+  );
+}
+
+function isSubmitResult(
+  value: unknown,
+): value is {
+  route_id: number | null;
+  points: { kind: PointKind; id: number }[];
+  moderation_status: "pending" | "approved";
+} {
+  return (
+    isRecord(value) &&
+    (value.route_id === null ||
+      (typeof value.route_id === "number" &&
+        Number.isSafeInteger(value.route_id))) &&
+    (value.moderation_status === "pending" ||
+      value.moderation_status === "approved") &&
+    Array.isArray(value.points) &&
+    value.points.every(isSubmitPoint)
+  );
+}
 
 export async function getTransportOptions(
   currentUserId: string | null | undefined = undefined,
@@ -340,12 +375,15 @@ export async function submitContribution(
 
   if (error) throw new Error(error.message);
 
-  const result = data as {
-    route_id: number | null;
-    points: { kind: PointKind; id: number }[];
-  };
+  if (!isSubmitResult(data)) {
+    throw new Error("Contribution service returned an invalid response.");
+  }
 
-  return { routeId: result.route_id, points: result.points };
+  return {
+    routeId: data.route_id,
+    points: data.points,
+    moderationStatus: data.moderation_status,
+  };
 }
 
 interface OwnRow {

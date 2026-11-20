@@ -1138,10 +1138,15 @@ export default function Contribution({
       resetForm();
       void loadMine();
 
+      const autoApproved = result.moderationStatus === "approved";
       setNotice(
         photoFailures > 0
-          ? `Submitted for admin review, but ${photoFailures} photo(s) could not be uploaded.`
-          : "Submitted! An admin will review it before it appears on the map."
+          ? autoApproved
+            ? `Submitted and approved, but ${photoFailures} photo(s) could not be uploaded.`
+            : `Submitted for admin review, but ${photoFailures} photo(s) could not be uploaded.`
+          : autoApproved
+            ? "Submitted and approved. It can now appear on the map."
+            : "Submitted! An admin will review it before it appears on the map."
       );
     } catch (error: unknown) {
       setFormError(

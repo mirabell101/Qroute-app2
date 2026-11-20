@@ -5,13 +5,6 @@ export interface AdminRouteStopInput {
   id: number;
 }
 
-export interface AdminRouteCreateInput {
-  name: string;
-  transportTypeId: number;
-  variantId: number;
-  stops: AdminRouteStopInput[];
-}
-
 export interface AdminRouteUpdateInput {
   name?: string;
   transportTypeId?: number;
@@ -67,43 +60,6 @@ function parseRouteStops(value: unknown): AdminRouteStopInput[] | null {
     stops.push({ kind, id });
   }
   return stops;
-}
-
-export function parseAdminRouteCreateInput(
-  value: unknown,
-): ParseResult<AdminRouteCreateInput> {
-  if (!isRecord(value)) {
-    return { data: null, error: "Route details are required." };
-  }
-
-  const name = parseRouteName(value.name);
-  const transportTypeId = parsePositiveInteger(value.transportTypeId);
-  const variantId = parsePositiveInteger(value.variantId);
-  const stops = parseRouteStops(value.stops);
-
-  if (!name) {
-    return {
-      data: null,
-      error: `Route name must be between 1 and ${routeNameMaxLength} characters.`,
-    };
-  }
-  if (transportTypeId === null) {
-    return { data: null, error: "Choose a valid transport type." };
-  }
-  if (variantId === null) {
-    return { data: null, error: "Choose a valid transport variant." };
-  }
-  if (!stops) {
-    return {
-      data: null,
-      error: `A route needs between ${routeStopsMinimum} and ${routeStopsMaximum} ordered stops.`,
-    };
-  }
-
-  return {
-    data: { name, transportTypeId, variantId, stops },
-    error: null,
-  };
 }
 
 export function parseAdminRouteUpdateInput(
