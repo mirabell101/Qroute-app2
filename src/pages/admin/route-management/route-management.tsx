@@ -82,6 +82,7 @@ interface ManagementRow {
   status: string;
   moderationStatus: "pending" | "approved" | "rejected" | null;
   isActive: boolean;
+  isBanned: boolean;
   isDeleted: boolean;
   record: RecordData;
 }
@@ -472,6 +473,7 @@ export default function RouteManagement() {
       status: recordStatus(record),
       moderationStatus: record.moderation_status,
       isActive: record.is_active === true,
+      isBanned: record.is_banned === true,
       isDeleted: record.is_deleted === true,
       record,
     }));
@@ -486,6 +488,7 @@ export default function RouteManagement() {
       status: recordStatus(record),
       moderationStatus: record.moderation_status,
       isActive: record.is_active === true,
+      isBanned: record.is_banned === true,
       isDeleted: record.is_deleted === true,
       record,
     }));
@@ -500,6 +503,7 @@ export default function RouteManagement() {
       status: recordStatus(record),
       moderationStatus: record.moderation_status,
       isActive: record.is_active,
+      isBanned: record.is_banned === true,
       isDeleted: record.is_deleted,
       record,
     }));
@@ -513,6 +517,7 @@ export default function RouteManagement() {
       status: "Managed",
       moderationStatus: null,
       isActive: true,
+      isBanned: false,
       isDeleted: false,
       record,
     }));
@@ -733,7 +738,7 @@ export default function RouteManagement() {
         ? window.prompt("Optional rejection note (500 characters maximum):", "") ?? null
         : undefined;
     if (moderationNote === null) return;
-    if (moderationNote.length > 500) {
+    if (moderationNote !== undefined && moderationNote.length > 500) {
       setErrorMessage("Rejection notes must be 500 characters or fewer.");
       return;
     }
@@ -750,6 +755,32 @@ export default function RouteManagement() {
       refreshData();
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to update moderation status.");
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  const handleMapInformationAction = async (
+    row: ManagementRow,
+    action: "mute" | "unmute" | "ban" | "unban",
+  ) => {
+    if (!userId || !role || row.entityType === "transport_type" || row.isDeleted) {
+      return;
+    }
+    if (
+      action === "ban" &&
+      !window.confirm(`Ban "${row.name}" from public map information?`)
+    ) {
+      return;
+    }
+
+    setIsMutating(true);
+    setErrorMessage(null);
+    try {
+      await moderateRouteManagementRecord(userId, row.entityType, row.id, action);
+      refreshData();
+    } catch (error: unknown) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to update map information status.");
     } finally {
       setIsMutating(false);
     }
@@ -917,10 +948,16 @@ export default function RouteManagement() {
                           <td className="px-5 py-4">
                             <div className="flex flex-wrap justify-center gap-2">
                               <button type="button" onClick={() => setSelectedRow(row)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#EAF1F8] px-3 py-2 text-xs font-semibold text-[#102E4D] hover:bg-[#DCE9F7]"><Eye size={13} />View</button>
-                              {role && row.moderationStatus === "pending" && (
+                              {role && row.moderationStatus === "pending" && !row.isDeleted && !row.isBanned && (
                                 <>
-                                  <button type="button" disabled={isMutating} onClick={() => void handleModeration(row, "approve")} className="inline-flex items-center gap-1 rounded-lg bg-green-50 px-2.5 py-2 text-xs font-semibold text-green-700 hover:bg-green-100 disabled:opacity-50"><Check size={13} />Approve</button>
+                                  {row.isActive && <button type="button" disabled={isMutating} onClick={() => void handleModeration(row, "approve")} className="inline-flex items-center gap-1 rounded-lg bg-green-50 px-2.5 py-2 text-xs font-semibold text-green-700 hover:bg-green-100 disabled:opacity-50"><Check size={13} />Approve</button>}
                                   <button type="button" disabled={isMutating} onClick={() => void handleModeration(row, "reject")} className="inline-flex items-center gap-1 rounded-lg bg-red-50 px-2.5 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"><Ban size={13} />Reject</button>
+                                </>
+                              )}
+                              {role && row.entityType !== "transport_type" && !row.isDeleted && (
+                                <>
+                                  <button type="button" disabled={isMutating} onClick={() => void handleMapInformationAction(row, row.isActive ? "mute" : "unmute")} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">{row.isActive ? "Mute" : "Unmute"}</button>
+                                  <button type="button" disabled={isMutating} onClick={() => void handleMapInformationAction(row, row.isBanned ? "unban" : "ban")} className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50">{row.isBanned ? "Unban" : "Ban"}</button>
                                 </>
                               )}
                               {isAdmin && row.entityType === "transport_type" && <button type="button" onClick={() => void openEditor(row)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]"><Pencil size={13} />Edit</button>}

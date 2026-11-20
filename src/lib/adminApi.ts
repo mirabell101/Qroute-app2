@@ -563,7 +563,7 @@ export async function moderateRouteManagementRecord(
   expectedUserId: string,
   entityType: RouteManagementEntityType,
   id: number,
-  action: "approve" | "reject",
+  action: "approve" | "reject" | "mute" | "unmute" | "ban" | "unban",
   moderationNote?: string,
 ): Promise<void> {
   await requestRouteManagement(`/moderation/${entityType}/${id}`, expectedUserId, {

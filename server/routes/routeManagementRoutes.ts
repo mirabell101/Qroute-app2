@@ -10,6 +10,15 @@ import { getSupabaseClientForAccessToken } from "../supabaseClient.ts";
 const router = Router();
 const entityTypes = ["route", "stop", "terminal"] as const;
 type EntityType = (typeof entityTypes)[number];
+const moderationActions = [
+  "approve",
+  "reject",
+  "mute",
+  "unmute",
+  "ban",
+  "unban",
+] as const;
+type ModerationAction = (typeof moderationActions)[number];
 
 function getAccessToken(res: Response): string | null {
   const token = res.locals.accessToken;
@@ -27,6 +36,13 @@ function parseEntityType(value: string): EntityType | null {
     : null;
 }
 
+function isModerationAction(value: unknown): value is ModerationAction {
+  return (
+    typeof value === "string" &&
+    moderationActions.some((action) => action === value)
+  );
+}
+
 function sendError(
   res: Response,
   error: unknown,
@@ -36,11 +52,61 @@ function sendError(
     error && typeof error === "object" && "code" in error
       ? error.code
       : undefined;
+  const message =
+    error && typeof error === "object" && "message" in error
+      ? error.message
+      : undefined;
+  const details =
+    error && typeof error === "object" && "details" in error
+      ? error.details
+      : undefined;
 
   if (code === "42501") {
     res.status(403).json({
       success: false,
       message: "You are not authorized to perform this action.",
+    });
+    return;
+  }
+
+  if (
+    code === "P0001" &&
+    message === "route_management_shared_pending_point"
+  ) {
+    let conflict: Record<string, unknown> | null = null;
+    if (typeof details === "string") {
+      try {
+        const parsed: unknown = JSON.parse(details);
+        conflict = getObjectBody(parsed);
+      } catch {
+        conflict = null;
+      }
+    }
+
+    const pointType =
+      typeof conflict?.pointType === "string" ? conflict.pointType : "point";
+    const pointName =
+      typeof conflict?.pointName === "string" ? ` "${conflict.pointName}"` : "";
+    const routes = Array.isArray(conflict?.routes)
+      ? conflict.routes
+          .filter(
+            (route): route is { id: number; name: string } =>
+              route !== null &&
+              typeof route === "object" &&
+              "id" in route &&
+              typeof route.id === "number" &&
+              "name" in route &&
+              typeof route.name === "string",
+          )
+          .map((route) => `${route.name} (ID ${route.id})`)
+      : [];
+    const routeDetails = routes.length
+      ? routes.join(", ")
+      : "another route";
+
+    res.status(409).json({
+      success: false,
+      message: `Cannot approve this route: pending ${pointType}${pointName} is also linked to ${routeDetails}.`,
     });
     return;
   }
@@ -152,7 +218,7 @@ router.post("/moderation/:entityType/:id", async (req, res) => {
   if (
     !entityType ||
     id === null ||
-    (action !== "approve" && action !== "reject") ||
+    !isModerationAction(action) ||
     Object.keys(body ?? {}).some((key) => !["action", "moderation_note"].includes(key)) ||
     (body?.moderation_note !== undefined &&
       (typeof body.moderation_note !== "string" ||
@@ -167,7 +233,9 @@ router.post("/moderation/:entityType/:id", async (req, res) => {
 
   try {
     const result = await callManagementRpc(res, entityType, action, id, {
-      moderation_note: body?.moderation_note ?? "",
+      ...(action === "reject"
+        ? { moderation_note: body?.moderation_note ?? "" }
+        : {}),
     });
     if (!res.headersSent) res.json({ success: true, result });
   } catch (error: unknown) {

@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 type QueryResult = {
   data: unknown;
-  error: { code?: string; message: string } | null;
+  error: { code?: string; message: string; details?: string } | null;
   count?: number | null;
 };
 
@@ -468,6 +468,68 @@ describe("admin API authorization", () => {
     );
   });
 
+  it.each(["mute", "unmute", "ban", "unban"] as const)(
+    "allows a verified Moderator to %s transit information",
+    async (action) => {
+      const response = await fetch(
+        `${baseUrl}/api/route-management/moderation/stop/12`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer moderator-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ action }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(mocks.requestRpc).toHaveBeenCalledWith(
+        "manage_transit_record",
+        expect.objectContaining({
+          p_entity_type: "stop",
+          p_action: action,
+          p_entity_id: 12,
+        }),
+      );
+    },
+  );
+
+  it("returns shared pending-point details when Route approval is blocked", async () => {
+    mocks.requestRpc.mockResolvedValue({
+      data: null,
+      error: {
+        code: "P0001",
+        message: "route_management_shared_pending_point",
+        details: JSON.stringify({
+          pointType: "Stop",
+          pointName: "Shared Stop",
+          routes: [{ id: 22, name: "Other Route" }],
+        }),
+      },
+    });
+
+    const response = await fetch(
+      `${baseUrl}/api/route-management/moderation/route/12`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer moderator-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "approve" }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      success: false,
+      message: expect.stringContaining("Shared Stop"),
+    });
+    expect(payload.message).toContain("Other Route");
+  });
+
   it("does not allow a Moderator to edit managed transit records", async () => {
     const response = await fetch(
       `${baseUrl}/api/route-management/records/stop/12`,
@@ -478,6 +540,19 @@ describe("admin API authorization", () => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ name: "Changed" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.requestRpc).not.toHaveBeenCalled();
+  });
+
+  it("does not allow a Moderator to archive managed transit records", async () => {
+    const response = await fetch(
+      `${baseUrl}/api/route-management/records/stop/12`,
+      {
+        method: "DELETE",
+        headers: { Authorization: "Bearer moderator-token" },
       },
     );
 
