@@ -26,7 +26,6 @@ import {
   ShieldCheck,
   Map,
   UserCog,
-  ClipboardList,
   EyeOff,
   Eye,
   Activity,
