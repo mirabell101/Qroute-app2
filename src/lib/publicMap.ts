@@ -41,7 +41,10 @@ export interface PublicMapData {
 
 let publicMapDataRequest: Promise<PublicMapData> | null = null;
 
-export async function hasMapAuthSession(): Promise<boolean> {
+export async function hasMapAuthSession(
+  currentUserId: string | null | undefined = undefined,
+): Promise<boolean> {
+  if (currentUserId !== undefined) return currentUserId !== null;
   const { data } = await supabase.auth.getSession();
   return data.session !== null;
 }

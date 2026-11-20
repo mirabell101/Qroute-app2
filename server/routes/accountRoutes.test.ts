@@ -27,6 +27,7 @@ const uploadedPhotos: Array<{
   userId: string | undefined;
   path: string;
   contentType: string;
+  upsert: boolean;
   contents: Buffer;
 }> = [];
 const profilePhotos = new Set<string>();
@@ -205,19 +206,19 @@ describe("authenticated account routes", () => {
                 : null,
               error: null,
             }),
-            createSignedUrl: async (path: string) => ({
-              data: { signedUrl: `https://signed.example/${path}` },
-              error: null,
+            getPublicUrl: (path: string) => ({
+              data: { publicUrl: `https://public.example/${path}` },
             }),
             upload: async (
               path: string,
               contents: Buffer,
-              options: { contentType: string },
+              options: { contentType: string; upsert: boolean },
             ) => {
               uploadedPhotos.push({
                 userId: user?.id,
                 path,
                 contentType: options.contentType,
+                upsert: options.upsert,
                 contents,
               });
               if (user?.id) profilePhotos.add(user.id);
@@ -456,34 +457,35 @@ describe("authenticated account routes", () => {
   });
 
   it.each(["image/jpeg", "image/png", "image/webp"])(
-    "uploads a %s photo to the verified user's private folder",
+    "uploads a %s photo to the verified user's profile path",
     async (contentType) => {
-    const response = await fetch(`${baseUrl}/api/account/photo`, {
-      method: "PUT",
-      headers: {
-        Authorization: "Bearer token-user-1",
-        "Content-Type": contentType,
-      },
-      body: new Uint8Array([1, 2, 3]),
-      },
-    );
+      const response = await fetch(`${baseUrl}/api/account/photo?userId=user-2`, {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer token-user-1",
+          "Content-Type": contentType,
+        },
+        body: new Uint8Array([1, 2, 3]),
+      });
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      success: true,
-      account: {
-        username: "commuter_one",
-        profilePhotoUrl: "https://signed.example/user-1/profile",
-      },
-    });
-    expect(uploadedPhotos).toHaveLength(1);
-    expect(uploadedPhotos[0]).toMatchObject({
-      userId: "user-1",
-      path: "user-1/profile",
-      contentType,
-    });
-    expect(uploadedPhotos[0].contents).toEqual(Buffer.from([1, 2, 3]));
-  });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        success: true,
+        account: {
+          username: "commuter_one",
+          profilePhotoUrl: "https://public.example/user-1/profile",
+        },
+      });
+      expect(uploadedPhotos).toHaveLength(1);
+      expect(uploadedPhotos[0]).toMatchObject({
+        userId: "user-1",
+        path: "user-1/profile",
+        contentType,
+        upsert: true,
+      });
+      expect(uploadedPhotos[0].contents).toEqual(Buffer.from([1, 2, 3]));
+    },
+  );
 
   it("rejects unsupported photo types without uploading", async () => {
     const response = await fetch(`${baseUrl}/api/account/photo`, {

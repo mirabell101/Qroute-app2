@@ -23,6 +23,7 @@ import {
 import AccountAvatar from "@/components/account/AccountAvatar";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import { parseSavedMapSelection } from "@/lib/routeMap";
+import { parseCommunityMapLocation } from "@/lib/communityMapLocation";
 
 import MapSidebar from "@/components/map-layout/MapSidebar";
 import MapHeader from "@/components/map-layout/MapHeader";
@@ -44,7 +45,7 @@ export default function Home({
   currentUserId,
   onLogout,
 }: HomeProps) {
-  const map = useTransitMap();
+  const map = useTransitMap(currentUserId);
 
   const { account, userId: profileUserId } = useAccountProfile();
   const profileAccount =
@@ -90,6 +91,17 @@ export default function Home({
     savedSelection,
     savedSelectionKey,
   ]);
+
+  useEffect(() => {
+    const pinnedLocation = parseCommunityMapLocation(location.state);
+    if (!pinnedLocation) return;
+    map.handleCommunityMapLocation(
+      pinnedLocation.latitude,
+      pinnedLocation.longitude,
+      pinnedLocation.label,
+    );
+    navigate("/home", { replace: true, state: null });
+  }, [location.state, map, navigate]);
 
   const handleNavigation = (name: string) => {
     if (name === "Recents") {

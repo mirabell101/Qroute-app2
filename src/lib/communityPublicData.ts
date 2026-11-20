@@ -3,7 +3,7 @@ import type { CommunityPost } from "./community.ts";
 
 export type PublicCommunityPostData = Omit<
   CommunityPost,
-  "author_id" | "photo_paths" | "photos" | "is_hidden"
+  "photo_paths" | "photos" | "is_hidden"
 > & {
   photo_paths?: unknown;
 };

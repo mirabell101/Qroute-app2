@@ -61,7 +61,7 @@ export default function Base({
   const profileAccount =
     profileUserId === currentUserId ? account : null;
 
-  const map = useTransitMap();
+  const map = useTransitMap(currentUserId);
 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);

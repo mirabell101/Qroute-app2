@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
   storageFrom: vi.fn(),
   storageDownload: vi.fn(),
+  adminAuthorIds: [] as string[],
+  rolesByToken: {} as Record<string, string[]>,
   reportInsert: vi.fn(),
   insertResult: {
     data: { id: 101 },
@@ -63,6 +65,12 @@ describe("Community routes", () => {
       created_at: "2026-11-18T00:00:00.000Z",
     };
     mocks.insertResult = { data: { id: 101 }, error: null };
+    mocks.adminAuthorIds = [];
+    mocks.rolesByToken = {
+      "registered-token": ["registered_user"],
+      "admin-token": ["admin"],
+      "regular-token": [],
+    };
     mocks.rpc.mockResolvedValue({ data: { posts: [] }, error: null });
     mocks.storageDownload.mockResolvedValue({
       data: new Blob([new Uint8Array([0xff, 0xd8, 0xff])], {
@@ -76,6 +84,10 @@ describe("Community routes", () => {
         "registered-token": {
           id: "reporter-1",
           email: "rider@example.com",
+        },
+        "admin-token": {
+          id: "admin-1",
+          email: "admin@example.com",
         },
         "regular-token": {
           id: "regular-1",
@@ -102,7 +114,19 @@ describe("Community routes", () => {
             filters[column] = value;
             return query;
           }),
-          in: vi.fn(() => query),
+          in: vi.fn((column: string, values: string[]) => {
+            filters[column] = values as unknown as string;
+            return query;
+          }),
+          then: (resolve: (value: {
+            data: { role: string }[];
+            error: null;
+          }) => unknown) => Promise.resolve({
+            data: table === "user_roles"
+              ? (mocks.rolesByToken[token] ?? []).map((role) => ({ role }))
+              : [],
+            error: null,
+          }).then(resolve),
           order: vi.fn(async () => ({
             data: table === "community_post_comments"
               ? [Object.fromEntries(
@@ -115,8 +139,26 @@ describe("Community routes", () => {
           })),
           maybeSingle: vi.fn(async () => {
             if (table === "user_roles") {
-              return token === "registered-token"
-                ? { data: { role: "registered_user" }, error: null }
+              const roles = (mocks.rolesByToken[token] ?? [])
+                .filter((role) =>
+                  filters.role === undefined ||
+                  filters.role === role ||
+                  (Array.isArray(filters.role) && filters.role.includes(role))
+                );
+              if (roles.length > 1) {
+                return {
+                  data: null,
+                  error: { message: "multiple role rows" },
+                };
+              }
+              const role = roles[0] ?? null;
+              const allowedRoles = filters.role;
+              return role && (
+                allowedRoles === undefined ||
+                allowedRoles === role ||
+                (Array.isArray(allowedRoles) && allowedRoles.includes(role))
+              )
+                ? { data: { role }, error: null }
                 : { data: null, error: null };
             }
             if (
@@ -143,8 +185,24 @@ describe("Community routes", () => {
       },
     }));
 
+    const adminRolesQuery = {
+      select: vi.fn(),
+      in: vi.fn(),
+      eq: vi.fn(),
+      then: (resolve: (value: {
+        data: { user_id: string }[];
+        error: null;
+      }) => unknown) => Promise.resolve({
+        data: mocks.adminAuthorIds.map((user_id) => ({ user_id })),
+        error: null,
+      }).then(resolve),
+    };
+    adminRolesQuery.select.mockReturnValue(adminRolesQuery);
+    adminRolesQuery.in.mockReturnValue(adminRolesQuery);
+    adminRolesQuery.eq.mockReturnValue(adminRolesQuery);
     mocks.getAdminClient.mockReturnValue({
       from: (table: string) => {
+        if (table === "user_roles") return adminRolesQuery;
         throw new Error(`Unexpected privileged table: ${table}`);
       },
       storage: { from: mocks.storageFrom },
@@ -165,6 +223,41 @@ describe("Community routes", () => {
   afterEach(async () => {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
+    );
+  });
+
+  it("returns only safe Google photo URLs for public Community authors", async () => {
+    mocks.rpc.mockResolvedValueOnce({
+      data: [
+        {
+          author_id: "author-1",
+          google_profile_photo_url: "https://images.example/author-1",
+        },
+        {
+          author_id: "author-2",
+          google_profile_photo_url: "javascript:alert(1)",
+        },
+        {
+          author_id: "author-3",
+          google_profile_photo_url: "http://images.example/author-3",
+        },
+      ],
+      error: null,
+    });
+
+    const response = await fetch(
+      `${baseUrl}/api/community/author-google-photos`,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      photos: {
+        "author-1": "https://images.example/author-1",
+      },
+    });
+    expect(mocks.rpc).toHaveBeenCalledWith(
+      "get_public_community_author_google_photos",
     );
   });
 
@@ -205,6 +298,114 @@ describe("Community routes", () => {
       description: "Repeated promotional content.",
     });
     expect(mocks.getAdminClient).not.toHaveBeenCalled();
+  });
+
+  it("allows Admins to report through the authenticated Community flow", async () => {
+    const response = await fetch(
+      `${baseUrl}/api/community/posts/20000000-0000-4000-8000-000000000001/reports`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          targetType: "post",
+          reason: "Spam or misleading content",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(201);
+    expect(mocks.reportInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ reported_user_id: "author-1" }),
+    );
+  });
+
+  it("allows Admins to publish a post through the authenticated Community flow", async () => {
+    const response = await fetch(`${baseUrl}/api/community/posts`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer admin-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        title: "Admin post",
+        content: "Admin Community content.",
+        start: { name: "Start", latitude: 14.5, longitude: 121 },
+        destination: { name: "End", latitude: 14.6, longitude: 121.1 },
+        transportTypeId: null,
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({
+      success: true,
+      post: expect.objectContaining({ author_is_admin: true }),
+    }));
+  });
+
+  it("resolves Admin publishing when the account also has the Registered User role", async () => {
+    mocks.rolesByToken["admin-token"] = ["registered_user", "admin"];
+    const response = await fetch(`${baseUrl}/api/community/posts`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer admin-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        title: "Admin post",
+        content: "Admin Community content.",
+        start: { name: "Start", latitude: 14.5, longitude: 121 },
+        destination: { name: "End", latitude: 14.6, longitude: 121.1 },
+        transportTypeId: null,
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({
+      success: true,
+      post: expect.objectContaining({ author_is_admin: true }),
+    }));
+  });
+
+  it("allows Admins to add comments through the authenticated Community flow", async () => {
+    const response = await fetch(
+      `${baseUrl}/api/community/posts/20000000-0000-4000-8000-000000000001/comments`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer admin-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ content: "Admin comment." }),
+      },
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      comment: { id: 101, author_is_admin: true },
+    });
+  });
+
+  it("adds a server-verified Admin marker to comment authors", async () => {
+    mocks.adminAuthorIds = ["comment-author-1"];
+    const response = await fetch(
+      `${baseUrl}/api/community/comments?postIds=20000000-0000-4000-8000-000000000001`,
+      {
+        headers: { Authorization: "Bearer registered-token" },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      comments: [expect.objectContaining({
+        author_id: "comment-author-1",
+        author_is_admin: true,
+      })],
+    });
   });
 
   it("creates comment and user reports with the comment's actual post and author", async () => {

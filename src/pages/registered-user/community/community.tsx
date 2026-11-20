@@ -13,7 +13,6 @@ import {
   Send,
   ThumbsDown,
   ThumbsUp,
-  UserCircle,
   X,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -44,6 +43,7 @@ import {
   selectCurrentCommunityVoteStates,
 } from "@/lib/communityRealtimeState";
 import type {
+  CommunityAuthorPhotoUrls,
   CommunityComment,
   CommunityPoint,
   CommunityPost,
@@ -141,22 +141,24 @@ function CommunityPhoto({
   );
 }
 
-function CommunityAuthorAvatar({ photoUrl }: { photoUrl?: string | null }) {
-  const [failedPhotoUrl, setFailedPhotoUrl] = useState<string | null>(null);
-  const fallback = (
-    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e8eef3] text-[#12395A]">
-      <UserCircle size={22} />
-    </span>
-  );
-
-  if (!photoUrl || failedPhotoUrl === photoUrl) return fallback;
+function CommunityAuthorAvatar({
+  photoUrl,
+  googlePhotoUrl,
+}: {
+  photoUrl?: string | null;
+  googlePhotoUrl?: string | null;
+}) {
   return (
-    <img
-      src={photoUrl}
-      alt=""
-      aria-hidden="true"
-      onError={() => setFailedPhotoUrl(photoUrl)}
-      className="h-10 w-10 shrink-0 rounded-full object-cover"
+    <AccountAvatar
+      account={{
+        email: "",
+        username: null,
+        displayName: null,
+        profilePhotoUrl: photoUrl ?? null,
+        googleProfilePhotoUrl: googlePhotoUrl ?? null,
+      }}
+      className="h-10 w-10 bg-[#e8eef3] text-[#12395A]"
+      iconSize={22}
     />
   );
 }
@@ -172,16 +174,17 @@ export default function Community({
   const postsRef = useRef(posts);
   const [communityPhotos, setCommunityPhotos] = useState<{
     userId: string | null;
-    urls: Record<string, string | null>;
+    urls: Record<string, CommunityAuthorPhotoUrls>;
   }>({ userId: null, urls: {} });
   const [votes, setVotes] = useState<Record<string, CommunityVoteType>>({});
   const [votesUserId, setVotesUserId] = useState<string | null>(null);
   const [communityAccessUserId, setCommunityAccessUserId] = useState<string | null>(null);
-  const [hasRegisteredRole, setHasRegisteredRole] = useState(false);
+  const [hasCommunityRole, setHasCommunityRole] = useState(false);
   const [canReceiveRealtime, setCanReceiveRealtime] = useState(false);
   const [locations, setLocations] = useState<ExistingPoint[]>([]);
   const [transportTypes, setTransportTypes] = useState<TransportTypeOption[]>([]);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
+  const [mapRecenterRequests, setMapRecenterRequests] = useState<Record<string, number>>({});
   const [feedFilter, setFeedFilter] = useState<FeedFilter>("Public Feed");
   const [comments, setComments] = useState<Record<string, CommunityComment[]>>({});
   const commentsRef = useRef(comments);
@@ -219,8 +222,8 @@ export default function Community({
   const seenCommentIdsRef = useRef(new Map<string, Set<string>>());
   const pendingCommentsRef = useRef(new Map<string, CommunityComment[]>());
   const commentRevisionRef = useRef(new Map<string, number>());
-  const isRegisteredUser = Boolean(
-    currentUserId && currentUserId === communityAccessUserId && hasRegisteredRole,
+  const isCommunityUser = Boolean(
+    currentUserId && currentUserId === communityAccessUserId && hasCommunityRole,
   );
   const communityAuthorIds = useMemo(() => [...new Set([
     ...posts.map((post) => post.author_id),
@@ -229,7 +232,7 @@ export default function Community({
     typeof authorId === "string" && authorId.trim().length > 0,
   ))].sort(), [posts, comments]);
   const communityPhotoUrls =
-    isRegisteredUser && communityPhotos.userId === currentUserId
+    communityPhotos.userId === (currentUserId ?? "anonymous")
       ? communityPhotos.urls
       : {};
 
@@ -331,7 +334,7 @@ export default function Community({
     setLoading(true);
     setError("");
     try {
-      const nextPosts = await getCommunityPosts(feedFilter === "My Posts" ? "mine" : "feed");
+      const nextPosts = await getCommunityPosts(feedFilter === "My Posts" ? "mine" : "feed", currentUserId);
       setPosts(nextPosts);
       setSelectedPostId((current) =>
         current && nextPosts.some((post) => post.id === current)
@@ -347,23 +350,23 @@ export default function Community({
 
   useEffect(() => {
     let active = true;
-    void getTransitCatalog()
+    void getTransitCatalog(currentUserId)
       .then((catalog) => { if (active) setLocations(catalog.points); })
       .catch(() => { if (active) setNotice("Transit point search is unavailable. You can still select locations on the map."); });
-    void getTransportOptions()
+    void getTransportOptions(currentUserId)
       .then((options) => { if (active) setTransportTypes(options.types); })
       .catch(() => { if (active) setNotice("Transportation types could not be loaded; you can leave that field empty."); });
     return () => {
       active = false;
     };
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError("");
     const scope = feedFilter === "My Posts" ? "mine" : "feed";
-    void getCommunityPosts(scope)
+    void getCommunityPosts(scope, currentUserId)
       .then((nextPosts) => {
         if (!active) return;
         setPosts(nextPosts);
@@ -396,14 +399,14 @@ export default function Community({
       .then((access) => {
         if (active) {
           setCommunityAccessUserId(currentUserId);
-          setHasRegisteredRole(access.canPublishAndVote);
+          setHasCommunityRole(access.canPublishAndVote);
           setCanReceiveRealtime(access.canReceiveRealtime);
         }
       })
       .catch(() => {
         if (active) {
           setCommunityAccessUserId(currentUserId);
-          setHasRegisteredRole(false);
+          setHasCommunityRole(false);
           setCanReceiveRealtime(false);
         }
       });
@@ -411,9 +414,8 @@ export default function Community({
   }, [currentUserId]);
 
   useEffect(() => {
-    if (!currentUserId || !isRegisteredUser) return;
-
-    const existingUrls = communityPhotos.userId === currentUserId
+    const photoOwnerKey = currentUserId ?? "anonymous";
+    const existingUrls = communityPhotos.userId === photoOwnerKey
       ? communityPhotos.urls
       : {};
     const missingAuthorIds = communityAuthorIds.filter(
@@ -422,17 +424,20 @@ export default function Community({
     if (!missingAuthorIds.length) return;
 
     let active = true;
-    void getCommunityProfilePhotoUrls(currentUserId, missingAuthorIds)
+    void getCommunityProfilePhotoUrls(
+      currentUserId && isCommunityUser ? currentUserId : null,
+      missingAuthorIds,
+    )
       .then((urls) => {
         if (!active) return;
         setCommunityPhotos((previous) => {
-          const nextUrls = previous.userId === currentUserId
+          const nextUrls = previous.userId === photoOwnerKey
             ? { ...previous.urls }
             : {};
           for (const authorId of missingAuthorIds) {
-            nextUrls[authorId] = urls[authorId] ?? null;
+            if (urls[authorId]) nextUrls[authorId] = urls[authorId];
           }
-          return { userId: currentUserId, urls: nextUrls };
+          return { userId: photoOwnerKey, urls: nextUrls };
         });
       })
       .catch((photoError: unknown) => {
@@ -448,7 +453,7 @@ export default function Community({
     return () => { active = false; };
   }, [
     currentUserId,
-    isRegisteredUser,
+    isCommunityUser,
     communityAuthorIds,
     communityPhotos,
   ]);
@@ -520,9 +525,9 @@ export default function Community({
       const openPostIds = Object.keys(commentsOpenRef.current)
         .filter((postId) => commentsOpenRef.current[postId]);
       const [freshPosts, ownVotes, freshComments] = await Promise.all([
-        getCommunityPosts(feedFilter === "My Posts" ? "mine" : "feed"),
-        getMyCommunityVotes(),
-        getCommunityComments(openPostIds),
+        getCommunityPosts(feedFilter === "My Posts" ? "mine" : "feed", currentUserId),
+        currentUserId ? getMyCommunityVotes() : Promise.resolve([]),
+        getCommunityComments(openPostIds, currentUserId),
       ]);
       if (!active) return;
 
@@ -612,7 +617,7 @@ export default function Community({
           created_at: payload.created_at,
         });
         if (commentsOpenRef.current[payload.post_id]) {
-          void getCommunityComments([payload.post_id])
+          void getCommunityComments([payload.post_id], currentUserId)
             .then((freshComments) => {
               if (active) mergeCommunityComments(payload.post_id, freshComments);
             })
@@ -769,9 +774,9 @@ export default function Community({
   };
 
   const submitPost = async () => {
-    if (!currentUserId || !isRegisteredUser) {
+    if (!currentUserId || !isCommunityUser) {
       if (currentUserId) {
-        setError("A registered-user account is required to publish community posts.");
+        setError("A Registered User or Admin account is required to publish community posts.");
         return;
       }
       promptLogin();
@@ -810,9 +815,9 @@ export default function Community({
   };
 
   const reactToPost = (post: CommunityPost, type: CommunityVoteType) => {
-    if (!currentUserId || !isRegisteredUser) {
+    if (!currentUserId || !isCommunityUser) {
       if (currentUserId) {
-        setError("A registered-user account is required to vote.");
+        setError("A Registered User or Admin account is required to vote.");
         return;
       }
       promptLogin();
@@ -860,7 +865,7 @@ export default function Community({
     if (!opening || comments[postId]) return;
     setCommentsLoading((previous) => ({ ...previous, [postId]: true }));
     try {
-      const detail = await getCommunityPost(postId);
+      const detail = await getCommunityPost(postId, currentUserId);
       mergeCommunityComments(postId, detail.comments);
     } catch (commentError) {
       setError(commentError instanceof Error ? commentError.message : "Unable to load comments.");
@@ -870,9 +875,9 @@ export default function Community({
   };
 
   const submitComment = async (postId: string) => {
-    if (!currentUserId || !isRegisteredUser) {
+    if (!currentUserId || !isCommunityUser) {
       if (currentUserId) {
-        setError("A registered-user account is required to comment.");
+        setError("A Registered User or Admin account is required to comment.");
         return;
       }
       promptLogin();
@@ -890,9 +895,9 @@ export default function Community({
   };
 
   const openReportDialog = (target: CommunityReportTarget) => {
-    if (!currentUserId || !isRegisteredUser) {
+    if (!currentUserId || !isCommunityUser) {
       if (currentUserId) {
-        setError("A registered-user account is required to submit a report.");
+        setError("A Registered User or Admin account is required to submit a report.");
         return;
       }
       promptLogin();
@@ -1057,7 +1062,7 @@ export default function Community({
           <section className="min-w-0">
             <button
               type="button"
-              onClick={() => currentUserId && isRegisteredUser ? setShowCreatePost(true) : currentUserId ? setError("A registered-user account is required to publish community posts.") : promptLogin()}
+              onClick={() => currentUserId && isCommunityUser ? setShowCreatePost(true) : currentUserId ? setError("A Registered User or Admin account is required to publish community posts.") : promptLogin()}
               className="group flex w-full items-center gap-4 rounded-xl border border-gray-200 bg-white px-5 py-4 text-left shadow-sm transition hover:bg-gray-50 hover:shadow-md"
             >
               <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#12395A] text-white"><Plus size={21} /></span>
@@ -1084,9 +1089,24 @@ export default function Community({
                   <article key={post.id} className={`rounded-xl border bg-white p-4 shadow-sm ${selectedPost?.id === post.id ? "border-[#12395A] ring-1 ring-[#12395A]/15" : "border-gray-200"}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-3">
-                        <CommunityAuthorAvatar photoUrl={communityPhotoUrls[post.author_id ?? ""]} />
+                        <CommunityAuthorAvatar
+                          photoUrl={communityPhotoUrls[post.author_id ?? ""]?.profilePhotoUrl}
+                          googlePhotoUrl={
+                            communityPhotoUrls[post.author_id ?? ""]?.googleProfilePhotoUrl ??
+                            (post.author_id === currentUserId
+                              ? profileAccount?.googleProfilePhotoUrl
+                              : null)
+                          }
+                        />
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold">{post.author_display_name}</p>
+                          <p className="flex min-w-0 items-center gap-1.5 truncate text-sm font-semibold">
+                            <span className="truncate">{post.author_display_name}</span>
+                            {post.author_is_admin && (
+                              <span aria-label="Admin" className="shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-[#12395A]">
+                                Admin
+                              </span>
+                            )}
+                          </p>
                           <p className="text-xs text-gray-500">{formatDate(post.created_at)}</p>
 
                           {feedFilter === "My Posts" && post.is_hidden && (
@@ -1102,7 +1122,26 @@ export default function Community({
                           )}
                         </div>
                       </div>
-                      <button type="button" onClick={() => setSelectedPostId(post.id)} className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold text-[#12395A] hover:bg-blue-50">View map</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedPostId(post.id);
+                          setMapRecenterRequests((previous) => ({
+                            ...previous,
+                            [post.id]: (previous[post.id] ?? 0) + 1,
+                          }));
+                          window.requestAnimationFrame(() => {
+                            document
+                              .querySelector<HTMLElement>(
+                                `[data-community-map-post="${post.id}"]`,
+                              )
+                              ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                          });
+                        }}
+                        className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold text-[#12395A] hover:bg-blue-50"
+                      >
+                        Locate on Map
+                      </button>
                     </div>
                     <button type="button" onClick={() => setSelectedPostId(post.id)} className="mt-3 block w-full text-left">
                       <h2 className="text-base font-bold text-gray-900">{post.title}</h2>
@@ -1126,13 +1165,16 @@ export default function Community({
                     )}
                     {selectedPost?.id === post.id && (
                       <div className="mt-3">
-                        <CommunityPostMap
+                        <div data-community-map-post={post.id}>
+                          <CommunityPostMap
                           start={{ name: post.start_name, latitude: post.start_latitude, longitude: post.start_longitude }}
                           destination={{ name: post.destination_name, latitude: post.destination_latitude, longitude: post.destination_longitude }}
                           transportType={post.transport_type ?? ""}
                           routeColor={transportTypes.find((type) => type.id === post.transport_type_id)?.color ?? "#2563eb"}
+                          recenterRequest={mapRecenterRequests[post.id] ?? 0}
                           height="h-[300px]"
-                        />
+                          />
+                        </div>
                         <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600">
                           <p><strong>Start</strong><br />{post.start_name}</p>
                           <p><strong>Destination</strong><br />{post.destination_name}</p>
@@ -1144,7 +1186,7 @@ export default function Community({
                       <button type="button" onClick={() => void reactToPost(post, "upvote")} aria-pressed={currentUserId === votesUserId && votes[post.id] === "upvote"} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm ${currentUserId === votesUserId && votes[post.id] === "upvote" ? "bg-green-50 text-green-700" : "text-gray-600 hover:bg-gray-100"}`}><ThumbsUp size={16} />{post.upvotes}</button>
                       <button type="button" onClick={() => void reactToPost(post, "downvote")} aria-pressed={currentUserId === votesUserId && votes[post.id] === "downvote"} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm ${currentUserId === votesUserId && votes[post.id] === "downvote" ? "bg-red-50 text-red-700" : "text-gray-600 hover:bg-gray-100"}`}><ThumbsDown size={16} />{post.downvotes}</button>
                       <button type="button" onClick={() => void toggleComments(post.id)} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 hover:bg-gray-100"><MessageSquare size={16} />{post.comment_count} Comments</button>
-                      {isRegisteredUser && (
+                      {isCommunityUser && (
                         <>
                           <button type="button" onClick={() => openReportDialog({ kind: "post", postId: post.id })} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 hover:bg-gray-100"><Flag size={16} />Report post</button>
                           <button type="button" onClick={() => openReportDialog({ kind: "post-author", postId: post.id })} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-gray-600 hover:bg-gray-100"><Flag size={16} />Report author</button>
@@ -1155,9 +1197,9 @@ export default function Community({
                     {commentsOpen[post.id] && (
                       <div className="mt-2 space-y-2 border-t border-gray-100 pt-3">
                         {commentsLoading[post.id] && <p role="status" className="text-sm text-gray-500">Loading comments…</p>}
-                        {(comments[post.id] ?? []).map((comment) => <div key={comment.id} className="rounded-lg bg-gray-50 px-3 py-2"><div className="flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2"><CommunityAuthorAvatar photoUrl={communityPhotoUrls[comment.author_id ?? ""]} /><strong className="truncate text-xs">{comment.author_display_name}</strong></div><time className="shrink-0 text-[11px] text-gray-500">{formatDate(comment.created_at)}</time></div><p className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-700">{comment.content}</p>{isRegisteredUser && <div className="mt-1 flex gap-2"><button type="button" onClick={() => openReportDialog({ kind: "comment", commentId: comment.id })} className="inline-flex items-center gap-1 rounded px-1 py-1 text-xs text-gray-600 hover:bg-gray-100"><Flag size={13} />Report comment</button><button type="button" onClick={() => openReportDialog({ kind: "comment-author", commentId: comment.id })} className="inline-flex items-center gap-1 rounded px-1 py-1 text-xs text-gray-600 hover:bg-gray-100"><Flag size={13} />Report author</button></div>}</div>)}
+                        {(comments[post.id] ?? []).map((comment) => <div key={comment.id} className="rounded-lg bg-gray-50 px-3 py-2"><div className="flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2"><CommunityAuthorAvatar photoUrl={communityPhotoUrls[comment.author_id ?? ""]?.profilePhotoUrl} googlePhotoUrl={communityPhotoUrls[comment.author_id ?? ""]?.googleProfilePhotoUrl ?? (comment.author_id === currentUserId ? profileAccount?.googleProfilePhotoUrl : null)} /><strong className="flex min-w-0 items-center gap-1.5 truncate text-xs"><span className="truncate">{comment.author_display_name}</span>{comment.author_is_admin && <span aria-label="Admin" className="shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-[#12395A]">Admin</span>}</strong></div><time className="shrink-0 text-[11px] text-gray-500">{formatDate(comment.created_at)}</time></div><p className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-700">{comment.content}</p>{isCommunityUser && <div className="mt-1 flex gap-2"><button type="button" onClick={() => openReportDialog({ kind: "comment", commentId: comment.id })} className="inline-flex items-center gap-1 rounded px-1 py-1 text-xs text-gray-600 hover:bg-gray-100"><Flag size={13} />Report comment</button><button type="button" onClick={() => openReportDialog({ kind: "comment-author", commentId: comment.id })} className="inline-flex items-center gap-1 rounded px-1 py-1 text-xs text-gray-600 hover:bg-gray-100"><Flag size={13} />Report author</button></div>}</div>)}
                         {!commentsLoading[post.id] && (comments[post.id]?.length ?? 0) === 0 && <p className="text-sm text-gray-500">No comments yet.</p>}
-                        {currentUserId && isRegisteredUser ? <div className="flex gap-2"><input maxLength={1000} value={commentDrafts[post.id] ?? ""} onChange={(event) => setCommentDrafts((previous) => ({ ...previous, [post.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") void submitComment(post.id); }} placeholder="Write a comment…" className="min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#12395A]" /><button type="button" onClick={() => void submitComment(post.id)} aria-label="Send comment" className="rounded-lg bg-[#12395A] px-3 text-white"><Send size={16} /></button></div> : <button type="button" onClick={currentUserId ? () => setError("A registered-user account is required to comment.") : promptLogin} className="text-sm font-medium text-[#12395A] underline">{currentUserId ? "Registered users can comment" : "Sign in to comment"}</button>}
+                        {currentUserId && isCommunityUser ? <div className="flex gap-2"><input maxLength={1000} value={commentDrafts[post.id] ?? ""} onChange={(event) => setCommentDrafts((previous) => ({ ...previous, [post.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") void submitComment(post.id); }} placeholder="Write a comment…" className="min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#12395A]" /><button type="button" onClick={() => void submitComment(post.id)} aria-label="Send comment" className="rounded-lg bg-[#12395A] px-3 text-white"><Send size={16} /></button></div> : <button type="button" onClick={currentUserId ? () => setError("A Registered User or Admin account is required to comment.") : promptLogin} className="text-sm font-medium text-[#12395A] underline">{currentUserId ? "Registered Users and Admins can comment" : "Sign in to comment"}</button>}
                       </div>
                     )}
                   </article>

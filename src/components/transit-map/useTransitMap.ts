@@ -44,6 +44,10 @@ import { createCurrentLocationRequester } from "@/lib/currentLocation";
 
 export type LocationStatus = "idle" | "loading" | "success" | "error";
 export type Coordinates = [number, number];
+export interface PinnedMapLocation {
+  coordinates: Coordinates;
+  label: string;
+}
 
 export interface RouteLayerState {
   status: "loading" | "ready" | "error";
@@ -66,7 +70,9 @@ export const stopTypeLabel = (stop: Pick<RouteStop, "stop_type">) =>
       ? "Train station"
       : "Bus / jeepney stop";
 
-export function useTransitMap() {
+export function useTransitMap(
+  currentUserId: string | null | undefined = undefined,
+) {
   const { record: recordRecentSearch } = useRecentSearches();
   const geolocation =
     typeof navigator === "undefined" ? null : navigator.geolocation;
@@ -109,6 +115,8 @@ export function useTransitMap() {
   const [routeLinesVisible, setRouteLinesVisible] = useState(true);
   const [selectedPlacePoint, setSelectedPlacePoint] =
     useState<RouteMapPoint | null>(null);
+  const [pinnedMapLocation, setPinnedMapLocation] =
+    useState<PinnedMapLocation | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
@@ -243,7 +251,7 @@ export function useTransitMap() {
       setTerminalError(null);
 
       try {
-        const data = await getTerminals();
+        const data = await getTerminals(currentUserId);
         if (active) setTerminals(data);
       } catch (error: unknown) {
         if (active) {
@@ -261,7 +269,7 @@ export function useTransitMap() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [currentUserId]);
 
   // Load active routes and their visible map points.
   useEffect(() => {
@@ -272,7 +280,7 @@ export function useTransitMap() {
       setRouteMapError(null);
 
       try {
-        const index = await getRouteMapIndex();
+        const index = await getRouteMapIndex(currentUserId);
         if (active) setRouteMapIndex(index);
       } catch (error: unknown) {
         if (active) {
@@ -292,7 +300,7 @@ export function useTransitMap() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [currentUserId]);
 
   const loadRouteLayer = useCallback(
     (routeId: number): Promise<LoadedRouteLayer> => {
@@ -305,7 +313,7 @@ export function useTransitMap() {
       }));
 
       const request = (async (): Promise<LoadedRouteLayer> => {
-        const route = await getRouteDetails(routeId);
+        const route = await getRouteDetails(routeId, currentUserId);
         setRouteLayers((current) => ({
           ...current,
           [routeId]: { status: "loading", route },
@@ -355,7 +363,7 @@ export function useTransitMap() {
 
       return request;
     },
-    []
+    [currentUserId]
   );
 
   const loadVisibleRouteLayers = useCallback(
@@ -447,7 +455,9 @@ export function useTransitMap() {
       try {
         const options = await getTransportFareOptions(
           selectedRoute.transport_type_id,
-          selectedRoute.fare_area_id
+          selectedRoute.fare_area_id,
+          undefined,
+          currentUserId,
         );
         if (active) setFareOptions(options);
       } catch (error: unknown) {
@@ -468,7 +478,7 @@ export function useTransitMap() {
     return () => {
       active = false;
     };
-  }, [selectedRoute]);
+  }, [selectedRoute, currentUserId]);
 
   // Rail: look up the station-to-station fare for the chosen pair.
   useEffect(() => {
@@ -504,7 +514,8 @@ export function useTransitMap() {
         const fare = await getRailFare(
           selectedRoute.id,
           board.ref_id,
-          alight.ref_id
+          alight.ref_id,
+          currentUserId,
         );
         if (active) setRailFare(fare);
       } catch (error: unknown) {
@@ -525,7 +536,7 @@ export function useTransitMap() {
     return () => {
       active = false;
     };
-  }, [selectedRoute, selectedRouteStops, boardingIndex, destinationIndex]);
+  }, [selectedRoute, selectedRouteStops, boardingIndex, destinationIndex, currentUserId]);
 
   // Load photos for terminals, selected-route stops, and the open place.
   useEffect(() => {
@@ -655,6 +666,21 @@ export function useTransitMap() {
     setSelectedRouteId(String(uniqueRoute.id));
   };
 
+  const handleCommunityMapLocation = (
+    latitude: number,
+    longitude: number,
+    label: string,
+  ) => {
+    setPinnedMapLocation({
+      coordinates: [latitude, longitude],
+      label,
+    });
+  };
+
+  const clearPinnedMapLocation = () => {
+    setPinnedMapLocation(null);
+  };
+
   const handleRouteLineSelect = (routeId: number) => {
     setSelectionError(null);
     setRouteLinesVisible(true);
@@ -773,6 +799,7 @@ export function useTransitMap() {
     mapPoints,
     selectedPlace,
     selectedPlaceImage,
+    pinnedMapLocation,
     displayedRouteLayers,
     displayedRoutePositions,
     coincidentRouteIdsByGeometry,
@@ -811,6 +838,8 @@ export function useTransitMap() {
     // actions
     pointIcon,
     handlePlaceSelect,
+    handleCommunityMapLocation,
+    clearPinnedMapLocation,
     handleRouteLineSelect,
     handleSearchResultSelect,
     handleSavedItemSelect,

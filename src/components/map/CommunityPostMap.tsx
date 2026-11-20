@@ -44,9 +44,32 @@ function FitPoints({ points }: { points: CommunityPoint[] }) {
   return null;
 }
 
+function RecenterPoints({
+  points,
+  request,
+}: {
+  points: CommunityPoint[];
+  request: number;
+}) {
+  const map = useMap();
+  useEffect(() => {
+    if (request === 0 || points.length === 0) return;
+    if (points.length === 1) {
+      map.flyTo([points[0].latitude, points[0].longitude], 16, { duration: 0.6 });
+      return;
+    }
+    map.fitBounds(
+      L.latLngBounds(points.map((point) => [point.latitude, point.longitude])),
+      { padding: [40, 40], maxZoom: 16, animate: true },
+    );
+  }, [map, points, request]);
+  return null;
+}
+
 export function CommunityPostMap({
   start,
   destination,
+  recenterRequest = 0,
   activeTarget,
   existingPoints = [],
   onMapPick,
@@ -57,6 +80,7 @@ export function CommunityPostMap({
 }: {
   start: CommunityPoint | null;
   destination: CommunityPoint | null;
+  recenterRequest?: number;
   activeTarget?: "start" | "destination" | null;
   existingPoints?: ExistingPoint[];
   onMapPick?: (point: [number, number]) => void;
@@ -84,7 +108,10 @@ export function CommunityPostMap({
         : undefined;
 
   return (
-    <div className={`${height} w-full overflow-hidden rounded-xl border border-gray-200`}>
+    <div
+      className={`${height} w-full overflow-hidden rounded-xl border border-gray-200`}
+      data-community-map
+    >
       <MapContainer
         center={center}
         zoom={selectedPoints.length ? 14 : 12}
@@ -97,6 +124,7 @@ export function CommunityPostMap({
         />
         {onMapPick && activeTarget && <MapClickHandler onPick={onMapPick} />}
         <FitPoints points={selectedPoints} />
+        <RecenterPoints points={selectedPoints} request={recenterRequest} />
 
         {existingPoints.map((point) => (
           <CircleMarker

@@ -93,7 +93,7 @@ CREATE POLICY "Registered users can submit validated community reports"
       SELECT 1
       FROM public.user_roles AS user_role
       WHERE user_role.user_id = (SELECT auth.uid())
-        AND user_role.role = 'registered_user'
+        AND user_role.role IN ('registered_user', 'admin')
     )
     AND (
       (

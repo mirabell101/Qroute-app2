@@ -8,15 +8,19 @@ import {
 } from "./communityPublicData";
 
 const mocks = vi.hoisted(() => {
-  const getPublicUrl = vi.fn(() => ({
-    data: { publicUrl: "https://public.example/direct-photo.jpg" },
+  const getPublicUrl = vi.fn((path: string) => ({
+    data: { publicUrl: `https://public.example/${path}` },
   }));
   const createSignedUrls = vi.fn();
+  const rpc = vi.fn();
+  const from = vi.fn();
 
   return {
     getSession: vi.fn(),
     getPublicUrl,
     createSignedUrls,
+    rpc,
+    from,
     storageFrom: vi.fn(() => ({ getPublicUrl, createSignedUrls })),
     fetch: vi.fn(),
   };
@@ -26,6 +30,8 @@ vi.mock("@/lib/supabase", () => ({
   supabase: {
     auth: { getSession: mocks.getSession },
     storage: { from: mocks.storageFrom },
+    rpc: mocks.rpc,
+    from: mocks.from,
   },
 }));
 
@@ -82,9 +88,12 @@ type ValidateCommunityReportDraft = (
 ) => string | null;
 
 type GetCommunityProfilePhotoUrls = (
-  expectedUserId: string,
+  expectedUserId: string | null,
   authorIds: string[],
-) => Promise<Record<string, string>>;
+) => Promise<Record<string, {
+  profilePhotoUrl: string;
+  googleProfilePhotoUrl: string | null;
+}>>;
 
 function getReportCommunityTarget(): ReportCommunityTarget | undefined {
   return (community as unknown as {
@@ -155,6 +164,27 @@ describe("Community public photo URLs", () => {
     expect(mocks.getPublicUrl).not.toHaveBeenCalled();
   });
 
+  it("uses the public RPC when no verified Registered User ID is available", async () => {
+    mocks.getSession.mockResolvedValue({
+      data: { session: { access_token: "anonymous-stale-token", user: { id: "anon" } } },
+      error: null,
+    });
+    mocks.rpc.mockResolvedValue({
+      data: { posts: [publicPost()], comments: [] },
+      error: null,
+    });
+
+    const posts = await community.getCommunityPosts("feed", null);
+
+    expect(posts).toHaveLength(1);
+    expect(mocks.rpc).toHaveBeenCalledWith("get_public_community_data", {
+      p_post_ids: null,
+      p_include_posts: true,
+      p_include_comments: false,
+    });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
   it("uses the protected admin photo route for hidden posts", async () => {
     mocks.getSession.mockResolvedValue({
       data: { session: { access_token: "admin-token" } },
@@ -181,40 +211,106 @@ describe("Community public photo URLs", () => {
 describe("Community profile photo URLs", () => {
   beforeEach(() => {
     mocks.getSession.mockReset();
+    mocks.fetch.mockReset();
     mocks.storageFrom.mockClear();
+    mocks.getPublicUrl.mockClear();
     mocks.createSignedUrls.mockReset();
+    vi.stubGlobal("fetch", mocks.fetch);
     mocks.getSession.mockResolvedValue({
       data: { session: { user: { id: "viewer-1" } } },
       error: null,
     });
   });
 
-  it("signs each unique author profile object once", async () => {
-    mocks.createSignedUrls.mockResolvedValue({
-      data: [
-        { path: "author-1/profile", signedUrl: "https://signed.example/author-1" },
-        { path: "author-2/profile", signedUrl: "https://signed.example/author-2" },
-      ],
-      error: null,
+  it("generates one public URL for each unique author profile object", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        photos: {
+          "author-1": "https://lh3.googleusercontent.com/author-1",
+          "author-2": null,
+          "author-3": "http://images.example/author-3",
+        },
+      }),
     });
     const loadUrls = getCommunityProfilePhotoUrls();
     expect(loadUrls).toBeTypeOf("function");
     if (!loadUrls) return;
 
     await expect(
-      loadUrls("viewer-1", ["author-1", "author-1", "author-2"]),
+      loadUrls("viewer-1", [
+        "author-1",
+        "author-1",
+        "author-2",
+        "author-3",
+      ]),
     ).resolves.toEqual({
-      "author-1": "https://signed.example/author-1",
-      "author-2": "https://signed.example/author-2",
+      "author-1": {
+        profilePhotoUrl: "https://public.example/author-1/profile",
+        googleProfilePhotoUrl: "https://lh3.googleusercontent.com/author-1",
+      },
+      "author-2": {
+        profilePhotoUrl: "https://public.example/author-2/profile",
+        googleProfilePhotoUrl: null,
+      },
+      "author-3": {
+        profilePhotoUrl: "https://public.example/author-3/profile",
+        googleProfilePhotoUrl: null,
+      },
     });
     expect(mocks.storageFrom).toHaveBeenCalledWith("profile-photos");
-    expect(mocks.createSignedUrls).toHaveBeenCalledWith(
-      ["author-1/profile", "author-2/profile"],
-      3600,
+    expect(mocks.getPublicUrl).toHaveBeenNthCalledWith(1, "author-1/profile");
+    expect(mocks.getPublicUrl).toHaveBeenNthCalledWith(2, "author-2/profile");
+    expect(mocks.getPublicUrl).toHaveBeenNthCalledWith(3, "author-3/profile");
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      `${API_BASE_URL}/api/community/author-google-photos`,
+      expect.objectContaining({ headers: expect.any(Headers) }),
     );
+    expect(mocks.createSignedUrls).not.toHaveBeenCalled();
   });
 
-  it("rejects session identity mismatches before signing photos", async () => {
+  it.each([
+    ["Visitor", null, null],
+    ["Registered User", "viewer-1", "viewer-1"],
+    ["Admin", "admin-1", "admin-1"],
+  ] as const)(
+    "generates a public profile URL for a %s viewer",
+    async (_role, expectedUserId, sessionUserId) => {
+      mocks.fetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          photos: {
+            "author-1": "https://lh3.googleusercontent.com/author-1",
+          },
+        }),
+      });
+      mocks.getSession.mockResolvedValue({
+        data: {
+          session: sessionUserId
+            ? { user: { id: sessionUserId } }
+            : null,
+        },
+        error: null,
+      });
+      const loadUrls = getCommunityProfilePhotoUrls();
+      expect(loadUrls).toBeTypeOf("function");
+      if (!loadUrls) return;
+
+      await expect(loadUrls(expectedUserId, ["author-1"])).resolves.toEqual({
+        "author-1": {
+          profilePhotoUrl: "https://public.example/author-1/profile",
+          googleProfilePhotoUrl: "https://lh3.googleusercontent.com/author-1",
+        },
+      });
+      expect(mocks.createSignedUrls).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects session identity mismatches before generating public URLs", async () => {
     mocks.getSession.mockResolvedValue({
       data: { session: { user: { id: "different-viewer" } } },
       error: null,
@@ -226,33 +322,92 @@ describe("Community profile photo URLs", () => {
     await expect(loadUrls("viewer-1", ["author-1"])).rejects.toThrow(
       "Please sign in to continue.",
     );
+    expect(mocks.getPublicUrl).not.toHaveBeenCalled();
     expect(mocks.createSignedUrls).not.toHaveBeenCalled();
   });
+});
 
-  it("omits profile photos that do not exist", async () => {
-    mocks.createSignedUrls.mockResolvedValue({
-      data: [{ path: "author-1/profile", signedUrl: null }],
-      error: null,
-    });
-    const loadUrls = getCommunityProfilePhotoUrls();
-    expect(loadUrls).toBeTypeOf("function");
-    if (!loadUrls) return;
-
-    await expect(loadUrls("viewer-1", ["author-1"])).resolves.toEqual({});
+describe("Community role access", () => {
+  beforeEach(() => {
+    mocks.from.mockReset();
   });
 
-  it("surfaces storage signing errors", async () => {
-    mocks.createSignedUrls.mockResolvedValue({
-      data: null,
-      error: { message: "Storage unavailable" },
-    });
-    const loadUrls = getCommunityProfilePhotoUrls();
-    expect(loadUrls).toBeTypeOf("function");
-    if (!loadUrls) return;
+  it("allows Admins to use registered Community interactions", async () => {
+    const query = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      then: (resolve: (value: {
+        data: { role: string }[];
+        error: null;
+      }) => unknown) => Promise.resolve({
+        data: [{ role: "admin" }],
+        error: null,
+      }).then(resolve),
+    };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    mocks.from.mockReturnValue(query);
 
-    await expect(loadUrls("viewer-1", ["author-1"])).rejects.toThrow(
-      "Storage unavailable",
-    );
+    await expect(community.getCommunityAccess("admin-1")).resolves.toEqual({
+      canPublishAndVote: true,
+      canReceiveRealtime: true,
+      isAdmin: true,
+    });
+    expect(mocks.from).toHaveBeenCalledWith("user_roles");
+    expect(query.eq).toHaveBeenCalledWith("user_id", "admin-1");
+  });
+
+  it("resolves Admin access when the account also has the Registered User role", async () => {
+    const query = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: null,
+        error: { message: "multiple role rows" },
+      }),
+      then: (resolve: (value: {
+        data: { role: string }[];
+        error: null;
+      }) => unknown) => Promise.resolve({
+        data: [
+          { role: "registered_user" },
+          { role: "admin" },
+        ],
+        error: null,
+      }).then(resolve),
+    };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    mocks.from.mockReturnValue(query);
+
+    await expect(community.getCommunityAccess("admin-1")).resolves.toEqual({
+      canPublishAndVote: true,
+      canReceiveRealtime: true,
+      isAdmin: true,
+    });
+  });
+
+  it("keeps Registered User access without marking the account as Admin", async () => {
+    const query = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      then: (resolve: (value: {
+        data: { role: string }[];
+        error: null;
+      }) => unknown) => Promise.resolve({
+        data: [{ role: "registered_user" }],
+        error: null,
+      }).then(resolve),
+    };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    mocks.from.mockReturnValue(query);
+
+    await expect(community.getCommunityAccess("registered-1")).resolves.toEqual({
+      canPublishAndVote: true,
+      canReceiveRealtime: true,
+      isAdmin: false,
+    });
   });
 });
 

@@ -98,12 +98,31 @@ function PlaceViewport({ position }: { position: Coordinates | null }) {
   return null;
 }
 
+function PinnedMapViewport({
+  location,
+}: {
+  location: { coordinates: Coordinates; label: string } | null;
+}) {
+  const map = useMap();
+  useEffect(() => {
+    if (!location) return;
+    map.flyTo(location.coordinates, 16, { duration: 0.6 });
+  }, [map, location]);
+  if (!location) return null;
+  return (
+    <Marker position={location.coordinates} icon={getMapIcon("boarding")}>
+      <Popup>{location.label}</Popup>
+    </Marker>
+  );
+}
+
 export function TransitMapCanvas({ map }: { map: TransitMapController }) {
   const {
     currentPosition,
     locationStatus,
     requestCurrentLocation,
     selectedPlace,
+    pinnedMapLocation,
     displayedRouteLayers,
     displayedRoutePositions,
     coincidentRouteIdsByGeometry,
@@ -147,6 +166,7 @@ export function TransitMapCanvas({ map }: { map: TransitMapController }) {
               : null
           }
         />
+        <PinnedMapViewport location={pinnedMapLocation} />
 
         {displayedRouteLayers.map(({ routeId, route, geometry }) => {
           const isActive = routeId === Number(selectedRouteId);

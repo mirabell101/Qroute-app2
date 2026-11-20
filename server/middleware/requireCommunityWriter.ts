@@ -1,7 +1,7 @@
 import type { RequestHandler } from "express";
 import { getSupabaseClientForAccessToken } from "../supabaseClient.ts";
 
-const requireRegisteredUser: RequestHandler = async (_req, res, next) => {
+const requireCommunityWriter: RequestHandler = async (_req, res, next) => {
   const user = res.locals.user as { id: string } | undefined;
   const accessToken = res.locals.accessToken as string | undefined;
 
@@ -18,9 +18,7 @@ const requireRegisteredUser: RequestHandler = async (_req, res, next) => {
     const { data, error } = await supabase
       .from("user_roles")
       .select("role")
-      .eq("user_id", user.id)
-      .eq("role", "registered_user")
-      .maybeSingle();
+      .eq("user_id", user.id);
 
     if (error) {
       console.error("[community] Role lookup failed:", error.message);
@@ -31,15 +29,23 @@ const requireRegisteredUser: RequestHandler = async (_req, res, next) => {
       return;
     }
 
-    if (!data) {
+    const roles = (data ?? []).map((row) => row.role);
+    const role = roles.includes("admin")
+      ? "admin"
+      : roles.includes("registered_user")
+        ? "registered_user"
+        : null;
+
+    if (!role) {
       res.status(403).json({
         success: false,
-        message: "A registered-user account is required.",
+        message: "A Registered User or Admin account is required.",
       });
       return;
     }
 
     res.locals.communitySupabase = supabase;
+    res.locals.communityRole = role;
     next();
   } catch (error: unknown) {
     console.error("[community] Role authorization failed:", error);
@@ -50,4 +56,4 @@ const requireRegisteredUser: RequestHandler = async (_req, res, next) => {
   }
 };
 
-export default requireRegisteredUser;
+export default requireCommunityWriter;

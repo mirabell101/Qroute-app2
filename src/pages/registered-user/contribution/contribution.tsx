@@ -662,7 +662,7 @@ export default function Contribution({
     setCatalogLoading(true);
 
     try {
-      const catalog = await getTransitCatalog();
+      const catalog = await getTransitCatalog(currentUserId);
       setExistingPoints(catalog.points);
       setExistingRoutes(catalog.routes);
       setExistingError("");

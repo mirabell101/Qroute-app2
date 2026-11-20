@@ -96,8 +96,10 @@ async function fetchAuthenticatedRouteMapIndex(): Promise<RouteMapIndex> {
   return buildRouteMapIndex(records);
 }
 
-export async function getRouteMapIndex(): Promise<RouteMapIndex> {
-  if (!(await hasMapAuthSession())) {
+export async function getRouteMapIndex(
+  currentUserId: string | null | undefined = undefined,
+): Promise<RouteMapIndex> {
+  if (!(await hasMapAuthSession(currentUserId))) {
     const { routes } = await getPublicMapData();
     return buildRouteMapIndex(routes);
   }
@@ -164,9 +166,10 @@ async function getRouteOwnerId(routeId: number): Promise<string | null> {
 }
 
 export async function getRouteDetails(
-  routeId: number
+  routeId: number,
+  currentUserId: string | null | undefined = undefined,
 ): Promise<RouteDetails> {
-  if (!(await hasMapAuthSession())) {
+  if (!(await hasMapAuthSession(currentUserId))) {
     const { routes } = await getPublicMapData();
     const route = routes.find((item) => item.id === routeId);
 

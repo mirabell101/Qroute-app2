@@ -100,7 +100,7 @@ export default function Saved({
   useEffect(() => {
     let active = true;
 
-    void Promise.all([getRouteMapIndex(), getTerminals()])
+    void Promise.all([getRouteMapIndex(currentUserId), getTerminals(currentUserId)])
       .then(([routeMapIndex, terminals]) => {
         if (active) {
           setMapDataResult({

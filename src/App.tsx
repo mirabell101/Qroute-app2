@@ -16,6 +16,7 @@ import {
 } from "./lib/authSession";
 import type { QRouteRole } from "./lib/roles";
 import { getStoredAccountDisplayName } from "./lib/accountApi";
+import { resolveVisitorMapRoute } from "./lib/visitorMapRoute";
 
 import { SavedItemsProvider } from "./components/saved/SavedItemsContext";
 import { RecentSearchesProvider } from "./components/recent-searches/RecentSearchesContext";
@@ -702,12 +703,31 @@ function App() {
 
               <Route
                 path="/home"
-                element={protectedPage((userId) => (
-                  <Home
-                    currentUserId={userId}
-                    onLogout={handleLogout}
-                  />
-                ))}
+                element={
+                  resolveVisitorMapRoute({
+                    authLoading,
+                    roleLoading,
+                    currentUserId,
+                  }) === "loading"
+                    ? null
+                    : resolveVisitorMapRoute({
+                        authLoading,
+                        roleLoading,
+                        currentUserId,
+                      }) === "visitor"
+                      ? (
+                          <Landing
+                            currentUserId={currentUserId}
+                            onLogout={handleLogout}
+                          />
+                        )
+                      : protectedPage((userId) => (
+                          <Home
+                            currentUserId={userId}
+                            onLogout={handleLogout}
+                          />
+                        ))
+                }
               />
 
               <Route
@@ -892,9 +912,7 @@ function App() {
 
               <Route
                 path="/admin/notifications"
-                element={adminPage(() => (
-                  <Notifications />
-                ))}
+                element={adminPage(() => <Notifications />)}
               />
 
               <Route

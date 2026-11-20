@@ -25,7 +25,6 @@ export type {
 const COMMUNITY_PHOTO_BUCKET = "community-post-photos";
 const PROFILE_PHOTO_BUCKET = "profile-photos";
 const PROFILE_PHOTO_PATH = "profile";
-const PROFILE_PHOTO_URL_TTL_SECONDS = 3600;
 
 export interface CommunityPoint {
   name: string;
@@ -36,6 +35,7 @@ export interface CommunityPoint {
 export interface CommunityPost {
   id: string;
   author_id?: string;
+  author_is_admin?: boolean;
   author_display_name: string;
   title: string;
   content: string;
@@ -65,9 +65,15 @@ export interface CommunityComment {
   id: string;
   post_id: string;
   author_id?: string;
+  author_is_admin?: boolean;
   author_display_name: string;
   content: string;
   created_at: string;
+}
+
+export interface CommunityAuthorPhotoUrls {
+  profilePhotoUrl: string;
+  googleProfilePhotoUrl: string | null;
 }
 
 interface PublicCommunityData {
@@ -99,6 +105,7 @@ export interface CommunityVoteState {
 export interface CommunityAccess {
   canPublishAndVote: boolean;
   canReceiveRealtime: boolean;
+  isAdmin: boolean;
 }
 
 export interface CommunityReportResult {
@@ -109,12 +116,15 @@ export async function getCommunityAccess(userId: string): Promise<CommunityAcces
   const { data, error } = await supabase
     .from("user_roles")
     .select("role")
-    .eq("user_id", userId)
-    .maybeSingle();
+    .eq("user_id", userId);
   if (error) throw new Error(error.message);
+  const roles = (data ?? []).map((row) => row.role);
+  const isAdmin = roles.includes("admin");
+  const canInteract = isAdmin || roles.includes("registered_user");
   return {
-    canPublishAndVote: data?.role === "registered_user",
-    canReceiveRealtime: data?.role === "registered_user" || data?.role === "admin",
+    canPublishAndVote: canInteract,
+    canReceiveRealtime: canInteract,
+    isAdmin,
   };
 }
 
@@ -145,11 +155,17 @@ async function request<T>(path: string, options: RequestInit = {}, authenticated
 
 export async function getCommunityPosts(
   scope: "feed" | "mine" = "feed",
+  currentUserId: string | null | undefined = undefined,
 ): Promise<CommunityPost[]> {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  if (sessionError) throw new Error(sessionError.message);
-
-  if (!sessionData.session) {
+  if (currentUserId === undefined) {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+    if (sessionError) throw new Error(sessionError.message);
+    currentUserId = sessionData.session
+      ? (sessionData.session.user?.id ?? "verified-session")
+      : null;
+  }
+  if (currentUserId === null) {
     if (scope === "mine") throw new Error("Please sign in to view your posts.");
     const { data, error } = await supabase.rpc("get_public_community_data", {
       p_post_ids: null,
@@ -168,14 +184,22 @@ export async function getCommunityPosts(
   return (result.posts ?? []).map(withPhotoUrls);
 }
 
-export async function getCommunityPost(postId: string): Promise<{
+export async function getCommunityPost(
+  postId: string,
+  currentUserId: string | null | undefined = undefined,
+): Promise<{
   post: CommunityPost;
   comments: CommunityComment[];
 }> {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  if (sessionError) throw new Error(sessionError.message);
-
-  if (!sessionData.session) {
+  if (currentUserId === undefined) {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+    if (sessionError) throw new Error(sessionError.message);
+    currentUserId = sessionData.session
+      ? (sessionData.session.user?.id ?? "verified-session")
+      : null;
+  }
+  if (currentUserId === null) {
     const { data, error } = await supabase.rpc("get_public_community_data", {
       p_post_ids: [postId],
       p_include_posts: true,
@@ -198,12 +222,20 @@ export async function getCommunityPost(postId: string): Promise<{
   return { ...result, post: withPhotoUrls(result.post) };
 }
 
-export async function getCommunityComments(postIds: string[]): Promise<CommunityComment[]> {
+export async function getCommunityComments(
+  postIds: string[],
+  currentUserId: string | null | undefined = undefined,
+): Promise<CommunityComment[]> {
   if (!postIds.length) return [];
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  if (sessionError) throw new Error(sessionError.message);
-
-  if (!sessionData.session) {
+  if (currentUserId === undefined) {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+    if (sessionError) throw new Error(sessionError.message);
+    currentUserId = sessionData.session
+      ? (sessionData.session.user?.id ?? "verified-session")
+      : null;
+  }
+  if (currentUserId === null) {
     const { data, error } = await supabase.rpc("get_public_community_data", {
       p_post_ids: postIds,
       p_include_posts: false,
@@ -222,13 +254,16 @@ export async function getCommunityComments(postIds: string[]): Promise<Community
 }
 
 export async function getCommunityProfilePhotoUrls(
-  expectedUserId: string,
+  expectedUserId: string | null,
   authorIds: string[],
-): Promise<Record<string, string>> {
+): Promise<Record<string, CommunityAuthorPhotoUrls>> {
   const { data: sessionData, error: sessionError } =
     await supabase.auth.getSession();
   if (sessionError) throw new Error(sessionError.message);
-  if (!sessionData.session || sessionData.session.user.id !== expectedUserId) {
+  if (expectedUserId !== null && (
+    !sessionData.session ||
+    sessionData.session.user.id !== expectedUserId
+  )) {
     throw new Error("Please sign in to continue.");
   }
 
@@ -237,19 +272,41 @@ export async function getCommunityProfilePhotoUrls(
   )];
   if (!userIds.length) return {};
 
-  const paths = userIds.map((userId) => `${userId}/${PROFILE_PHOTO_PATH}`);
-  const { data, error } = await supabase.storage
-    .from(PROFILE_PHOTO_BUCKET)
-    .createSignedUrls(paths, PROFILE_PHOTO_URL_TTL_SECONDS);
-  if (error) throw new Error(error.message);
+  const photoResult = await request<{
+    success?: unknown;
+    photos?: unknown;
+  }>("/author-google-photos");
+  if (
+    photoResult.success !== true ||
+    typeof photoResult.photos !== "object" ||
+    photoResult.photos === null ||
+    Array.isArray(photoResult.photos)
+  ) {
+    throw new Error("Community service returned invalid author photos.");
+  }
 
-  const userIdByPath = new Map(
-    paths.map((path, index) => [path, userIds[index]!]),
-  );
-  const urls: Record<string, string> = {};
-  for (const item of data ?? []) {
-    const userId = item.path ? userIdByPath.get(item.path) : undefined;
-    if (userId && item.signedUrl) urls[userId] = item.signedUrl;
+  const googlePhotoUrls = photoResult.photos as Record<string, unknown>;
+  const urls: Record<string, CommunityAuthorPhotoUrls> = {};
+  const photoStorage = supabase.storage.from(PROFILE_PHOTO_BUCKET);
+  for (const userId of userIds) {
+    const path = `${userId}/${PROFILE_PHOTO_PATH}`;
+    const candidate = googlePhotoUrls[userId];
+    let googleProfilePhotoUrl: string | null = null;
+    if (typeof candidate === "string") {
+      try {
+        const url = new URL(candidate);
+        if (url.protocol === "https:" && url.hostname) {
+          googleProfilePhotoUrl = url.toString();
+        }
+      } catch {
+        googleProfilePhotoUrl = null;
+      }
+    }
+
+    urls[userId] = {
+      profilePhotoUrl: photoStorage.getPublicUrl(path).data.publicUrl,
+      googleProfilePhotoUrl,
+    };
   }
   return urls;
 }

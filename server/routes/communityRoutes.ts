@@ -1,11 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import requireAuth from "../middleware/requireAuth.ts";
-import requireRegisteredUser from "../middleware/requireRegisteredUser.ts";
+import requireCommunityWriter from "../middleware/requireCommunityWriter.ts";
 import {
   getSupabaseClient,
   getSupabaseClientForAccessToken,
   getSupabaseAdminClient,
 } from "../supabaseClient.ts";
+import { getGoogleProfilePhotoUrl } from "../account.ts";
 import {
   type CommunityReportInput,
   parseCommunityCommentInput,
@@ -21,6 +22,7 @@ import {
   resolvePhotoPath,
   sendCommunityPhoto,
 } from "../communityPhotos.ts";
+import { addAdminAuthorMarkers } from "../communityAuthorRoles.ts";
 
 const router = Router();
 
@@ -131,6 +133,52 @@ function sendDatabaseError(
     message: "Unable to complete the Community request.",
   });
 }
+
+router.get(
+  "/author-google-photos",
+  async (_req: Request, res: Response) => {
+    try {
+      const { data, error } = await getSupabaseClient().rpc(
+        "get_public_community_author_google_photos",
+      );
+
+      if (error) {
+        sendDatabaseError(res, error);
+        return;
+      }
+
+      const photos: Record<string, string> = {};
+      for (const value of data ?? []) {
+        if (
+          typeof value !== "object" ||
+          value === null ||
+          !("author_id" in value) ||
+          typeof value.author_id !== "string" ||
+          !("google_profile_photo_url" in value)
+        ) {
+          continue;
+        }
+
+        const photoUrl = getGoogleProfilePhotoUrl({
+          picture: value.google_profile_photo_url,
+        });
+        if (photoUrl) photos[value.author_id] = photoUrl;
+      }
+
+      res.json({
+        success: true,
+        photos,
+      });
+    } catch (error: unknown) {
+      sendDatabaseError(res, {
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unknown database error",
+      });
+    }
+  },
+);
 
 function sendPhotoNotFound(res: Response) {
   res.status(404).json({
@@ -307,7 +355,7 @@ router.get(
         return;
       }
 
-      const posts = data ?? [];
+      const posts = await addAdminAuthorMarkers(data ?? []);
 
       const totals = await voteCounts(
         posts.map((post) => post.id),
@@ -535,7 +583,7 @@ router.get(
 router.post(
   "/posts/:postId/reports",
   requireAuth,
-  requireRegisteredUser,
+  requireCommunityWriter,
   async (req: Request, res: Response) => {
     if (!isCommunityPostId(req.params.postId)) {
       res.status(400).json({
@@ -636,7 +684,7 @@ router.post(
 router.post(
   "/comments/:commentId/reports",
   requireAuth,
-  requireRegisteredUser,
+  requireCommunityWriter,
   async (req: Request, res: Response) => {
     if (!isCommunityPostId(req.params.commentId)) {
       res.status(400).json({
@@ -797,13 +845,16 @@ router.get(
         return;
       }
 
+      const [postWithRole] = await addAdminAuthorMarkers([post]);
+      const commentsWithRoles = await addAdminAuthorMarkers(comments ?? []);
+
       res.json({
         success: true,
         post: {
-          ...post,
+          ...postWithRole,
           transport_type:
-            post.transport_types?.name ?? null,
-          comment_count: comments?.length ?? 0,
+            postWithRole.transport_types?.name ?? null,
+          comment_count: commentsWithRoles.length,
           upvotes:
             totals.get(post.id)?.upvotes ?? 0,
           downvotes:
@@ -811,7 +862,7 @@ router.get(
           transport_types: undefined,
           community_post_comments: undefined,
         },
-        comments: comments ?? [],
+        comments: commentsWithRoles,
       });
     } catch (error: unknown) {
       sendDatabaseError(res, {
@@ -876,7 +927,7 @@ router.get(
 
       res.json({
         success: true,
-        comments: data ?? [],
+        comments: await addAdminAuthorMarkers(data ?? []),
       });
     } catch (error: unknown) {
       sendDatabaseError(res, {
@@ -992,7 +1043,7 @@ router.get(
 router.post(
   "/posts",
   requireAuth,
-  requireRegisteredUser,
+  requireCommunityWriter,
   async (req: Request, res: Response) => {
     const parsed = parseCommunityPostInput(req.body);
 
@@ -1126,6 +1177,7 @@ router.post(
       success: true,
       post: {
         ...data,
+        author_is_admin: res.locals.communityRole === "admin",
         transport_type:
           data.transport_types?.name ?? null,
         comment_count: 0,
@@ -1146,7 +1198,7 @@ router.post(
 router.post(
   "/posts/:postId/vote",
   requireAuth,
-  requireRegisteredUser,
+  requireCommunityWriter,
   async (req: Request, res: Response) => {
     if (!isCommunityPostId(req.params.postId)) {
       res.status(400).json({
@@ -1221,7 +1273,7 @@ router.post(
 router.delete(
   "/posts/:postId/vote",
   requireAuth,
-  requireRegisteredUser,
+  requireCommunityWriter,
   async (req: Request, res: Response) => {
     if (!isCommunityPostId(req.params.postId)) {
       res.status(400).json({
@@ -1289,7 +1341,7 @@ router.delete(
 router.post(
   "/posts/:postId/comments",
   requireAuth,
-  requireRegisteredUser,
+  requireCommunityWriter,
   async (req: Request, res: Response) => {
     if (!isCommunityPostId(req.params.postId)) {
       res.status(400).json({
@@ -1337,7 +1389,10 @@ router.post(
 
     res.status(201).json({
       success: true,
-      comment: data,
+      comment: {
+        ...data,
+        author_is_admin: res.locals.communityRole === "admin",
+      },
     });
   },
 );

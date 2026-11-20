@@ -3,7 +3,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 const PROFILE_PHOTO_BUCKET = "profile-photos";
 const PROFILE_PHOTO_PATH = "profile";
-const PROFILE_PHOTO_URL_TTL_SECONDS = 60 * 60;
 
 const MIN_DISPLAY_NAME_LENGTH = 2;
 const MAX_DISPLAY_NAME_LENGTH = 50;
@@ -47,7 +46,7 @@ export function isStrongAccountPassword(password: string): boolean {
   );
 }
 
-function getGoogleProfilePhotoUrl(
+export function getGoogleProfilePhotoUrl(
   userMetadata: Record<string, unknown> | null | undefined,
 ): string | null {
   const candidate = [
@@ -215,14 +214,9 @@ export async function getProfilePhotoUrl(
     return null;
   }
 
-  const { data, error } = await photoStorage.createSignedUrl(
+  return photoStorage.getPublicUrl(
     `${userId}/${PROFILE_PHOTO_PATH}`,
-    PROFILE_PHOTO_URL_TTL_SECONDS,
-  );
-
-  if (error) throw error;
-
-  return data.signedUrl;
+  ).data.publicUrl;
 }
 
 export async function updateAccountUsername(

@@ -123,9 +123,10 @@ export async function getActiveFareRule(
 export async function getTransportFareOptions(
   transportTypeId: number,
   fareAreaId: number | null,
-  day: string = todayIso()
+  day: string = todayIso(),
+  currentUserId: string | null | undefined = undefined,
 ): Promise<TransportFareOption[]> {
-  if (!(await hasMapAuthSession())) {
+  if (!(await hasMapAuthSession(currentUserId))) {
     const publicData = await getPublicMapData();
     const variants = publicData.transportVariants
       .filter((variant) => variant.transport_type_id === transportTypeId)
@@ -332,9 +333,10 @@ export function calculateDistanceFare(
 export async function getRailFare(
   routeId: number,
   stopAId: number,
-  stopBId: number
+  stopBId: number,
+  currentUserId: string | null | undefined = undefined,
 ): Promise<RailFare | null> {
-  if (!(await hasMapAuthSession())) {
+  if (!(await hasMapAuthSession(currentUserId))) {
     const publicData = await getPublicMapData();
     const day = todayIso();
     const row = publicData.railFares

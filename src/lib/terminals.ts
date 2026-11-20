@@ -31,8 +31,10 @@ async function fetchAuthenticatedTerminals(): Promise<Terminal[]> {
   return data ?? [];
 }
 
-export async function getTerminals(): Promise<Terminal[]> {
-  if (!(await hasMapAuthSession())) {
+export async function getTerminals(
+  currentUserId: string | null | undefined = undefined,
+): Promise<Terminal[]> {
+  if (!(await hasMapAuthSession(currentUserId))) {
     return (await getPublicMapData()).terminals;
   }
 

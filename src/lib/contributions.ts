@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { getPublicMapData } from "@/lib/publicMap";
 
 export type ContributionKind = "terminal" | "stop" | "route";
 export type PointKind = "terminal" | "stop";
@@ -82,10 +83,19 @@ export interface TransitCatalog {
 
 export const pointKey = (kind: PointKind, id: number) => `${kind}-${id}`;
 
-export async function getTransportOptions(): Promise<{
+export async function getTransportOptions(
+  currentUserId: string | null | undefined = undefined,
+): Promise<{
   types: TransportTypeOption[];
   variants: TransportVariantOption[];
 }> {
+  if (currentUserId === null) {
+    const publicData = await getPublicMapData();
+    return {
+      types: publicData.transportTypes,
+      variants: publicData.transportVariants,
+    };
+  }
   const [types, variants] = await Promise.all([
     supabase.from("transport_types").select("id, name, color").order("name"),
     supabase
@@ -131,7 +141,63 @@ interface RawRoute {
 // Approved terminals, stops and routes only. Pending, rejected, banned and
 // deleted rows are never returned, so nothing unapproved can reach the builder.
 // A route is included only if every one of its points is approved too.
-export async function getTransitCatalog(): Promise<TransitCatalog> {
+export async function getTransitCatalog(
+  currentUserId: string | null | undefined = undefined,
+): Promise<TransitCatalog> {
+  if (currentUserId === null) {
+    const publicData = await getPublicMapData();
+    const points = new Map<string, ExistingPoint>();
+
+    for (const terminal of publicData.terminals) {
+      points.set(pointKey("terminal", terminal.id), {
+        kind: "terminal",
+        id: terminal.id,
+        name: terminal.name,
+        latitude: terminal.latitude,
+        longitude: terminal.longitude,
+        stopType: "terminal",
+        transportTypeId: null,
+        routeIds: [],
+      });
+    }
+
+    for (const stop of publicData.stops) {
+      points.set(pointKey("stop", stop.id), {
+        kind: "stop",
+        id: stop.id,
+        name: stop.name,
+        latitude: stop.latitude,
+        longitude: stop.longitude,
+        stopType: stop.stop_type,
+        transportTypeId: null,
+        routeIds: [],
+      });
+    }
+
+    const routes: ExistingRoute[] = [];
+    for (const route of publicData.routes) {
+      const keys = route.route_stops.flatMap((row) => {
+        if (row.terminals) return [pointKey("terminal", row.terminals.id)];
+        if (row.stops) return [pointKey("stop", row.stops.id)];
+        return [];
+      });
+      if (keys.length < 2) continue;
+      routes.push({
+        id: route.id,
+        name: route.name,
+        transportTypeId: route.transport_type_id,
+        variantId: route.transport_variants.id,
+        keys,
+      });
+      for (const key of keys) {
+        const point = points.get(key);
+        if (point && !point.routeIds.includes(route.id)) point.routeIds.push(route.id);
+      }
+    }
+
+    return { points: [...points.values()], routes };
+  }
+
   const [terminals, stops, routes] = await Promise.all([
     supabase
       .from("terminals")
