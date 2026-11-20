@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
@@ -22,6 +23,13 @@ import {
   MapPinned,
   Menu,
   LogOut,
+  ShieldCheck,
+  Map,
+  UserCog,
+  ClipboardList,
+  EyeOff,
+  Eye,
+  Activity,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -83,9 +91,60 @@ function formatActivityTime(value: string): string {
     : date.toLocaleString();
 }
 
+function getActivityIcon(category: string, actionKey: string): LucideIcon {
+  const normalizedCategory = category.toLowerCase();
+  const normalizedAction = actionKey.toLowerCase();
+
+  if (normalizedAction.includes("hidden")) return EyeOff;
+  if (normalizedAction.includes("unhidden")) return Eye;
+
+  switch (normalizedCategory) {
+    case "moderation":
+      return ShieldCheck;
+    case "route_management":
+      return Route;
+    case "map_management":
+      return Map;
+    case "report_management":
+      return Flag;
+    case "account_management":
+      return UserCog;
+    case "system_management":
+      return Settings;
+    default:
+      return Activity;
+  }
+}
+
+function getActivityIconStyle(category: string): string {
+  switch (category.toLowerCase()) {
+    case "moderation":
+      return "bg-emerald-100 text-emerald-700";
+    case "route_management":
+      return "bg-blue-100 text-blue-700";
+    case "map_management":
+      return "bg-cyan-100 text-cyan-700";
+    case "report_management":
+      return "bg-orange-100 text-orange-700";
+    case "account_management":
+      return "bg-violet-100 text-violet-700";
+    case "system_management":
+      return "bg-slate-200 text-slate-700";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+}
+
+function formatCategory(category: string): string {
+  return category
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const { userId, account } = useAccountProfile();
+
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [pendingReportsCount, setPendingReportsCount] = useState<number | null>(
     null,
@@ -99,6 +158,7 @@ export default function Dashboard() {
     account?.username?.trim() ||
     (account?.email ? account.email.split("@")[0] : null) ||
     "Admin";
+
   const adminEmail = account?.email || "Administrator";
 
   const handleLogout = async () => {
@@ -120,12 +180,17 @@ export default function Dashboard() {
         getAdminSummary(userId),
         getAdminReports(userId).catch(() => null),
       ]);
+
       if (active) {
         setSummary(nextSummary);
+
         if (reports) {
-          const pending = reports.filter((r) => r.status === "Pending").length;
+          const pending = reports.filter(
+            (report) => report.status === "Pending",
+          ).length;
           setPendingReportsCount(pending);
         }
+
         setErrorMessage(null);
       }
     };
@@ -164,10 +229,10 @@ export default function Dashboard() {
         <div className="flex h-[105px] items-center border-b border-white/10 px-7">
           <div>
             <img
-                src={qrouteWhiteLogo}
-                alt="QRoute Logo"
-                className="h-auto w-[150px] object-contain"
-              />
+              src={qrouteWhiteLogo}
+              alt="QRoute Logo"
+              className="h-auto w-[150px] object-contain"
+            />
             <p className="mt-0.5 text-xs tracking-wide text-blue-200">
               ADMINISTRATION
             </p>
@@ -280,6 +345,7 @@ export default function Dashboard() {
                 className="h-10 w-10 bg-[#DCE9F7] font-bold text-[#102E4D]"
                 iconSize={20}
               />
+
               <div className="hidden sm:block text-left">
                 <p className="text-sm font-semibold text-slate-800">
                   {adminDisplayName}
@@ -308,7 +374,6 @@ export default function Dashboard() {
                 Here&apos;s an overview of your QRoute system.
               </p>
             </div>
-
           </section>
 
           {isLoading && (
@@ -337,7 +402,9 @@ export default function Dashboard() {
           <section className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
             {summaryCards.map((card) => {
               const Icon = card.icon;
-              const metricValue = card.metric && summary ? summary[card.metric] : null;
+              const metricValue =
+                card.metric && summary ? summary[card.metric] : null;
+
               const value = isLoading
                 ? "Loading…"
                 : typeof metricValue === "number"
@@ -380,7 +447,7 @@ export default function Dashboard() {
             })}
           </section>
 
-          {/* Recent activity */}
+          {/* Recent Activity - Admin Audit Logs */}
           <section className="mt-8 grid grid-cols-1 gap-6">
             <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_3px_14px_rgba(15,23,42,0.035)]">
               <div className="flex items-center justify-between border-b border-slate-100 px-5 py-5 sm:px-6">
@@ -388,6 +455,9 @@ export default function Dashboard() {
                   <h4 className="font-bold text-slate-900">
                     Recent activity
                   </h4>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Recent administrative actions
+                  </p>
                 </div>
 
                 <Clock size={19} className="text-slate-400" />
@@ -404,42 +474,77 @@ export default function Dashboard() {
                   </p>
                 ) : summary.recentActivity.length === 0 ? (
                   <p className="text-sm text-slate-500">
-                    No recent activity yet.
+                    No recent administrative activity yet.
                   </p>
                 ) : (
                   <ul className="space-y-3">
-                    {summary.recentActivity.map((item, index) => {
-                      const ActivityIcon =
-                        item.kind === "report" ? Flag : FileText;
+                    {summary.recentActivity.map((item) => {
+                      const ActivityIcon = getActivityIcon(
+                        item.category,
+                        item.actionKey,
+                      );
+
+                      const iconStyle = getActivityIconStyle(item.category);
+
+                      const adminName =
+                        item.adminDisplayName.trim() ||
+                        item.adminUsername ||
+                        "Administrator";
 
                       return (
                         <li
-                          key={`${item.kind}-${index}`}
+                          key={item.id}
                           className="flex items-start gap-3 rounded-lg border border-slate-100 bg-[#F8FAFD] px-4 py-3"
                         >
                           <span
-                            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-                              item.kind === "report"
-                                ? "bg-orange-100 text-orange-700"
-                                : "bg-purple-100 text-purple-700"
-                            }`}
+                            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${iconStyle}`}
                           >
-                            <ActivityIcon size={15} />
+                            <ActivityIcon size={16} />
                           </span>
-                          <div className="min-w-0">
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p
+                                className="font-medium text-slate-800"
+                                title={item.title}
+                              >
+                                {item.title}
+                              </p>
+
+                              <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-slate-500 ring-1 ring-slate-200">
+                                {formatCategory(item.category)}
+                              </span>
+                            </div>
+
                             <p
-                              className="truncate font-medium text-slate-800"
-                              title={item.title}
-                            >
-                              {item.title}
-                            </p>
-                            <p
-                              className="truncate text-xs text-slate-500"
+                              className="mt-1 break-words text-sm text-slate-600"
                               title={item.detail}
                             >
                               {item.detail}
                             </p>
-                            <p className="mt-0.5 text-xs text-slate-400">
+
+                            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                              <span className="font-medium text-slate-600">
+                                {adminName}
+                              </span>
+
+                              {item.adminUsername && (
+                                <span>
+                                  @{item.adminUsername}
+                                </span>
+                              )}
+                            </div>
+
+                            {item.targetLabel && (
+                              <p
+                                className="mt-1 break-words text-xs text-slate-500"
+                                title={item.targetLabel}
+                              >
+                                Target: {item.targetLabel}
+                              </p>
+                            )}
+
+                            <p className="mt-1 text-xs text-slate-400">
                               {formatActivityTime(item.occurredAt)}
                             </p>
                           </div>

@@ -1,11 +1,18 @@
+
 import { API_BASE_URL } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import type { CommunityPost } from "@/lib/community";
 
 export interface AdminRecentActivityItem {
-  kind: "report" | "post";
+  id: string;
+  actionKey: string;
+  category: string;
   title: string;
   detail: string;
+  adminDisplayName: string;
+  adminUsername: string | null;
+  targetType: string | null;
+  targetLabel: string | null;
   occurredAt: string;
 }
 
@@ -192,6 +199,7 @@ function isAdminRouteRecord(value: unknown): value is AdminRouteRecord {
 
   const isTransportType = (record: Record<string, unknown>) =>
     typeof record.name === "string" && typeof record.color === "string";
+
   const isTransportVariant = (record: Record<string, unknown>) =>
     isNonNegativeInteger(record.id) &&
     typeof record.code === "string" &&
@@ -237,7 +245,9 @@ function isAdminReportRecord(value: unknown): value is AdminReportRecord {
   );
 }
 
-function isAdminNotificationRecord(value: unknown): value is AdminNotificationRecord {
+function isAdminNotificationRecord(
+  value: unknown,
+): value is AdminNotificationRecord {
   return (
     isRecord(value) &&
     typeof value.id === "string" &&
@@ -257,9 +267,16 @@ function isRecentActivityItem(
 ): value is AdminRecentActivityItem {
   return (
     isRecord(value) &&
-    (value.kind === "report" || value.kind === "post") &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    typeof value.actionKey === "string" &&
+    typeof value.category === "string" &&
     typeof value.title === "string" &&
     typeof value.detail === "string" &&
+    typeof value.adminDisplayName === "string" &&
+    isNullableString(value.adminUsername) &&
+    isNullableString(value.targetType) &&
+    isNullableString(value.targetLabel) &&
     typeof value.occurredAt === "string"
   );
 }
@@ -284,6 +301,7 @@ function parseAdminSummary(value: unknown): AdminSummary {
   ) {
     throw new Error("Admin service returned an invalid response.");
   }
+
   return {
     registeredUsers: value.registeredUsers,
     routes: value.routes,
@@ -297,6 +315,7 @@ function parseAdminRoutes(value: unknown): AdminRouteRecord[] {
   if (!Array.isArray(value) || !value.every(isAdminRouteRecord)) {
     throw new Error("Admin service returned an invalid response.");
   }
+
   return value;
 }
 
@@ -314,6 +333,7 @@ function parseAdminUsers(value: unknown): AdminUserRecord[] {
   ) {
     throw new Error("Admin service returned an invalid response.");
   }
+
   return value;
 }
 
@@ -326,6 +346,7 @@ function parseAdminNotifications(value: unknown): AdminNotificationList {
   ) {
     throw new Error("Admin service returned an invalid response.");
   }
+
   return {
     notifications: value.notifications,
     unreadCount: value.unreadCount,
@@ -341,11 +362,15 @@ async function requestAdmin(
   },
 ): Promise<Record<string, unknown>> {
   const { data, error } = await supabase.auth.getSession();
+
   if (error) throw new Error(error.message);
+
   const session = data.session;
+
   if (!session?.access_token) {
     throw new Error("Please sign in to continue.");
   }
+
   if (session.user.id !== expectedUserId) {
     throw new Error("The active account changed. Please try again.");
   }
@@ -360,12 +385,14 @@ async function requestAdmin(
   });
 
   let payload: unknown;
+
   try {
     payload = await response.json();
   } catch {
     if (!response.ok) {
       throw new Error(`Admin request failed (HTTP ${response.status}).`);
     }
+
     throw new Error("Admin service returned an invalid response.");
   }
 
@@ -374,11 +401,14 @@ async function requestAdmin(
       isRecord(payload) && typeof payload.message === "string"
         ? payload.message
         : `Admin request failed (HTTP ${response.status}).`;
+
     throw new Error(message);
   }
+
   if (!isRecord(payload) || payload.success !== true) {
     throw new Error("Admin service returned an invalid response.");
   }
+
   return payload;
 }
 
@@ -407,9 +437,11 @@ export async function getAdminCommunityPosts(
   expectedUserId: string,
 ): Promise<CommunityPost[]> {
   const payload = await requestAdmin("/posts", expectedUserId);
+
   if (!Array.isArray(payload.posts)) {
     throw new Error("Admin service returned invalid community post data.");
   }
+
   return payload.posts as CommunityPost[];
 }
 
@@ -417,12 +449,14 @@ export async function getAdminReports(
   expectedUserId: string,
 ): Promise<AdminReportRecord[]> {
   const payload = await requestAdmin("/reports", expectedUserId);
+
   if (
     !Array.isArray(payload.reports) ||
     !payload.reports.every(isAdminReportRecord)
   ) {
     throw new Error("Admin service returned invalid reports data.");
   }
+
   return payload.reports;
 }
 
@@ -465,12 +499,14 @@ export async function createAdminRoute(
     method: "POST",
     body: payload,
   });
+
   if (
     !isRecord(response.route) ||
     !isNonNegativeInteger(response.route.id)
   ) {
     throw new Error("Admin service returned an invalid response.");
   }
+
   return response.route.id;
 }
 
@@ -501,9 +537,11 @@ export async function getAdminUnreadNotificationCount(
     "/notifications/unread-count",
     expectedUserId,
   );
+
   if (!isNonNegativeInteger(payload.unreadCount)) {
     throw new Error("Admin service returned an invalid response.");
   }
+
   return payload.unreadCount;
 }
 

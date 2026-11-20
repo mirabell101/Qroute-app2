@@ -4,6 +4,7 @@ import type {
   AdminRouteStopInput,
   AdminRouteUpdateInput,
 } from "./adminValidation.ts";
+import { getRecentAdminAuditLogsWithClient } from "./adminAudit.ts";
 
 const authUsersPerPage = 1000;
 const profileBatchSize = 200;
@@ -25,9 +26,15 @@ export class AdminNotFoundError extends Error {
 }
 
 export interface AdminRecentActivityItem {
-  kind: "report" | "post";
+  id: string;
+  actionKey: string;
+  category: string;
   title: string;
   detail: string;
+  adminDisplayName: string;
+  adminUsername: string | null;
+  targetType: string | null;
+  targetLabel: string | null;
   occurredAt: string;
 }
 
@@ -110,8 +117,6 @@ export async function getAdminSummary(
     routesResult,
     communityPostsResult,
     reportsCountResult,
-    reportsRecentResult,
-    communityPostsRecentResult,
   ] = await Promise.all([
     client
       .from("user_roles")
@@ -121,25 +126,18 @@ export async function getAdminSummary(
       .from("routes")
       .select("id", { count: "exact", head: true })
       .eq("is_deleted", false),
-    client.from("community_posts").select("id", { count: "exact", head: true }),
-    reportClient
-      .from("community_reports")
+    client
+      .from("community_posts")
       .select("id", { count: "exact", head: true }),
     reportClient
       .from("community_reports")
-      .select("id, target_type, reason, reported_content, created_at")
-      .order("created_at", { ascending: false })
-      .limit(recentActivityLimit),
-    client
-      .from("community_posts")
-      .select("id, title, author_display_name, created_at")
-      .order("created_at", { ascending: false })
-      .limit(recentActivityLimit),
+      .select("id", { count: "exact", head: true }),
   ]);
 
   if (userRolesResult.error) throw userRolesResult.error;
   if (routesResult.error) throw routesResult.error;
   if (communityPostsResult.error) throw communityPostsResult.error;
+
   if (
     !Array.isArray(userRolesResult.data) ||
     routesResult.count === null ||
@@ -149,16 +147,18 @@ export async function getAdminSummary(
   }
 
   const registeredUserIds = new Set<string>();
+
   for (const row of userRolesResult.data) {
     if (typeof row.user_id !== "string" || !row.user_id) {
       throw new Error("Admin summary returned an invalid user-role record.");
     }
+
     registeredUserIds.add(row.user_id);
   }
 
-  // Report metrics are auxiliary: until community_reports is available to this
-  // Admin-scoped client, preserve core metrics with explicit nulls.
+  // Report metrics remain auxiliary and independent from audit activity.
   let reports: number | null = null;
+
   if (reportsCountResult.error) {
     console.warn(
       "[admin] Report totals are unavailable:",
@@ -168,58 +168,19 @@ export async function getAdminSummary(
     reports = reportsCountResult.count;
   }
 
+  // Dashboard Recent Activity now comes exclusively from admin audit logs.
   let recentActivity: AdminRecentActivityItem[] | null = null;
-  if (
-    !reportsRecentResult.error &&
-    Array.isArray(reportsRecentResult.data) &&
-    !communityPostsRecentResult.error &&
-    Array.isArray(communityPostsRecentResult.data)
-  ) {
-    const items: AdminRecentActivityItem[] = [];
-    for (const row of reportsRecentResult.data) {
-      items.push({
-        kind: "report",
-        title:
-          typeof row.reason === "string" && row.reason
-            ? row.reason
-            : "Community report",
-        detail:
-          typeof row.reported_content === "string" ? row.reported_content : "",
-        occurredAt: typeof row.created_at === "string" ? row.created_at : "",
-      });
-    }
-    for (const row of communityPostsRecentResult.data) {
-      items.push({
-        kind: "post",
-        title:
-          typeof row.title === "string" && row.title
-            ? row.title
-            : "Community post",
-        detail: `Posted by ${
-          typeof row.author_display_name === "string"
-            ? row.author_display_name
-            : "an unknown author"
-        }`,
-        occurredAt: typeof row.created_at === "string" ? row.created_at : "",
-      });
-    }
-    items.sort((left, right) =>
-      right.occurredAt.localeCompare(left.occurredAt),
+
+  try {
+    recentActivity = await getRecentAdminAuditLogsWithClient(
+      client,
+      recentActivityLimit,
     );
-    recentActivity = items.slice(0, recentActivityLimit);
-  } else {
-    if (reportsRecentResult.error) {
-      console.warn(
-        "[admin] Recent reports are unavailable:",
-        reportsRecentResult.error.message,
-      );
-    }
-    if (communityPostsRecentResult.error) {
-      console.warn(
-        "[admin] Recent community posts are unavailable:",
-        communityPostsRecentResult.error.message,
-      );
-    }
+  } catch (error) {
+    console.warn(
+      "[admin] Recent audit activity is unavailable:",
+      error instanceof Error ? error.message : error,
+    );
   }
 
   return {
@@ -230,7 +191,8 @@ export async function getAdminSummary(
     recentActivity,
   };
 }
-  export async function getAdminRoutes(
+
+export async function getAdminRoutes(
   client: SupabaseClient,
 ): Promise<AdminRouteRecord[]> {
   const { data, error } = await client
@@ -263,6 +225,7 @@ export async function getAdminSummary(
     });
 
   if (error) throw error;
+
   if (!Array.isArray(data)) {
     throw new Error("Admin route query returned incomplete database results.");
   }
@@ -271,6 +234,7 @@ export async function getAdminSummary(
     if (!Array.isArray(route.route_stops)) {
       throw new Error("Admin route query returned invalid stop data.");
     }
+
     return {
       ...route,
       route_stops: [...route.route_stops].sort(
@@ -289,55 +253,71 @@ export async function getAdminUsers(
     .eq("role", "registered_user");
 
   if (roleError) throw roleError;
+
   if (!Array.isArray(roleRows)) {
     throw new Error("Admin user query returned incomplete role data.");
   }
 
   const registeredUserIds = new Set<string>();
+
   for (const row of roleRows) {
     if (typeof row.user_id !== "string" || !row.user_id) {
       throw new Error("Admin user query returned an invalid user-role record.");
     }
+
     registeredUserIds.add(row.user_id);
   }
+
   if (registeredUserIds.size === 0) return [];
 
   const authUsers = [];
+
   for (let page = 1; ; page += 1) {
     const { data, error } = await client.auth.admin.listUsers({
       page,
       perPage: authUsersPerPage,
     });
+
     if (error) throw error;
+
     if (!Array.isArray(data.users)) {
       throw new Error("Auth Admin returned incomplete user data.");
     }
+
     authUsers.push(...data.users);
+
     if (data.users.length < authUsersPerPage) break;
   }
 
   const authUsersById = new Map(
     authUsers.map((user) => [user.id, user]),
   );
+
   const missingUserId = [...registeredUserIds].find(
     (id) => !authUsersById.has(id),
   );
+
   if (missingUserId) {
     throw new Error("A registered user account could not be loaded.");
   }
 
   const profileUsernames = new Map<string, string | null>();
   const ids = [...registeredUserIds];
+
   for (let start = 0; start < ids.length; start += profileBatchSize) {
     const batch = ids.slice(start, start + profileBatchSize);
+
     const { data: profiles, error: profileError } = await client
       .from("profiles")
       .select("id, username")
       .in("id", batch);
+
     if (profileError) throw profileError;
+
     if (!Array.isArray(profiles)) {
       throw new Error("Admin user query returned incomplete profile data.");
     }
+
     for (const profile of profiles) {
       if (
         typeof profile.id !== "string" ||
@@ -348,6 +328,7 @@ export async function getAdminUsers(
       ) {
         throw new Error("Admin user query returned an invalid profile record.");
       }
+
       profileUsernames.set(profile.id, profile.username);
     }
   }
@@ -355,22 +336,28 @@ export async function getAdminUsers(
   return [...registeredUserIds]
     .map((id) => {
       const user = authUsersById.get(id);
+
       if (!user) {
         throw new Error("A registered user account could not be loaded.");
       }
+
       const bannedUntil = user.banned_until;
+
       const isBanned = Boolean(
         bannedUntil && new Date(bannedUntil).getTime() > Date.now(),
       );
+
       const record: AdminUserRecord = {
         id,
         email: user.email ?? null,
         username: profileUsernames.get(id) ?? null,
         createdAt: user.created_at,
       };
+
       if (isBanned) {
         record.banned = true;
       }
+
       return record;
     })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
@@ -387,6 +374,7 @@ export async function getAdminReports(
     .order("created_at", { ascending: false });
 
   if (error) throw error;
+
   if (!Array.isArray(data)) {
     throw new Error("Admin reports returned an invalid database result.");
   }
@@ -400,6 +388,7 @@ export async function getAdminReports(
           : row.target_type === "user"
             ? "User"
             : null;
+
     const id = Number(row.id);
 
     if (
@@ -458,7 +447,10 @@ export async function updateAdminReportStatus(
     .maybeSingle();
 
   if (error) throw error;
-  if (!report) throw new AdminNotFoundError("Community report not found.");
+
+  if (!report) {
+    throw new AdminNotFoundError("Community report not found.");
+  }
 }
 
 export async function setCommunityPostVisibility(
@@ -466,10 +458,6 @@ export async function setCommunityPostVisibility(
   postId: string,
   isHidden: boolean,
 ): Promise<void> {
-  // Selecting the updated row in the same query confirms that a post was
-  // actually matched, so a missing post can be reported as not found without
-  // a second round trip. Only the visibility column is written; post content
-  // and photos stay intact.
   const { data: post, error: updateError } = await client
     .from("community_posts")
     .update({ is_hidden: isHidden })
@@ -478,6 +466,7 @@ export async function setCommunityPostVisibility(
     .maybeSingle();
 
   if (updateError) throw updateError;
+
   if (!post) {
     throw new AdminNotFoundError("Community post not found.");
   }
@@ -486,29 +475,38 @@ export async function setCommunityPostVisibility(
 export async function getAdminCommunityPosts(client: SupabaseClient) {
   const { data: posts, error: postsError } = await client
     .from("community_posts")
-
-        .select(
+    .select(
       "id, author_id, author_display_name, title, content, start_name, start_latitude, start_longitude, destination_name, destination_latitude, destination_longitude, transport_type_id, photo_paths, is_hidden, created_at, transport_types(name), community_post_comments(count)",
     )
     .order("created_at", { ascending: false })
     .limit(500);
 
   if (postsError) throw postsError;
+
   const rows = posts ?? [];
+
   if (!rows.length) return [];
 
   const postIds = rows.map((post) => post.id);
+
   const { data: votes, error: votesError } = await client
     .from("community_post_votes")
     .select("post_id, vote_type")
     .in("post_id", postIds);
+
   if (votesError) throw votesError;
 
   const totals = new Map<string, { upvotes: number; downvotes: number }>();
-  for (const postId of postIds) totals.set(postId, { upvotes: 0, downvotes: 0 });
+
+  for (const postId of postIds) {
+    totals.set(postId, { upvotes: 0, downvotes: 0 });
+  }
+
   for (const vote of votes ?? []) {
     const total = totals.get(vote.post_id);
+
     if (!total) continue;
+
     if (vote.vote_type === "upvote") total.upvotes += 1;
     if (vote.vote_type === "downvote") total.downvotes += 1;
   }
@@ -535,6 +533,7 @@ export async function deleteAdminPost(
     .maybeSingle();
 
   if (fetchError) throw fetchError;
+
   if (!post) {
     throw new AdminNotFoundError("Community post not found.");
   }
@@ -558,8 +557,6 @@ export async function deleteAdminPost(
     .from(communityPhotoBucket)
     .remove(photoPaths);
 
-  // The post row is already deleted, so a failed photo cleanup must not
-  // report the whole request as failed; it is logged for follow-up instead.
   if (storageError) {
     console.error(
       "[admin] Post photos could not be removed from storage:",
@@ -599,9 +596,11 @@ async function verifyRouteVariant(
     .maybeSingle();
 
   if (error) throw error;
+
   if (!data) {
     throw new AdminInputError("Choose a valid transport variant.");
   }
+
   if (data.transport_type_id !== transportTypeId) {
     throw new AdminInputError(
       "The selected variant does not belong to the selected transport type.",
@@ -620,6 +619,7 @@ async function verifyRoutePoints(
         .map((stop) => stop.id),
     ),
   ];
+
   const stopIds = [
     ...new Set(
       stops.filter((stop) => stop.kind === "stop").map((stop) => stop.id),
@@ -631,10 +631,13 @@ async function verifyRoutePoints(
       .from("terminals")
       .select("id")
       .in("id", terminalIds);
+
     if (error) throw error;
+
     const foundIds = new Set(
       (Array.isArray(data) ? data : []).map((row) => row.id),
     );
+
     if (foundIds.size !== terminalIds.length) {
       throw new AdminInputError(
         "One or more selected terminals could not be found.",
@@ -647,10 +650,13 @@ async function verifyRoutePoints(
       .from("stops")
       .select("id")
       .in("id", stopIds);
+
     if (error) throw error;
+
     const foundIds = new Set(
       (Array.isArray(data) ? data : []).map((row) => row.id),
     );
+
     if (foundIds.size !== stopIds.length) {
       throw new AdminInputError(
         "One or more selected stops could not be found.",
@@ -664,8 +670,6 @@ export async function createAdminRoute(
   input: AdminRouteCreateInput,
   adminUserId: string,
 ): Promise<{ id: number }> {
-  // Validate every reference before writing so a bad input can never leave
-  // a half-created route behind.
   await verifyRouteVariant(client, input.transportTypeId, input.variantId);
   await verifyRoutePoints(client, input.stops);
 
@@ -690,6 +694,7 @@ export async function createAdminRoute(
     .single();
 
   if (routeError) throw routeError;
+
   if (!route || typeof route.id !== "number") {
     throw new Error("Route creation returned an incomplete result.");
   }
@@ -699,19 +704,18 @@ export async function createAdminRoute(
     .insert(toRouteStopRows(route.id, input.stops));
 
   if (stopsError) {
-    // supabase-js cannot run the route and stop inserts in one transaction,
-    // so compensate by removing the just-created route row.
     const { error: cleanupError } = await client
       .from("routes")
       .delete()
       .eq("id", route.id);
+
     if (cleanupError) {
       console.error(
-
-              "[admin] Route creation failed and the created route could not be removed:",
+        "[admin] Route creation failed and the created route could not be removed:",
         cleanupError.message,
       );
     }
+
     throw stopsError;
   }
 
@@ -729,6 +733,7 @@ async function replaceRouteStops(
     .eq("route_id", routeId);
 
   if (captureError) throw captureError;
+
   const previousRows: RouteStopRow[] = Array.isArray(previousStops)
     ? previousStops.map((row) => ({
         route_id: row.route_id,
@@ -742,6 +747,7 @@ async function replaceRouteStops(
     .from("route_stops")
     .delete()
     .eq("route_id", routeId);
+
   if (deleteError) throw deleteError;
 
   const { error: insertError } = await client
@@ -749,12 +755,11 @@ async function replaceRouteStops(
     .insert(toRouteStopRows(routeId, stops));
 
   if (insertError) {
-    // Restore the captured stops so a failed replacement does not leave the
-    // route without its stop sequence.
     if (previousRows.length > 0) {
       const { error: restoreError } = await client
         .from("route_stops")
         .insert(previousRows);
+
       if (restoreError) {
         console.error(
           "[admin] Route stops could not be restored after a failed update:",
@@ -762,6 +767,7 @@ async function replaceRouteStops(
         );
       }
     }
+
     throw insertError;
   }
 }
@@ -780,13 +786,16 @@ export async function updateAdminRoute(
     .maybeSingle();
 
   if (fetchError) throw fetchError;
+
   if (!route) {
     throw new AdminNotFoundError("Route not found.");
   }
 
   const updates: Record<string, unknown> = {};
+
   const nextTransportTypeId =
     input.transportTypeId ?? route.transport_type_id;
+
   const nextVariantId = input.variantId ?? route.variant_id;
 
   if (input.transportTypeId !== undefined || input.variantId !== undefined) {
@@ -814,8 +823,6 @@ export async function updateAdminRoute(
     updates.is_active = input.isActive;
   }
 
-  // Validate stop references before any write so a rejected edit cannot
-  // leave the route in a half-updated state.
   if (input.stops !== undefined) {
     await verifyRoutePoints(client, input.stops);
   }
@@ -825,6 +832,7 @@ export async function updateAdminRoute(
       .from("routes")
       .update(updates)
       .eq("id", routeId);
+
     if (updateError) throw updateError;
   }
 
@@ -855,9 +863,6 @@ export async function deleteAdminRoute(
 
   if (deleted) return;
 
-  // No live route was updated: either the route never existed or it is
-  // already soft-deleted. Only a missing route is an error; deleting an
-  // already-deleted route succeeds idempotently.
   const { data: existing, error: lookupError } = await client
     .from("routes")
     .select("id")
@@ -865,6 +870,7 @@ export async function deleteAdminRoute(
     .maybeSingle();
 
   if (lookupError) throw lookupError;
+
   if (!existing) {
     throw new AdminNotFoundError("Route not found.");
   }
