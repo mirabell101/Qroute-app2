@@ -14,7 +14,7 @@ import {
   AUTH_ROLE_UPDATED_EVENT,
   getUserRole,
 } from "./lib/authSession";
-import type { QRouteRole } from "./lib/roles";
+import { homeRedirectPath, type QRouteRole } from "./lib/roles";
 import { getStoredAccountDisplayName } from "./lib/accountApi";
 import { resolveVisitorMapRoute } from "./lib/visitorMapRoute";
 
@@ -158,6 +158,8 @@ function App() {
     roleState.userId === currentUserId
       ? roleState.role
       : null;
+
+  const currentUserHomeRedirectPath = homeRedirectPath(currentUserRole);
 
   const authenticatedRootPath: string | null =
     authLoading || roleLoading
@@ -720,6 +722,12 @@ function App() {
                           <Landing
                             currentUserId={currentUserId}
                             onLogout={handleLogout}
+                          />
+                        )
+                      : currentUserHomeRedirectPath ? (
+                          <Navigate
+                            to={currentUserHomeRedirectPath}
+                            replace
                           />
                         )
                       : protectedPage((userId) => (

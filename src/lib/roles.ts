@@ -57,3 +57,13 @@ export function roleLandingPath(role: string | null | undefined): string {
   if (role === MODERATOR_ROLE) return "/admin/routes";
   return "/home";
 }
+
+/**
+ * Returns the role-specific destination when a role must not use the
+ * registered-user homepage. Other roles continue through the normal route.
+ */
+export function homeRedirectPath(
+  role: string | null | undefined,
+): string | null {
+  return role === "admin" ? roleLandingPath(role) : null;
+}

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import * as roles from "./roles";
+
 import {
   DEFAULT_USER_ROLE,
   isKnownRole,
@@ -41,9 +43,25 @@ describe("isKnownRole", () => {
 
 describe("roleLandingPath", () => {
   it("sends Admins and Moderators to management and registered users home", () => {
-    expect(roleLandingPath("admin")).toBe("/admin/dashboard");
+    expect(roleLandingPath("admin")).toBe("/admin/base");
     expect(roleLandingPath("moderator")).toBe("/admin/routes");
     expect(roleLandingPath("registered_user")).toBe("/home");
     expect(roleLandingPath(null)).toBe("/home");
+  });
+});
+
+describe("homeRedirectPath", () => {
+  it("redirects only Admins away from the registered-user homepage", () => {
+    const homeRedirectPath = (
+      roles as {
+        homeRedirectPath?: (role: string | null | undefined) => string | null;
+      }
+    ).homeRedirectPath;
+
+    expect(homeRedirectPath).toBeTypeOf("function");
+    expect(homeRedirectPath?.("admin")).toBe("/admin/base");
+    expect(homeRedirectPath?.("registered_user")).toBeNull();
+    expect(homeRedirectPath?.("moderator")).toBeNull();
+    expect(homeRedirectPath?.(null)).toBeNull();
   });
 });
