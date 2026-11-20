@@ -4,11 +4,15 @@ export function mergeCommunityCommentRows(
   ...groups: CommunityComment[][]
 ): CommunityComment[] {
   const byId = new Map<string, CommunityComment>();
+
   for (const group of groups) {
     for (const comment of group) byId.set(comment.id, comment);
   }
-  return [...byId.values()].sort((left, right) =>
-    left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id),
+
+  return [...byId.values()].sort(
+    (left, right) =>
+      right.created_at.localeCompare(left.created_at) ||
+      right.id.localeCompare(left.id),
   );
 }
 

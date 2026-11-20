@@ -1,3 +1,4 @@
+
 import { API_BASE_URL } from "@/lib/api";
 import { validateImage } from "@/lib/mapImages";
 import { supabase } from "@/lib/supabase";
@@ -112,6 +113,22 @@ export interface CommunityReportResult {
   reportId: number;
 }
 
+/**
+ * Sort Community comments newest-first.
+ *
+ * created_at is the primary ordering field.
+ * id is used as a deterministic tie-breaker when timestamps are identical.
+ */
+export function sortCommunityCommentsNewestFirst(
+  comments: CommunityComment[],
+): CommunityComment[] {
+  return [...comments].sort(
+    (left, right) =>
+      right.created_at.localeCompare(left.created_at) ||
+      right.id.localeCompare(left.id),
+  );
+}
+
 export async function getCommunityAccess(userId: string): Promise<CommunityAccess> {
   const { data, error } = await supabase
     .from("user_roles")
@@ -211,7 +228,7 @@ export async function getCommunityPost(
     if (!post) throw new Error("Post not found.");
     return {
       post: toPublicCommunityPost(post),
-      comments: result?.comments ?? [],
+      comments: sortCommunityCommentsNewestFirst(result?.comments ?? []),
     };
   }
 
@@ -219,7 +236,11 @@ export async function getCommunityPost(
     post: CommunityPost;
     comments: CommunityComment[];
   }>(`/posts/${encodeURIComponent(postId)}`, {}, true);
-  return { ...result, post: withPhotoUrls(result.post) };
+  return {
+    ...result,
+    post: withPhotoUrls(result.post),
+    comments: sortCommunityCommentsNewestFirst(result.comments ?? []),
+  };
 }
 
 export async function getCommunityComments(
@@ -242,7 +263,9 @@ export async function getCommunityComments(
       p_include_comments: true,
     });
     if (error) throw new Error(error.message);
-    return (data as PublicCommunityData | null)?.comments ?? [];
+    return sortCommunityCommentsNewestFirst(
+      (data as PublicCommunityData | null)?.comments ?? [],
+    );
   }
 
   const result = await request<{ comments: CommunityComment[] }>(
@@ -250,7 +273,7 @@ export async function getCommunityComments(
     {},
     true,
   );
-  return result.comments ?? [];
+  return sortCommunityCommentsNewestFirst(result.comments ?? []);
 }
 
 export async function getCommunityProfilePhotoUrls(

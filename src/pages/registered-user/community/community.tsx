@@ -309,16 +309,18 @@ export default function Community({
           [comment],
         ),
       };
-      setComments((previous) => {
-        const current = previous[comment.post_id] ?? [];
-        if (current.some((item) => item.id === comment.id)) return previous;
-        return {
-          ...previous,
-          [comment.post_id]: [...current, comment].sort((left, right) =>
-            left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id),
-          ),
-        };
-      });
+    setComments((previous) => {
+      const current = previous[comment.post_id] ?? [];
+      if (current.some((item) => item.id === comment.id)) return previous;
+      return {
+        ...previous,
+        [comment.post_id]: [...current, comment].sort(
+          (left, right) =>
+            right.created_at.localeCompare(left.created_at) ||
+            right.id.localeCompare(left.id),
+        ),
+      };
+    });
     } else {
       const pending = pendingCommentsRef.current.get(comment.post_id) ?? [];
       pendingCommentsRef.current.set(comment.post_id, [...pending, comment]);

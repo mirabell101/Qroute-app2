@@ -835,7 +835,7 @@ router.get(
             "id, author_id, author_display_name, content, created_at",
           )
           .eq("post_id", post.id)
-          .order("created_at", { ascending: true }),
+          .order("created_at", { ascending: false }),
 
         voteCounts([post.id]),
       ]);
@@ -918,7 +918,7 @@ router.get(
           "id, post_id, author_id, author_display_name, content, created_at",
         )
         .in("post_id", postIds)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: false });
 
       if (error) {
         sendDatabaseError(res, error);
