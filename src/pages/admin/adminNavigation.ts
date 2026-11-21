@@ -1,20 +1,23 @@
 const adminNavigationDestinations: Record<string, string | null> = {
   Dashboard: "/admin/dashboard",
   "Route Management": "/admin/routes",
+  "Fare Management": "/admin/fare-management",
   "Post Management": "/admin/post-management",
   Reports: "/admin/reports",
   "User Management": "/admin/users",
   Settings: "/admin/settings",
-  // The admin base map view lives at /admin/base. /admin itself now
-  // redirects directly to /admin/dashboard.
+
+  // The admin base map view lives at /admin/base.
   "Preview of the System": "/admin/base",
   "Switch to User Mode": "/home",
+
   Recents: "/recents",
   Saved: "/saved",
   "Your Contribution": "/contribution",
   Community: "/community",
   Profile: "/profile",
   Notifications: "/admin/notifications",
+
   "Map filters": null,
 };
 
@@ -29,6 +32,7 @@ export function navigateToAdminDestination(
   navigate: (destination: string) => void,
 ): void {
   const destination = getAdminNavigationDestination(label);
+
   if (destination) {
     navigate(destination);
   }

@@ -31,6 +31,7 @@ import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
 import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
+  Receipt,
   Route as RouteIcon,
   FileText,
   Flag,
@@ -58,6 +59,7 @@ import {
 const navigationItems = [
   { label: "Dashboard", icon: LayoutDashboard },
   { label: "Route Management", icon: RouteIcon },
+  { label: "Fare Management", icon: Receipt },
   { label: "Post Management", icon: FileText },
   { label: "Reports", icon: Flag },
   { label: "User Management", icon: Users },

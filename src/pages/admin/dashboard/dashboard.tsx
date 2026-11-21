@@ -15,6 +15,7 @@ import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route,
+  Receipt,
   FileText,
   Flag,
   Users,
@@ -77,6 +78,7 @@ const summaryCards: Array<{
 const navigationItems = [
   { label: "Dashboard", icon: LayoutDashboard, active: true },
   { label: "Route Management", icon: Route, active: false },
+  { label: "Fare Management", icon: Receipt, active: false },
   { label: "Post Management", icon: FileText, active: false },
   { label: "Reports", icon: Flag, active: false },
   { label: "User Management", icon: Users, active: false },

@@ -1,4 +1,3 @@
-
 import "dotenv/config";
 
 import express, {
@@ -10,6 +9,7 @@ import express, {
 import authRoutes from "./routes/authRoutes.ts";
 import accountRoutes from "./routes/accountRoutes.ts";
 import adminRoutes from "./routes/adminRoutes.ts";
+import fareManagementRoutes from "./routes/fareManagementRoutes.ts";
 import routeManagementRoutes from "./routes/routeManagementRoutes.ts";
 import communityRoutes from "./routes/communityRoutes.ts";
 import recentSearchesRoutes from "./routes/recentSearchesRoutes.ts";
@@ -67,7 +67,7 @@ app.use((req, res, next) => {
 
     res.setHeader(
       "Access-Control-Allow-Origin",
-      normalizedOrigin
+      normalizedOrigin,
     );
 
     res.vary("Origin");
@@ -86,14 +86,14 @@ app.use((req, res, next) => {
       .filter(Boolean);
 
     const allowedHeadersLowercase = allowedHeaders.map(
-      (header) => header.toLowerCase()
+      (header) => header.toLowerCase(),
     );
 
     if (
       !requestedMethod ||
       !allowedMethods.includes(requestedMethod) ||
       requestedHeaders.some(
-        (header) => !allowedHeadersLowercase.includes(header)
+        (header) => !allowedHeadersLowercase.includes(header),
       )
     ) {
       res.status(400).json({
@@ -105,13 +105,13 @@ app.use((req, res, next) => {
 
     res.setHeader(
       "Access-Control-Allow-Methods",
-      allowedMethods.join(", ")
+      allowedMethods.join(", "),
     );
 
     if (requestedHeaders.length > 0) {
       res.setHeader(
         "Access-Control-Allow-Headers",
-        requestedHeaders.join(", ")
+        requestedHeaders.join(", "),
       );
     }
 
@@ -136,7 +136,16 @@ app.use(express.json({ limit: "1mb" }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/account", accountRoutes);
+
+// The dedicated Fare Management router must be mounted
+// before the general Admin router.
+app.use(
+  "/api/admin/fare-management",
+  fareManagementRoutes,
+);
+
 app.use("/api/admin", adminRoutes);
+
 app.use("/api/route-management", routeManagementRoutes);
 app.use("/api/community", communityRoutes);
 app.use("/api/recent-searches", recentSearchesRoutes);
@@ -154,7 +163,7 @@ app.get(
       uptime: Number(process.uptime().toFixed(2)),
       startedAt: new Date(startedAt).toISOString(),
     });
-  }
+  },
 );
 
 // =====================================================
@@ -192,12 +201,12 @@ app.get(
           headers: {
             apikey: key,
           },
-        }
+        },
       );
 
       if (!response.ok) {
         console.error(
-          `[server] Supabase Auth returned HTTP ${response.status}`
+          `[server] Supabase Auth returned HTTP ${response.status}`,
         );
 
         res.status(503).json({
@@ -225,7 +234,7 @@ app.get(
 
       console.error(
         "[server] Supabase health check failed:",
-        message
+        message,
       );
 
       res.status(503).json({
@@ -236,7 +245,7 @@ app.get(
         message: "Could not reach Supabase.",
       });
     }
-  }
+  },
 );
 
 // =====================================================
@@ -302,7 +311,7 @@ app.get(
 
       console.error(
         "[server] Roles health check failed:",
-        message
+        message,
       );
 
       res.status(503).json({
@@ -313,7 +322,7 @@ app.get(
         message: "Could not query the roles table.",
       });
     }
-  }
+  },
 );
 
 // =====================================================
@@ -327,7 +336,7 @@ app.use(
       status: "error",
       message: "API endpoint not found.",
     });
-  }
+  },
 );
 
 // =====================================================
@@ -339,7 +348,7 @@ app.use(
     err: unknown,
     _req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ) => {
     if (
       err instanceof SyntaxError &&
@@ -354,7 +363,7 @@ app.use(
     }
 
     next(err);
-  }
+  },
 );
 
 // =====================================================
@@ -366,11 +375,11 @@ app.use(
     err: unknown,
     _req: Request,
     res: Response,
-    _next: NextFunction
+    _next: NextFunction,
   ) => {
     console.error(
       "[server] Unhandled error:",
-      err
+      err,
     );
 
     if (res.headersSent) {
@@ -381,7 +390,7 @@ app.use(
       status: "error",
       message: "Internal server error.",
     });
-  }
+  },
 );
 
 // =====================================================

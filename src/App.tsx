@@ -46,6 +46,7 @@ import DisplayNameGAuth from "./pages/registered-user/display-name-gauth";
 import AdminBase from "./pages/admin/base/base";
 import Dashboard from "./pages/admin/dashboard/dashboard";
 import RouteManagement from "./pages/admin/route-management/route-management";
+import FareManagement from "./pages/admin/fare-management/fare-management";
 import PostManagement from "./pages/admin/post-management/post-management";
 import Reports from "./pages/admin/reports/reports";
 import UserManagement from "./pages/admin/user-management/user-management";
@@ -878,6 +879,13 @@ function App() {
                     to="/admin/dashboard"
                     replace
                   />
+                ))}
+              />
+
+              <Route
+                path="/admin/fare-management"
+                element={adminPage(() => (
+                  <FareManagement />
                 ))}
               />
 
