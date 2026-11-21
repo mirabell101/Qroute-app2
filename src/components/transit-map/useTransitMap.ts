@@ -3,10 +3,16 @@ import type { KeyboardEvent } from "react";
 
 import { getTerminals } from "@/lib/terminals";
 import type { Terminal } from "@/lib/terminals";
+
 import { getRouteDetails, getRouteMapIndex } from "@/lib/routes";
 import type { RouteDetails, RouteStop } from "@/lib/routes";
-import { getRouteGeometry, getRouteGeometryKey } from "@/lib/routeGeometry";
+
+import {
+  getRouteGeometry,
+  getRouteGeometryKey,
+} from "@/lib/routeGeometry";
 import type { RouteGeometry } from "@/lib/routeGeometry";
+
 import {
   findRouteStopIndex,
   getDisplayedRouteIds,
@@ -18,32 +24,53 @@ import {
   searchRouteMapItems,
   selectTripStop,
 } from "@/lib/routeMap";
+
 import type {
   RouteMapIndex,
   RouteMapPoint,
   RouteMapSearchResult,
 } from "@/lib/routeMap";
+
 import type { SavedKind } from "@/lib/savedItems";
 import { getRecentSearchItem } from "@/lib/recentSearches";
 import type { RecentSearchSelectionSource } from "@/lib/recentSearches";
+
 import { useRecentSearches } from "@/components/recent-searches/recentSearchesStore";
+
 import {
   buildFareCards,
   calculateFareOptionEstimates,
 } from "@/lib/fareCalculations";
-import { getRailFare, getTransportFareOptions } from "@/lib/fares";
-import type { RailFare, TransportFareOption } from "@/lib/fares";
+
+import {
+  getRailFare,
+  getRouteFareOption,
+} from "@/lib/fares";
+
+import type {
+  RailFare,
+  TransportFareOption,
+} from "@/lib/fares";
+
 import {
   getEndpointMapIcon,
   getMapIcon,
   getMapVehicleType,
 } from "@/lib/mapIcons";
+
 import { getPointImages } from "@/lib/mapImages";
 import type { PointImage } from "@/lib/mapImages";
+
 import { createCurrentLocationRequester } from "@/lib/currentLocation";
 
-export type LocationStatus = "idle" | "loading" | "success" | "error";
+export type LocationStatus =
+  | "idle"
+  | "loading"
+  | "success"
+  | "error";
+
 export type Coordinates = [number, number];
+
 export interface PinnedMapLocation {
   coordinates: Coordinates;
   label: string;
@@ -63,7 +90,9 @@ interface LoadedRouteLayer {
 
 export const defaultPosition: Coordinates = [14.7167, 121.05];
 
-export const stopTypeLabel = (stop: Pick<RouteStop, "stop_type">) =>
+export const stopTypeLabel = (
+  stop: Pick<RouteStop, "stop_type">,
+) =>
   stop.stop_type === "terminal"
     ? "Terminal"
     : stop.stop_type === "train_station"
@@ -74,142 +103,242 @@ export function useTransitMap(
   currentUserId: string | null | undefined = undefined,
 ) {
   const { record: recordRecentSearch } = useRecentSearches();
+
   const geolocation =
-    typeof navigator === "undefined" ? null : navigator.geolocation;
+    typeof navigator === "undefined"
+      ? null
+      : navigator.geolocation;
+
   const requestLocation = useMemo(
     () => createCurrentLocationRequester(geolocation),
-    [geolocation]
+    [geolocation],
   );
 
   const [currentPosition, setCurrentPosition] =
     useState<Coordinates | null>(null);
-  const [locationStatus, setLocationStatus] = useState<LocationStatus>("idle");
-  const [locationError, setLocationError] = useState<string | null>(
-    null
-  );
-  const [showLocationPopup, setShowLocationPopup] = useState(false);
+
+  const [locationStatus, setLocationStatus] =
+    useState<LocationStatus>("idle");
+
+  const [locationError, setLocationError] =
+    useState<string | null>(null);
+
+  const [showLocationPopup, setShowLocationPopup] =
+    useState(false);
+
   const locationRequestInFlight = useRef(false);
   const locationPopupTimer = useRef<number | null>(null);
 
   // Terminal data.
   const [terminals, setTerminals] = useState<Terminal[]>([]);
-  const [terminalError, setTerminalError] = useState<string | null>(null);
+  const [terminalError, setTerminalError] =
+    useState<string | null>(null);
   const [terminalsLoading, setTerminalsLoading] = useState(true);
 
   // Route selection and route details.
-  const [routeMapIndex, setRouteMapIndex] = useState<RouteMapIndex>({
-    routes: [],
-    points: [],
-  });
+  const [routeMapIndex, setRouteMapIndex] =
+    useState<RouteMapIndex>({
+      routes: [],
+      points: [],
+    });
+
   const [routesLoading, setRoutesLoading] = useState(true);
-  const [routeMapError, setRouteMapError] = useState<string | null>(null);
+
+  const [routeMapError, setRouteMapError] =
+    useState<string | null>(null);
+
   const [selectedRouteId, setSelectedRouteId] = useState("");
-  const [selectedRoute, setSelectedRoute] = useState<RouteDetails | null>(null);
-  const [selectedRouteStops, setSelectedRouteStops] = useState<RouteStop[]>([]);
-  const [routeStopsLoading, setRouteStopsLoading] = useState(false);
-  const [routeError, setRouteError] = useState<string | null>(null);
-  const [routeLayers, setRouteLayers] = useState<
-    Record<number, RouteLayerState>
-  >({});
-  const [visibleRouteIds, setVisibleRouteIds] = useState<number[]>([]);
-  const [routeLinesVisible, setRouteLinesVisible] = useState(true);
+  const [selectedRoute, setSelectedRoute] =
+    useState<RouteDetails | null>(null);
+
+  const [selectedRouteStops, setSelectedRouteStops] =
+    useState<RouteStop[]>([]);
+
+  const [routeStopsLoading, setRouteStopsLoading] =
+    useState(false);
+
+  const [routeError, setRouteError] =
+    useState<string | null>(null);
+
+  const [routeLayers, setRouteLayers] =
+    useState<Record<number, RouteLayerState>>({});
+
+  const [visibleRouteIds, setVisibleRouteIds] =
+    useState<number[]>([]);
+
+  const [routeLinesVisible, setRouteLinesVisible] =
+    useState(true);
+
   const [selectedPlacePoint, setSelectedPlacePoint] =
     useState<RouteMapPoint | null>(null);
+
   const [pinnedMapLocation, setPinnedMapLocation] =
     useState<PinnedMapLocation | null>(null);
+
   const [searchQuery, setSearchQuery] = useState("");
-  const [showSearchResults, setShowSearchResults] = useState(false);
-  const [activeSearchIndex, setActiveSearchIndex] = useState(0);
-  const [selectionError, setSelectionError] = useState<string | null>(null);
-  const pendingBoardingPoint = useRef<Pick<
-    RouteMapPoint,
-    "kind" | "ref_id"
-  > | null>(null);
-  const routeLayerCache = useRef(new Map<number, Promise<LoadedRouteLayer>>());
+  const [showSearchResults, setShowSearchResults] =
+    useState(false);
+
+  const [activeSearchIndex, setActiveSearchIndex] =
+    useState(0);
+
+  const [selectionError, setSelectionError] =
+    useState<string | null>(null);
+
+  const pendingBoardingPoint = useRef<
+    Pick<RouteMapPoint, "kind" | "ref_id"> | null
+  >(null);
+
+  const routeLayerCache = useRef(
+    new Map<number, Promise<LoadedRouteLayer>>(),
+  );
 
   const mapPoints = useMemo(
     () => mergeMapTerminals(routeMapIndex, terminals),
-    [routeMapIndex, terminals]
+    [routeMapIndex, terminals],
   );
+
   const selectedPlace = useMemo(
     () =>
       selectedPlacePoint
         ? mapPoints.find(
             (point) =>
               point.kind === selectedPlacePoint.kind &&
-              point.ref_id === selectedPlacePoint.ref_id
+              point.ref_id === selectedPlacePoint.ref_id,
           ) ?? selectedPlacePoint
         : null,
-    [mapPoints, selectedPlacePoint]
+    [mapPoints, selectedPlacePoint],
   );
+
   const searchResults = useMemo(
-    () => searchRouteMapItems(routeMapIndex.routes, mapPoints, searchQuery),
-    [routeMapIndex.routes, mapPoints, searchQuery]
+    () =>
+      searchRouteMapItems(
+        routeMapIndex.routes,
+        mapPoints,
+        searchQuery,
+      ),
+    [routeMapIndex.routes, mapPoints, searchQuery],
   );
+
   const selectedRouteLayer = selectedRouteId
     ? routeLayers[Number(selectedRouteId)]
     : undefined;
+
   const selectedRouteGeometry = selectedRouteLayer?.geometry;
+
   const routeDistanceMeters =
     selectedRouteGeometry?.totalDistanceMeters ?? null;
-  const routeDurationSeconds = selectedRouteGeometry?.durationSeconds ?? null;
-  const stopDistances = selectedRouteGeometry?.stopDistances ?? [];
-  const stopMapPositions = selectedRouteGeometry?.stopMapPositions ?? [];
-  const roadRouteLoading = selectedRouteLayer?.status === "loading";
+
+  const routeDurationSeconds =
+    selectedRouteGeometry?.durationSeconds ?? null;
+
+  const stopDistances =
+    selectedRouteGeometry?.stopDistances ?? [];
+
+  const stopMapPositions =
+    selectedRouteGeometry?.stopMapPositions ?? [];
+
+  const roadRouteLoading =
+    selectedRouteLayer?.status === "loading";
+
   const displayedRouteIds = useMemo(
     () =>
-      getDisplayedRouteIds(visibleRouteIds, selectedRouteId, routeLinesVisible),
-    [routeLinesVisible, selectedRouteId, visibleRouteIds]
+      getDisplayedRouteIds(
+        visibleRouteIds,
+        selectedRouteId,
+        routeLinesVisible,
+      ),
+    [
+      routeLinesVisible,
+      selectedRouteId,
+      visibleRouteIds,
+    ],
   );
+
   const displayedRouteLayers = useMemo(
     () =>
       displayedRouteIds.flatMap((routeId) => {
         const layer = routeLayers[routeId];
-        if (!layer?.route || !layer.geometry) return [];
-        return [{ routeId, route: layer.route, geometry: layer.geometry }];
+
+        if (!layer?.route || !layer.geometry) {
+          return [];
+        }
+
+        return [
+          {
+            routeId,
+            route: layer.route,
+            geometry: layer.geometry,
+          },
+        ];
       }),
-    [displayedRouteIds, routeLayers]
+    [displayedRouteIds, routeLayers],
   );
+
   const coincidentRouteIdsByGeometry = useMemo(() => {
     const groups = new Map<string, number[]>();
 
     displayedRouteLayers.forEach(({ routeId, geometry }) => {
       const key = getRouteGeometryKey(geometry.positions);
       const routeIds = groups.get(key) ?? [];
+
       routeIds.push(routeId);
       groups.set(key, routeIds);
     });
 
     return groups;
   }, [displayedRouteLayers]);
+
   const displayedRoutePositions = useMemo(
-    () => displayedRouteLayers.flatMap((layer) => layer.geometry?.positions ?? []),
-    [displayedRouteLayers]
+    () =>
+      displayedRouteLayers.flatMap(
+        (layer) => layer.geometry?.positions ?? [],
+      ),
+    [displayedRouteLayers],
   );
 
-  // Trip selection + fares.
-  const [boardingIndex, setBoardingIndex] = useState<number | null>(null);
-  const [destinationIndex, setDestinationIndex] = useState<number | null>(null);
-  const [fareOptions, setFareOptions] = useState<TransportFareOption[]>([]);
-  const [fareOptionsLoading, setFareOptionsLoading] = useState(false);
-  const [fareOptionsError, setFareOptionsError] = useState<string | null>(null);
-  const [railFare, setRailFare] = useState<RailFare | null>(null);
-  const [railFareLoading, setRailFareLoading] = useState(false);
-  const [railFareError, setRailFareError] = useState<string | null>(null);
+  // Trip selection + fare configuration.
+  const [boardingIndex, setBoardingIndex] =
+    useState<number | null>(null);
+
+  const [destinationIndex, setDestinationIndex] =
+    useState<number | null>(null);
+
+  // One fare configuration: the selected route's assigned variant.
+  const [fareOption, setFareOption] =
+    useState<TransportFareOption | null>(null);
+
+  const [fareOptionLoading, setFareOptionLoading] =
+    useState(false);
+
+  const [fareOptionError, setFareOptionError] =
+    useState<string | null>(null);
+
+  const [railFare, setRailFare] =
+    useState<RailFare | null>(null);
+
+  const [railFareLoading, setRailFareLoading] =
+    useState(false);
+
+  const [railFareError, setRailFareError] =
+    useState<string | null>(null);
 
   // Photos for terminals and stops, keyed "terminal-<id>" / "stop-<id>".
-  const [pointImages, setPointImages] = useState<Record<string, PointImage>>(
-    {}
-  );
+  const [pointImages, setPointImages] =
+    useState<Record<string, PointImage>>({});
 
   const requestCurrentLocation = useCallback(async () => {
-    if (locationRequestInFlight.current) return;
+    if (locationRequestInFlight.current) {
+      return;
+    }
 
     locationRequestInFlight.current = true;
+
     if (locationPopupTimer.current !== null) {
       window.clearTimeout(locationPopupTimer.current);
       locationPopupTimer.current = null;
     }
+
     setShowLocationPopup(true);
     setLocationStatus("loading");
     setLocationError(null);
@@ -219,13 +348,15 @@ export function useTransitMap(
       setLocationStatus("success");
     } catch (cause: unknown) {
       setLocationStatus("error");
+
       setLocationError(
         cause instanceof Error
           ? cause.message
-          : "Unable to determine your current location."
+          : "Unable to determine your current location.",
       );
     } finally {
       locationRequestInFlight.current = false;
+
       locationPopupTimer.current = window.setTimeout(() => {
         setShowLocationPopup(false);
         locationPopupTimer.current = null;
@@ -239,7 +370,7 @@ export function useTransitMap(
         window.clearTimeout(locationPopupTimer.current);
       }
     },
-    []
+    [],
   );
 
   // Load active terminals.
@@ -252,15 +383,22 @@ export function useTransitMap(
 
       try {
         const data = await getTerminals(currentUserId);
-        if (active) setTerminals(data);
+
+        if (active) {
+          setTerminals(data);
+        }
       } catch (error: unknown) {
         if (active) {
           setTerminalError(
-            error instanceof Error ? error.message : "Unable to load terminals."
+            error instanceof Error
+              ? error.message
+              : "Unable to load terminals.",
           );
         }
       } finally {
-        if (active) setTerminalsLoading(false);
+        if (active) {
+          setTerminalsLoading(false);
+        }
       }
     }
 
@@ -281,17 +419,22 @@ export function useTransitMap(
 
       try {
         const index = await getRouteMapIndex(currentUserId);
-        if (active) setRouteMapIndex(index);
+
+        if (active) {
+          setRouteMapIndex(index);
+        }
       } catch (error: unknown) {
         if (active) {
           setRouteMapError(
             error instanceof Error
               ? error.message
-              : "Unable to load routes and map points."
+              : "Unable to load routes and map points.",
           );
         }
       } finally {
-        if (active) setRoutesLoading(false);
+        if (active) {
+          setRoutesLoading(false);
+        }
       }
     }
 
@@ -305,27 +448,50 @@ export function useTransitMap(
   const loadRouteLayer = useCallback(
     (routeId: number): Promise<LoadedRouteLayer> => {
       const cached = routeLayerCache.current.get(routeId);
-      if (cached) return cached;
+
+      if (cached) {
+        return cached;
+      }
 
       setRouteLayers((current) => ({
         ...current,
-        [routeId]: { ...current[routeId], status: "loading", error: undefined },
+        [routeId]: {
+          ...current[routeId],
+          status: "loading",
+          error: undefined,
+        },
       }));
 
       const request = (async (): Promise<LoadedRouteLayer> => {
-        const route = await getRouteDetails(routeId, currentUserId);
+        const route = await getRouteDetails(
+          routeId,
+          currentUserId,
+        );
+
         setRouteLayers((current) => ({
           ...current,
-          [routeId]: { status: "loading", route },
+          [routeId]: {
+            status: "loading",
+            route,
+          },
         }));
 
         try {
           const geometry = await getRouteGeometry(route);
+
           setRouteLayers((current) => ({
             ...current,
-            [routeId]: { status: "ready", route, geometry },
+            [routeId]: {
+              status: "ready",
+              route,
+              geometry,
+            },
           }));
-          return { route, geometry };
+
+          return {
+            route,
+            geometry,
+          };
         } catch (error: unknown) {
           setRouteLayers((current) => ({
             ...current,
@@ -338,16 +504,25 @@ export function useTransitMap(
                   : "Unable to calculate this route's geometry.",
             },
           }));
+
           routeLayerCache.current.delete(routeId);
-          return { route, geometry: null };
+
+          return {
+            route,
+            geometry: null,
+          };
         }
       })();
 
       routeLayerCache.current.set(routeId, request);
+
       void request.catch((error: unknown) => {
-        if (routeLayerCache.current.get(routeId) === request) {
+        if (
+          routeLayerCache.current.get(routeId) === request
+        ) {
           routeLayerCache.current.delete(routeId);
         }
+
         setRouteLayers((current) => ({
           ...current,
           [routeId]: {
@@ -363,19 +538,21 @@ export function useTransitMap(
 
       return request;
     },
-    [currentUserId]
+    [currentUserId],
   );
 
   const loadVisibleRouteLayers = useCallback(
     (routeIds: number[]) => {
       const uniqueIds = [...new Set(routeIds)];
+
       setVisibleRouteIds(uniqueIds);
       setRouteLinesVisible(uniqueIds.length > 0);
+
       uniqueIds.forEach((routeId) => {
         void loadRouteLayer(routeId).catch(() => undefined);
       });
     },
-    [loadRouteLayer]
+    [loadRouteLayer],
   );
 
   // Load route details (type, variant, ordered stops) when the selection changes.
@@ -387,12 +564,16 @@ export function useTransitMap(
       setSelectedRouteStops([]);
       setBoardingIndex(null);
       setDestinationIndex(null);
-      setFareOptions([]);
+
+      setFareOption(null);
       setRailFare(null);
-      setFareOptionsError(null);
-      setFareOptionsLoading(false);
+
+      setFareOptionError(null);
+      setFareOptionLoading(false);
+
       setRailFareError(null);
       setRailFareLoading(false);
+
       setRouteError(null);
       setRouteStopsLoading(false);
 
@@ -404,7 +585,9 @@ export function useTransitMap(
       setRouteStopsLoading(true);
 
       try {
-        const { route: details } = await loadRouteLayer(Number(selectedRouteId));
+        const { route: details } = await loadRouteLayer(
+          Number(selectedRouteId),
+        );
 
         if (active) {
           const pendingPoint = pendingBoardingPoint.current;
@@ -414,19 +597,30 @@ export function useTransitMap(
           setSelectedRouteStops(details.route_stops);
 
           if (pendingPoint) {
-            const index = findRouteStopIndex(details.route_stops, pendingPoint);
-            if (index !== null) setBoardingIndex(index);
+            const index = findRouteStopIndex(
+              details.route_stops,
+              pendingPoint,
+            );
+
+            if (index !== null) {
+              setBoardingIndex(index);
+            }
           }
         }
       } catch (error: unknown) {
         if (active) {
           pendingBoardingPoint.current = null;
+
           setRouteError(
-            error instanceof Error ? error.message : "Unable to load this route."
+            error instanceof Error
+              ? error.message
+              : "Unable to load this route.",
           );
         }
       } finally {
-        if (active) setRouteStopsLoading(false);
+        if (active) {
+          setRouteStopsLoading(false);
+        }
       }
     }
 
@@ -437,43 +631,46 @@ export function useTransitMap(
     };
   }, [loadRouteLayer, selectedRouteId]);
 
-  // Load all active fare variants and matching rules for this route's area.
+  // Load the fare configuration assigned to this route's vehicle variant.
   useEffect(() => {
     let active = true;
 
-    async function loadFareOptions() {
-      setFareOptions([]);
-      setFareOptionsError(null);
+    async function loadFareOption() {
+      setFareOption(null);
+      setFareOptionError(null);
 
       if (!selectedRoute) {
-        setFareOptionsLoading(false);
+        setFareOptionLoading(false);
         return;
       }
 
-      setFareOptionsLoading(true);
+      setFareOptionLoading(true);
 
       try {
-        const options = await getTransportFareOptions(
-          selectedRoute.transport_type_id,
-          selectedRoute.fare_area_id,
-          undefined,
+        const option = await getRouteFareOption(
+          selectedRoute.transport_variants.id,
           currentUserId,
         );
-        if (active) setFareOptions(options);
+
+        if (active) {
+          setFareOption(option);
+        }
       } catch (error: unknown) {
         if (active) {
-          setFareOptionsError(
+          setFareOptionError(
             error instanceof Error
               ? error.message
-              : "Unable to load fare comparisons."
+              : "Unable to load the assigned vehicle fare.",
           );
         }
       } finally {
-        if (active) setFareOptionsLoading(false);
+        if (active) {
+          setFareOptionLoading(false);
+        }
       }
     }
 
-    void loadFareOptions();
+    void loadFareOption();
 
     return () => {
       active = false;
@@ -496,15 +693,27 @@ export function useTransitMap(
       setRailFareError(null);
       setRailFareLoading(false);
 
-      if (boardingIndex === null || destinationIndex === null) return;
+      if (
+        boardingIndex === null ||
+        destinationIndex === null
+      ) {
+        return;
+      }
 
       const board = selectedRouteStops[boardingIndex];
       const alight = selectedRouteStops[destinationIndex];
 
-      if (!board || !alight) return;
+      if (!board || !alight) {
+        return;
+      }
 
-      if (board.kind !== "stop" || alight.kind !== "stop") {
-        setRailFareError("Rail fares are only available between stations.");
+      if (
+        board.kind !== "stop" ||
+        alight.kind !== "stop"
+      ) {
+        setRailFareError(
+          "Rail fares are only available between stations.",
+        );
         return;
       }
 
@@ -517,17 +726,22 @@ export function useTransitMap(
           alight.ref_id,
           currentUserId,
         );
-        if (active) setRailFare(fare);
+
+        if (active) {
+          setRailFare(fare);
+        }
       } catch (error: unknown) {
         if (active) {
           setRailFareError(
             error instanceof Error
               ? error.message
-              : "Unable to load the rail fare."
+              : "Unable to load the rail fare.",
           );
         }
       } finally {
-        if (active) setRailFareLoading(false);
+        if (active) {
+          setRailFareLoading(false);
+        }
       }
     }
 
@@ -536,17 +750,27 @@ export function useTransitMap(
     return () => {
       active = false;
     };
-  }, [selectedRoute, selectedRouteStops, boardingIndex, destinationIndex, currentUserId]);
+  }, [
+    selectedRoute,
+    selectedRouteStops,
+    boardingIndex,
+    destinationIndex,
+    currentUserId,
+  ]);
 
   // Load photos for terminals, selected-route stops, and the open place.
   useEffect(() => {
     let active = true;
 
     async function loadPointImages() {
-      const terminalIds = terminals.map((terminal) => terminal.id);
+      const terminalIds = terminals.map(
+        (terminal) => terminal.id,
+      );
+
       const stopIds = selectedRouteStops
         .filter((stop) => stop.kind === "stop")
         .map((stop) => stop.ref_id);
+
       if (selectedPlace?.kind === "terminal") {
         terminalIds.push(selectedPlace.ref_id);
       } else if (selectedPlace?.kind === "stop") {
@@ -554,11 +778,19 @@ export function useTransitMap(
       }
 
       try {
-        const images = await getPointImages(terminalIds, stopIds);
-        if (active) setPointImages(images);
+        const images = await getPointImages(
+          terminalIds,
+          stopIds,
+        );
+
+        if (active) {
+          setPointImages(images);
+        }
       } catch {
         // Photos are optional, so a failure just means no image in the popup.
-        if (active) setPointImages({});
+        if (active) {
+          setPointImages({});
+        }
       }
     }
 
@@ -570,20 +802,34 @@ export function useTransitMap(
   }, [terminals, selectedRouteStops, selectedPlace]);
 
   // Derived route display values.
-  const routeColor = selectedRoute?.transport_types.color ?? "#2563eb";
-  const isRailRoute = selectedRoute?.transport_variants.fare_model === "matrix";
+  const routeColor =
+    selectedRoute?.transport_types.color ?? "#2563eb";
+
+  const isRailRoute =
+    selectedRoute?.transport_variants.fare_model === "matrix";
+
   const originName = selectedRouteStops[0]?.name;
+
   const destinationName =
     selectedRouteStops[selectedRouteStops.length - 1]?.name;
+
   const selectedPlaceImage = selectedPlace
-    ? pointImages[`${selectedPlace.kind}-${selectedPlace.ref_id}`]
+    ? pointImages[
+        `${selectedPlace.kind}-${selectedPlace.ref_id}`
+      ]
     : undefined;
 
   // Trip + fare.
   const boardingStop =
-    boardingIndex !== null ? selectedRouteStops[boardingIndex] : null;
+    boardingIndex !== null
+      ? selectedRouteStops[boardingIndex]
+      : null;
+
   const destinationStop =
-    destinationIndex !== null ? selectedRouteStops[destinationIndex] : null;
+    destinationIndex !== null
+      ? selectedRouteStops[destinationIndex]
+      : null;
+
   const hasTripSegment =
     !!selectedRoute &&
     boardingIndex !== null &&
@@ -593,21 +839,40 @@ export function useTransitMap(
     destinationStop?.route_id === selectedRoute.id;
 
   const tripDistanceMeters = hasTripSegment
-    ? getTripDistanceMeters(stopDistances, boardingIndex, destinationIndex)
+    ? getTripDistanceMeters(
+        stopDistances,
+        boardingIndex,
+        destinationIndex,
+      )
     : null;
 
   const fareOptionEstimates =
-    hasTripSegment && tripDistanceMeters !== null
-      ? calculateFareOptionEstimates(fareOptions, tripDistanceMeters)
+    hasTripSegment &&
+    tripDistanceMeters !== null &&
+    fareOption
+      ? calculateFareOptionEstimates(
+          [fareOption],
+          tripDistanceMeters,
+        )
       : [];
+
   const fareCards = buildFareCards(
     fareOptionEstimates,
     railFare,
-    isRailRoute ? selectedRoute?.transport_variants.id ?? null : null
+    isRailRoute
+      ? selectedRoute?.transport_variants.id ?? null
+      : null,
   );
 
   const handleTripStop = (index: number) => {
-    const selection = selectTripStop({ boardingIndex, destinationIndex }, index);
+    const selection = selectTripStop(
+      {
+        boardingIndex,
+        destinationIndex,
+      },
+      index,
+    );
+
     setBoardingIndex(selection.boardingIndex);
     setDestinationIndex(selection.destinationIndex);
   };
@@ -622,18 +887,29 @@ export function useTransitMap(
   const handlePlaceSelect = (point: RouteMapPoint) => {
     setSelectionError(null);
     setSelectedPlacePoint(point);
-    loadVisibleRouteLayers(point.routes.map(({ route }) => route.id));
+
+    loadVisibleRouteLayers(
+      point.routes.map(({ route }) => route.id),
+    );
+
     setShowSearchResults(false);
     setSearchQuery("");
     setActiveSearchIndex(0);
 
     if (selectedRoute) {
-      const routeStopIndex = findRouteStopIndex(selectedRouteStops, point);
+      const routeStopIndex = findRouteStopIndex(
+        selectedRouteStops,
+        point,
+      );
+
       if (routeStopIndex !== null) {
         if (
           isRepeatedBoardingPoint(
-            { boardingIndex, destinationIndex },
-            routeStopIndex
+            {
+              boardingIndex,
+              destinationIndex,
+            },
+            routeStopIndex,
           )
         ) {
           clearTrip();
@@ -642,27 +918,38 @@ export function useTransitMap(
 
         handleTripStop(routeStopIndex);
       }
+
       return;
     }
 
     if (selectedRouteId) {
       const activeRouteId = Number(selectedRouteId);
-      if (point.routes.some(({ route }) => route.id === activeRouteId)) {
+
+      if (
+        point.routes.some(
+          ({ route }) => route.id === activeRouteId,
+        )
+      ) {
         pendingBoardingPoint.current = {
           kind: point.kind,
           ref_id: point.ref_id,
         };
       }
+
       return;
     }
 
     const uniqueRoute = getUniqueServingRoute(point);
-    if (!uniqueRoute) return;
+
+    if (!uniqueRoute) {
+      return;
+    }
 
     pendingBoardingPoint.current = {
       kind: point.kind,
       ref_id: point.ref_id,
     };
+
     setSelectedRouteId(String(uniqueRoute.id));
   };
 
@@ -684,19 +971,25 @@ export function useTransitMap(
   const handleRouteLineSelect = (routeId: number) => {
     setSelectionError(null);
     setRouteLinesVisible(true);
+
     const nextRouteId = String(routeId);
-    if (selectedRouteId === nextRouteId) return;
+
+    if (selectedRouteId === nextRouteId) {
+      return;
+    }
+
     pendingBoardingPoint.current = null;
     setSelectedRouteId(nextRouteId);
   };
 
   const applySearchResultSelection = (
     result: RouteMapSearchResult,
-    source: RecentSearchSelectionSource
+    source: RecentSearchSelectionSource,
   ) => {
     if (source === "search") {
       recordRecentSearch(getRecentSearchItem(result));
     }
+
     setSelectionError(null);
     setSearchQuery("");
     setShowSearchResults(false);
@@ -705,29 +998,41 @@ export function useTransitMap(
     if (result.kind === "route") {
       pendingBoardingPoint.current = null;
       setSelectedPlacePoint(null);
+
       loadVisibleRouteLayers([result.route.id]);
+
       setBoardingIndex(null);
       setDestinationIndex(null);
       setSelectedRouteId(String(result.route.id));
+
       return;
     }
 
     handlePlaceSelect(result.point);
   };
 
-  const handleSearchResultSelect = (result: RouteMapSearchResult) => {
+  const handleSearchResultSelect = (
+    result: RouteMapSearchResult,
+  ) => {
     applySearchResultSelection(result, "search");
   };
 
-  const handleSavedItemSelect = (kind: SavedKind, targetId: number) => {
+  const handleSavedItemSelect = (
+    kind: SavedKind,
+    targetId: number,
+  ) => {
     const result = resolveSavedMapSelection(
       routeMapIndex,
       mapPoints,
       kind,
-      targetId
+      targetId,
     );
+
     if (!result) {
-      setSelectionError("This item is no longer available on the map.");
+      setSelectionError(
+        "This item is no longer available on the map.",
+      );
+
       return false;
     }
 
@@ -735,27 +1040,39 @@ export function useTransitMap(
     return true;
   };
 
-  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+  const handleSearchKeyDown = (
+    event: KeyboardEvent<HTMLInputElement>,
+  ) => {
     if (event.key === "Escape") {
       setShowSearchResults(false);
       return;
     }
 
-    if (!showSearchResults || searchResults.length === 0) return;
+    if (!showSearchResults || searchResults.length === 0) {
+      return;
+    }
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
+
       setActiveSearchIndex((index) =>
-        index >= searchResults.length - 1 ? 0 : index + 1
+        index >= searchResults.length - 1
+          ? 0
+          : index + 1,
       );
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
+
       setActiveSearchIndex((index) =>
-        index <= 0 ? searchResults.length - 1 : index - 1
+        index <= 0
+          ? searchResults.length - 1
+          : index - 1,
       );
     } else if (event.key === "Enter") {
       event.preventDefault();
-      handleSearchResultSelect(searchResults[activeSearchIndex]);
+      handleSearchResultSelect(
+        searchResults[activeSearchIndex],
+      );
     }
   };
 
@@ -763,15 +1080,20 @@ export function useTransitMap(
   // ordinary route stops use the route's configured transport color.
   const pointIcon = (index: number, stop: RouteStop) => {
     const vehicleType = getMapVehicleType(
-      selectedRoute?.transport_types.name ?? ""
+      selectedRoute?.transport_types.name ?? "",
     );
+
     if (index === boardingIndex) {
       return getEndpointMapIcon("boarding", vehicleType);
     }
+
     if (index === destinationIndex) {
       return getEndpointMapIcon("destination", vehicleType);
     }
-    if (stop.kind === "terminal") return getMapIcon("terminal");
+
+    if (stop.kind === "terminal") {
+      return getMapIcon("terminal");
+    }
 
     return stop.stop_type === "train_station"
       ? getMapIcon("train_station", routeColor)
@@ -785,6 +1107,7 @@ export function useTransitMap(
     locationError,
     showLocationPopup,
     requestCurrentLocation,
+
     // loading / errors
     terminalsLoading,
     terminalError,
@@ -795,6 +1118,7 @@ export function useTransitMap(
     routeStopsLoading,
     roadRouteLoading,
     routeMapIndex,
+
     // map data
     mapPoints,
     selectedPlace,
@@ -804,6 +1128,7 @@ export function useTransitMap(
     displayedRoutePositions,
     coincidentRouteIdsByGeometry,
     stopMapPositions,
+
     // selection
     selectedRouteId,
     selectedRoute,
@@ -818,15 +1143,17 @@ export function useTransitMap(
     destinationName,
     routeDistanceMeters,
     routeDurationSeconds,
+
     // fares
-    fareOptions,
-    fareOptionsLoading,
-    fareOptionsError,
+    fareOption,
+    fareOptionLoading,
+    fareOptionError,
     railFareLoading,
     railFareError,
     hasTripSegment,
     tripDistanceMeters,
     fareCards,
+
     // search
     searchQuery,
     setSearchQuery,
@@ -835,6 +1162,7 @@ export function useTransitMap(
     setShowSearchResults,
     activeSearchIndex,
     setActiveSearchIndex,
+
     // actions
     pointIcon,
     handlePlaceSelect,
@@ -851,4 +1179,5 @@ export function useTransitMap(
   };
 }
 
-export type TransitMapController = ReturnType<typeof useTransitMap>;
+export type TransitMapController =
+  ReturnType<typeof useTransitMap>;

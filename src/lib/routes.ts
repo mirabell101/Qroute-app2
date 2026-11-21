@@ -1,13 +1,21 @@
 import { supabase } from "@/lib/supabase";
 import { buildRouteMapIndex } from "./routeMap";
-import type { RouteMapIndex, RouteMapRouteRecord } from "./routeMap";
-import { getPublicMapData, hasMapAuthSession } from "./publicMap";
+import type {
+  RouteMapIndex,
+  RouteMapRouteRecord,
+} from "./routeMap";
+import {
+  getPublicMapData,
+  hasMapAuthSession,
+} from "./publicMap";
 
 const routeMapCacheLifetime = 60_000;
+
 let cachedRouteMapIndex: {
   value: RouteMapIndex;
   expiresAt: number;
 } | null = null;
+
 let routeMapIndexRequest: Promise<RouteMapIndex> | null = null;
 
 export type PointKind = "terminal" | "stop";
@@ -19,7 +27,7 @@ export interface RouteStop {
   route_id: number;
   stop_order: number;
   kind: PointKind;
-  ref_id: number; // terminals.id when kind = "terminal", stops.id when "stop"
+  ref_id: number;
   name: string;
   latitude: number;
   longitude: number;
@@ -31,11 +39,13 @@ export interface RouteDetails {
   id: number;
   name: string;
   transport_type_id: number;
-  fare_area_id: number | null;
   created_by: string | null;
   is_approved: boolean;
   moderation_status: "pending" | "approved" | "rejected";
-  transport_types: { name: string; color: string };
+  transport_types: {
+    name: string;
+    color: string;
+  };
   transport_variants: {
     id: number;
     code: string;
@@ -76,7 +86,7 @@ async function fetchAuthenticatedRouteMapIndex(): Promise<RouteMapIndex> {
         terminals ( id, name, latitude, longitude, is_active, is_approved ),
         stops ( id, name, description, stop_type, latitude, longitude, is_approved )
       )
-    `
+    `,
     )
     .eq("is_active", true)
     .eq("is_deleted", false)
@@ -85,12 +95,17 @@ async function fetchAuthenticatedRouteMapIndex(): Promise<RouteMapIndex> {
     .eq("moderation_status", "approved")
     .order("name", { ascending: true });
 
-  if (error) throw new Error(error.message);
+  if (error) {
+    throw new Error(error.message);
+  }
 
   // Only routes whose every point is approved appear on the map.
-  const records = ((data ?? []) as unknown as RouteMapRouteRecord[]).filter(
+  const records = (
+    (data ?? []) as unknown as RouteMapRouteRecord[]
+  ).filter(
     (record) =>
-      record.route_stops.length > 0 && record.route_stops.every(hasApprovedPoint)
+      record.route_stops.length > 0 &&
+      record.route_stops.every(hasApprovedPoint),
   );
 
   return buildRouteMapIndex(records);
@@ -104,25 +119,34 @@ export async function getRouteMapIndex(
     return buildRouteMapIndex(routes);
   }
 
-  if (cachedRouteMapIndex && cachedRouteMapIndex.expiresAt > Date.now()) {
+  if (
+    cachedRouteMapIndex &&
+    cachedRouteMapIndex.expiresAt > Date.now()
+  ) {
     return cachedRouteMapIndex.value;
   }
 
   if (!routeMapIndexRequest) {
-    routeMapIndexRequest = fetchAuthenticatedRouteMapIndex().then((index) => {
-    cachedRouteMapIndex = {
-      value: index,
-      expiresAt: Date.now() + routeMapCacheLifetime,
-    };
-    return index;
-    });
+    routeMapIndexRequest = fetchAuthenticatedRouteMapIndex().then(
+      (index) => {
+        cachedRouteMapIndex = {
+          value: index,
+          expiresAt: Date.now() + routeMapCacheLifetime,
+        };
+
+        return index;
+      },
+    );
   }
 
   const request = routeMapIndexRequest;
+
   try {
     return await request;
   } finally {
-    if (routeMapIndexRequest === request) routeMapIndexRequest = null;
+    if (routeMapIndexRequest === request) {
+      routeMapIndexRequest = null;
+    }
   }
 }
 
@@ -143,16 +167,24 @@ interface RawRouteStop {
   stops: RawPoint | null;
 }
 
-interface RawRoute extends Omit<RouteDetails, "route_stops" | "created_by"> {
+interface RawRoute extends Omit<
+  RouteDetails,
+  "route_stops" | "created_by"
+> {
   route_stops: RawRouteStop[];
 }
 
 // created_by is not readable by logged-out visitors (anon has no grant on it),
 // so it is fetched separately and only when someone is signed in. Visitors get
 // null, which simply hides owner-only actions like "Edit route".
-async function getRouteOwnerId(routeId: number): Promise<string | null> {
+async function getRouteOwnerId(
+  routeId: number,
+): Promise<string | null> {
   const { data: sessionData } = await supabase.auth.getSession();
-  if (!sessionData.session) return null;
+
+  if (!sessionData.session) {
+    return null;
+  }
 
   const { data, error } = await supabase
     .from("routes")
@@ -160,9 +192,13 @@ async function getRouteOwnerId(routeId: number): Promise<string | null> {
     .eq("id", routeId)
     .maybeSingle();
 
-  if (error) return null;
+  if (error) {
+    return null;
+  }
 
-  return (data as { created_by: string | null } | null)?.created_by ?? null;
+  return (
+    (data as { created_by: string | null } | null)?.created_by ?? null
+  );
 }
 
 export async function getRouteDetails(
@@ -171,49 +207,59 @@ export async function getRouteDetails(
 ): Promise<RouteDetails> {
   if (!(await hasMapAuthSession(currentUserId))) {
     const { routes } = await getPublicMapData();
+
     const route = routes.find((item) => item.id === routeId);
 
-    if (!route) throw new Error("This route isn't available yet.");
+    if (!route) {
+      throw new Error("This route isn't available yet.");
+    }
 
-    const routeStops = route.route_stops.flatMap((row): RouteStop[] => {
-      if (row.terminals) {
-        return [{
-          route_id: row.route_id,
-          stop_order: row.stop_order,
-          kind: "terminal",
-          ref_id: row.terminals.id,
-          name: row.terminals.name,
-          latitude: row.terminals.latitude,
-          longitude: row.terminals.longitude,
-          stop_type: "terminal",
-          description: null,
-        }];
-      }
+    const routeStops = route.route_stops
+      .flatMap((row): RouteStop[] => {
+        if (row.terminals) {
+          return [
+            {
+              route_id: row.route_id,
+              stop_order: row.stop_order,
+              kind: "terminal",
+              ref_id: row.terminals.id,
+              name: row.terminals.name,
+              latitude: row.terminals.latitude,
+              longitude: row.terminals.longitude,
+              stop_type: "terminal",
+              description: null,
+            },
+          ];
+        }
 
-      if (row.stops) {
-        return [{
-          route_id: row.route_id,
-          stop_order: row.stop_order,
-          kind: "stop",
-          ref_id: row.stops.id,
-          name: row.stops.name,
-          latitude: row.stops.latitude,
-          longitude: row.stops.longitude,
-          stop_type: row.stops.stop_type ?? "road_stop",
-          description: row.stops.description ?? null,
-        }];
-      }
+        if (row.stops) {
+          return [
+            {
+              route_id: row.route_id,
+              stop_order: row.stop_order,
+              kind: "stop",
+              ref_id: row.stops.id,
+              name: row.stops.name,
+              latitude: row.stops.latitude,
+              longitude: row.stops.longitude,
+              stop_type: row.stops.stop_type ?? "road_stop",
+              description: row.stops.description ?? null,
+            },
+          ];
+        }
 
-      return [];
-    }).sort((a, b) => a.stop_order - b.stop_order);
+        return [];
+      })
+      .sort((a, b) => a.stop_order - b.stop_order);
 
-    if (routeStops.length === 0) throw new Error("This route isn't available yet.");
+    if (routeStops.length === 0) {
+      throw new Error("This route isn't available yet.");
+    }
 
     return {
       id: route.id,
       name: route.name,
       transport_type_id: route.transport_type_id,
-      fare_area_id: route.fare_area_id,
       created_by: null,
       is_approved: true,
       moderation_status: "approved",
@@ -230,7 +276,6 @@ export async function getRouteDetails(
       id,
       name,
       transport_type_id,
-      fare_area_id,
       is_approved,
       moderation_status,
       transport_types ( name, color ),
@@ -241,7 +286,7 @@ export async function getRouteDetails(
         terminals ( id, name, latitude, longitude, is_approved ),
         stops ( id, name, description, stop_type, latitude, longitude, is_approved )
       )
-    `
+    `,
     )
     .eq("id", routeId)
     .eq("is_deleted", false)
@@ -250,13 +295,18 @@ export async function getRouteDetails(
     .eq("moderation_status", "approved")
     .single();
 
-  if (error) throw new Error(error.message);
+  if (error) {
+    throw new Error(error.message);
+  }
 
   const raw = data as unknown as RawRoute;
 
   // Never show a route with an unapproved or hidden point; it could mislead
   // riders about where it goes and what it costs.
-  if (raw.route_stops.length === 0 || !raw.route_stops.every(hasApprovedPoint)) {
+  if (
+    raw.route_stops.length === 0 ||
+    !raw.route_stops.every(hasApprovedPoint)
+  ) {
     throw new Error("This route isn't available yet.");
   }
 
@@ -300,10 +350,16 @@ export async function getRouteDetails(
 
   const createdBy = await getRouteOwnerId(routeId);
 
-  return { ...raw, created_by: createdBy, route_stops: points };
+  return {
+    ...raw,
+    created_by: createdBy,
+    route_stops: points,
+  };
 }
 
 // Kept so any other file importing it still works.
-export async function getRouteStops(routeId: number): Promise<RouteStop[]> {
+export async function getRouteStops(
+  routeId: number,
+): Promise<RouteStop[]> {
   return (await getRouteDetails(routeId)).route_stops;
 }

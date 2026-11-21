@@ -20,7 +20,6 @@ export interface PublicMapStop {
 }
 
 export interface PublicMapRoute extends RouteMapRouteRecord {
-  fare_area_id: number | null;
   transport_variants: TransportVariant;
 }
 
@@ -28,8 +27,14 @@ export interface PublicMapData {
   terminals: Terminal[];
   stops: PublicMapStop[];
   routes: PublicMapRoute[];
-  transportTypes: { id: number; name: string; color: string }[];
-  transportVariants: (TransportVariant & { transport_type_id: number })[];
+  transportTypes: {
+    id: number;
+    name: string;
+    color: string;
+  }[];
+  transportVariants: (TransportVariant & {
+    transport_type_id: number;
+  })[];
   fareRules: FareRule[];
   fareRuleDistanceBands: (FareDistanceBand & {
     id: number;
@@ -44,16 +49,21 @@ let publicMapDataRequest: Promise<PublicMapData> | null = null;
 export async function hasMapAuthSession(
   currentUserId: string | null | undefined = undefined,
 ): Promise<boolean> {
-  if (currentUserId !== undefined) return currentUserId !== null;
+  if (currentUserId !== undefined) {
+    return currentUserId !== null;
+  }
+
   const { data } = await supabase.auth.getSession();
   return data.session !== null;
 }
 
 export function getPublicMapData(): Promise<PublicMapData> {
-  if (publicMapDataRequest) return publicMapDataRequest;
+  if (publicMapDataRequest) {
+    return publicMapDataRequest;
+  }
 
   const request: Promise<PublicMapData> = Promise.resolve(
-    supabase.rpc("get_public_map_data")
+    supabase.rpc("get_public_map_data"),
   )
     .then(({ data, error }) => {
       if (error || data === null || typeof data !== "object") {
@@ -64,6 +74,7 @@ export function getPublicMapData(): Promise<PublicMapData> {
     })
     .catch((error: unknown) => {
       publicMapDataRequest = null;
+
       throw error instanceof Error
         ? error
         : new Error("Unable to load public map information.");

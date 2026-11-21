@@ -68,7 +68,6 @@ export interface AdminRouteRecord {
   id: number;
   name: string;
   transport_type_id: number;
-  fare_area_id: number | null;
   is_active: boolean;
   is_approved: boolean;
   is_banned: boolean;
@@ -154,13 +153,16 @@ export async function getAdminSummary(
       .from("user_roles")
       .select("user_id")
       .eq("role", "registered_user"),
+
     client
       .from("routes")
       .select("id", { count: "exact", head: true })
       .eq("is_deleted", false),
+
     client
       .from("community_posts")
       .select("id", { count: "exact", head: true }),
+
     reportClient
       .from("community_reports")
       .select("id", { count: "exact", head: true }),
@@ -168,21 +170,30 @@ export async function getAdminSummary(
 
   if (userRolesResult.error) throw userRolesResult.error;
   if (routesResult.error) throw routesResult.error;
-  if (communityPostsResult.error) throw communityPostsResult.error;
+  if (communityPostsResult.error) {
+    throw communityPostsResult.error;
+  }
 
   if (
     !Array.isArray(userRolesResult.data) ||
     routesResult.count === null ||
     communityPostsResult.count === null
   ) {
-    throw new Error("Admin summary returned incomplete database results.");
+    throw new Error(
+      "Admin summary returned incomplete database results.",
+    );
   }
 
   const registeredUserIds = new Set<string>();
 
   for (const row of userRolesResult.data) {
-    if (typeof row.user_id !== "string" || !row.user_id) {
-      throw new Error("Admin summary returned an invalid user-role record.");
+    if (
+      typeof row.user_id !== "string" ||
+      !row.user_id
+    ) {
+      throw new Error(
+        "Admin summary returned an invalid user-role record.",
+      );
     }
 
     registeredUserIds.add(row.user_id);
@@ -234,7 +245,6 @@ export async function getAdminRoutes(
       id,
       name,
       transport_type_id,
-      fare_area_id,
       is_active,
       is_approved,
       is_banned,
@@ -260,18 +270,23 @@ export async function getAdminRoutes(
   if (error) throw error;
 
   if (!Array.isArray(data)) {
-    throw new Error("Admin route query returned incomplete database results.");
+    throw new Error(
+      "Admin route query returned incomplete database results.",
+    );
   }
 
   return (data as AdminRouteRecord[]).map((route) => {
     if (!Array.isArray(route.route_stops)) {
-      throw new Error("Admin route query returned invalid stop data.");
+      throw new Error(
+        "Admin route query returned invalid stop data.",
+      );
     }
 
     return {
       ...route,
       route_stops: [...route.route_stops].sort(
-        (left, right) => left.stop_order - right.stop_order,
+        (left, right) =>
+          left.stop_order - right.stop_order,
       ),
     };
   });
@@ -280,20 +295,28 @@ export async function getAdminRoutes(
 export async function getAdminRouteManagementData(
   client: SupabaseClient,
 ): Promise<AdminRouteManagementData> {
-  const [routes, stopsResult, terminalsResult, typesResult] = await Promise.all([
+  const [
+    routes,
+    stopsResult,
+    terminalsResult,
+    typesResult,
+  ] = await Promise.all([
     getAdminRoutes(client),
+
     client
       .from("stops")
       .select(
         "id, name, description, stop_type, latitude, longitude, transport_type_id, is_active, is_approved, is_banned, is_deleted, moderation_status, moderation_note, transport_types(name, color)",
       )
       .order("name", { ascending: true }),
+
     client
       .from("terminals")
       .select(
         "id, name, latitude, longitude, transport_type_id, is_active, is_approved, is_banned, is_deleted, moderation_status, moderation_note, transport_types(name, color)",
       )
       .order("name", { ascending: true }),
+
     client
       .from("transport_types")
       .select("id, name, color")
@@ -303,12 +326,15 @@ export async function getAdminRouteManagementData(
   if (stopsResult.error) throw stopsResult.error;
   if (terminalsResult.error) throw terminalsResult.error;
   if (typesResult.error) throw typesResult.error;
+
   if (
     !Array.isArray(stopsResult.data) ||
     !Array.isArray(terminalsResult.data) ||
     !Array.isArray(typesResult.data)
   ) {
-    throw new Error("Route Management returned incomplete database results.");
+    throw new Error(
+      "Route Management returned incomplete database results.",
+    );
   }
 
   return {
@@ -330,24 +356,36 @@ export async function getAdminUsers(
   if (roleError) throw roleError;
 
   if (!Array.isArray(roleRows)) {
-    throw new Error("Admin user query returned incomplete role data.");
+    throw new Error(
+      "Admin user query returned incomplete role data.",
+    );
   }
 
-  const userRoles = new Map<string, AdminUserRecord["role"]>();
+  const userRoles = new Map<
+    string,
+    AdminUserRecord["role"]
+  >();
 
   for (const row of roleRows) {
     if (
       typeof row.user_id !== "string" ||
       !row.user_id ||
-      (row.role !== "registered_user" && row.role !== "moderator")
+      (
+        row.role !== "registered_user" &&
+        row.role !== "moderator"
+      )
     ) {
-      throw new Error("Admin user query returned an invalid user-role record.");
+      throw new Error(
+        "Admin user query returned an invalid user-role record.",
+      );
     }
 
     userRoles.set(row.user_id, row.role);
   }
 
-  if (userRoles.size === 0) return [];
+  if (userRoles.size === 0) {
+    return [];
+  }
 
   const authUsers = [];
 
@@ -360,12 +398,16 @@ export async function getAdminUsers(
     if (error) throw error;
 
     if (!Array.isArray(data.users)) {
-      throw new Error("Auth Admin returned incomplete user data.");
+      throw new Error(
+        "Auth Admin returned incomplete user data.",
+      );
     }
 
     authUsers.push(...data.users);
 
-    if (data.users.length < authUsersPerPage) break;
+    if (data.users.length < authUsersPerPage) {
+      break;
+    }
   }
 
   const authUsersById = new Map(
@@ -377,24 +419,40 @@ export async function getAdminUsers(
   );
 
   if (missingUserId) {
-    throw new Error("A registered user account could not be loaded.");
+    throw new Error(
+      "A registered user account could not be loaded.",
+    );
   }
 
-  const profileUsernames = new Map<string, string | null>();
+  const profileUsernames = new Map<
+    string,
+    string | null
+  >();
+
   const ids = [...userRoles.keys()];
 
-  for (let start = 0; start < ids.length; start += profileBatchSize) {
-    const batch = ids.slice(start, start + profileBatchSize);
+  for (
+    let start = 0;
+    start < ids.length;
+    start += profileBatchSize
+  ) {
+    const batch = ids.slice(
+      start,
+      start + profileBatchSize,
+    );
 
-    const { data: profiles, error: profileError } = await client
-      .from("profiles")
-      .select("id, username")
-      .in("id", batch);
+    const { data: profiles, error: profileError } =
+      await client
+        .from("profiles")
+        .select("id, username")
+        .in("id", batch);
 
     if (profileError) throw profileError;
 
     if (!Array.isArray(profiles)) {
-      throw new Error("Admin user query returned incomplete profile data.");
+      throw new Error(
+        "Admin user query returned incomplete profile data.",
+      );
     }
 
     for (const profile of profiles) {
@@ -405,10 +463,15 @@ export async function getAdminUsers(
           typeof profile.username === "string"
         )
       ) {
-        throw new Error("Admin user query returned an invalid profile record.");
+        throw new Error(
+          "Admin user query returned an invalid profile record.",
+        );
       }
 
-      profileUsernames.set(profile.id, profile.username);
+      profileUsernames.set(
+        profile.id,
+        profile.username,
+      );
     }
   }
 
@@ -417,13 +480,16 @@ export async function getAdminUsers(
       const user = authUsersById.get(id);
 
       if (!user) {
-        throw new Error("A registered user account could not be loaded.");
+        throw new Error(
+          "A registered user account could not be loaded.",
+        );
       }
 
       const bannedUntil = user.banned_until;
 
       const isBanned = Boolean(
-        bannedUntil && new Date(bannedUntil).getTime() > Date.now(),
+        bannedUntil &&
+        new Date(bannedUntil).getTime() > Date.now(),
       );
 
       const record: AdminUserRecord = {
@@ -440,7 +506,9 @@ export async function getAdminUsers(
 
       return record;
     })
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    .sort((left, right) =>
+      right.createdAt.localeCompare(left.createdAt),
+    );
 }
 
 export async function updateAdminUserRole(
@@ -459,7 +527,9 @@ export async function updateAdminUserRole(
   if (error) throw error;
 
   if (!data) {
-    throw new AdminNotFoundError("Registered user was not found.");
+    throw new AdminNotFoundError(
+      "Registered user was not found.",
+    );
   }
 }
 
@@ -476,7 +546,9 @@ export async function getAdminReports(
   if (error) throw error;
 
   if (!Array.isArray(data)) {
-    throw new Error("Admin reports returned an invalid database result.");
+    throw new Error(
+      "Admin reports returned an invalid database result.",
+    );
   }
 
   return data.map((row) => {
@@ -499,17 +571,26 @@ export async function getAdminReports(
       typeof row.reported_user_name !== "string" ||
       typeof row.reported_content !== "string" ||
       typeof row.reason !== "string" ||
-      (row.status !== "Pending" &&
+      (
+        row.status !== "Pending" &&
         row.status !== "Reviewed" &&
-        row.status !== "Dismissed") ||
+        row.status !== "Dismissed"
+      ) ||
       typeof row.created_at !== "string" ||
       (row.post_id !== null && typeof row.post_id !== "string") ||
       (row.comment_id !== null && typeof row.comment_id !== "string") ||
-      (row.reported_user_id !== null &&
-        typeof row.reported_user_id !== "string") ||
-      (row.description !== null && typeof row.description !== "string")
+      (
+        row.reported_user_id !== null &&
+        typeof row.reported_user_id !== "string"
+      ) ||
+      (
+        row.description !== null &&
+        typeof row.description !== "string"
+      )
     ) {
-      throw new Error("Admin reports returned an invalid record.");
+      throw new Error(
+        "Admin reports returned an invalid record.",
+      );
     }
 
     return {
@@ -523,11 +604,14 @@ export async function getAdminReports(
       reportedContent: row.reported_content,
       reporter: row.reporter_id,
       reportedUser: row.reported_user_name,
-      date: new Date(row.created_at).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
+      date: new Date(row.created_at).toLocaleDateString(
+        "en-US",
+        {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        },
+      ),
       status: row.status,
       description: row.description ?? "",
     };
@@ -541,7 +625,10 @@ export async function updateAdminReportStatus(
 ): Promise<void> {
   const { data: report, error } = await client
     .from("community_reports")
-    .update({ status, updated_at: new Date().toISOString() })
+    .update({
+      status,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", id)
     .select("id")
     .maybeSingle();
@@ -549,7 +636,9 @@ export async function updateAdminReportStatus(
   if (error) throw error;
 
   if (!report) {
-    throw new AdminNotFoundError("Community report not found.");
+    throw new AdminNotFoundError(
+      "Community report not found.",
+    );
   }
 }
 
@@ -568,11 +657,15 @@ export async function setCommunityPostVisibility(
   if (updateError) throw updateError;
 
   if (!post) {
-    throw new AdminNotFoundError("Community post not found.");
+    throw new AdminNotFoundError(
+      "Community post not found.",
+    );
   }
 }
 
-export async function getAdminCommunityPosts(client: SupabaseClient) {
+export async function getAdminCommunityPosts(
+  client: SupabaseClient,
+) {
   const { data: posts, error: postsError } = await client
     .from("community_posts")
     .select(
@@ -585,7 +678,9 @@ export async function getAdminCommunityPosts(client: SupabaseClient) {
 
   const rows = posts ?? [];
 
-  if (!rows.length) return [];
+  if (!rows.length) {
+    return [];
+  }
 
   const postIds = rows.map((post) => post.id);
 
@@ -596,10 +691,19 @@ export async function getAdminCommunityPosts(client: SupabaseClient) {
 
   if (votesError) throw votesError;
 
-  const totals = new Map<string, { upvotes: number; downvotes: number }>();
+  const totals = new Map<
+    string,
+    {
+      upvotes: number;
+      downvotes: number;
+    }
+  >();
 
   for (const postId of postIds) {
-    totals.set(postId, { upvotes: 0, downvotes: 0 });
+    totals.set(postId, {
+      upvotes: 0,
+      downvotes: 0,
+    });
   }
 
   for (const vote of votes ?? []) {
@@ -607,14 +711,20 @@ export async function getAdminCommunityPosts(client: SupabaseClient) {
 
     if (!total) continue;
 
-    if (vote.vote_type === "upvote") total.upvotes += 1;
-    if (vote.vote_type === "downvote") total.downvotes += 1;
+    if (vote.vote_type === "upvote") {
+      total.upvotes += 1;
+    }
+
+    if (vote.vote_type === "downvote") {
+      total.downvotes += 1;
+    }
   }
 
   return rows.map((post) => ({
     ...post,
     transport_type: post.transport_types?.name ?? null,
-    comment_count: post.community_post_comments?.[0]?.count ?? 0,
+    comment_count:
+      post.community_post_comments?.[0]?.count ?? 0,
     upvotes: totals.get(post.id)?.upvotes ?? 0,
     downvotes: totals.get(post.id)?.downvotes ?? 0,
     transport_types: undefined,
@@ -635,7 +745,9 @@ export async function deleteAdminPost(
   if (fetchError) throw fetchError;
 
   if (!post) {
-    throw new AdminNotFoundError("Community post not found.");
+    throw new AdminNotFoundError(
+      "Community post not found.",
+    );
   }
 
   const { error: deleteError } = await client
@@ -647,11 +759,14 @@ export async function deleteAdminPost(
 
   const photoPaths = Array.isArray(post.photo_paths)
     ? post.photo_paths.filter(
-        (path): path is string => typeof path === "string" && path.length > 0,
+        (path): path is string =>
+          typeof path === "string" && path.length > 0,
       )
     : [];
 
-  if (photoPaths.length === 0) return;
+  if (photoPaths.length === 0) {
+    return;
+  }
 
   const { error: storageError } = await client.storage
     .from(communityPhotoBucket)
@@ -679,8 +794,10 @@ function toRouteStopRows(
   return stops.map((stop, index) => ({
     route_id: routeId,
     stop_order: index + 1,
-    terminal_id: stop.kind === "terminal" ? stop.id : null,
-    stop_id: stop.kind === "stop" ? stop.id : null,
+    terminal_id:
+      stop.kind === "terminal" ? stop.id : null,
+    stop_id:
+      stop.kind === "stop" ? stop.id : null,
   }));
 }
 
@@ -689,21 +806,23 @@ async function replaceRouteStops(
   routeId: number,
   stops: AdminRouteStopInput[],
 ): Promise<void> {
-  const { data: previousStops, error: captureError } = await client
-    .from("route_stops")
-    .select("route_id, stop_order, terminal_id, stop_id")
-    .eq("route_id", routeId);
+  const { data: previousStops, error: captureError } =
+    await client
+      .from("route_stops")
+      .select("route_id, stop_order, terminal_id, stop_id")
+      .eq("route_id", routeId);
 
   if (captureError) throw captureError;
 
-  const previousRows: RouteStopRow[] = Array.isArray(previousStops)
-    ? previousStops.map((row) => ({
-        route_id: row.route_id,
-        stop_order: row.stop_order,
-        terminal_id: row.terminal_id ?? null,
-        stop_id: row.stop_id ?? null,
-      }))
-    : [];
+  const previousRows: RouteStopRow[] =
+    Array.isArray(previousStops)
+      ? previousStops.map((row) => ({
+          route_id: row.route_id,
+          stop_order: row.stop_order,
+          terminal_id: row.terminal_id ?? null,
+          stop_id: row.stop_id ?? null,
+        }))
+      : [];
 
   const { error: deleteError } = await client
     .from("route_stops")
@@ -740,22 +859,39 @@ export async function updateAdminRoute(
   input: AdminRouteUpdateInput,
 ): Promise<void> {
   const updates: Record<string, unknown> = {};
-  if (input.name !== undefined) updates.name = input.name;
+
+  if (input.name !== undefined) {
+    updates.name = input.name;
+  }
+
   if (input.transportTypeId !== undefined) {
     updates.transport_type_id = input.transportTypeId;
   }
-  if (input.variantId !== undefined) updates.variant_id = input.variantId;
-  if (input.isActive !== undefined) updates.is_active = input.isActive;
-  if (input.stops !== undefined) {
-    updates.stops = input.stops.map(({ kind, id }) => ({ kind, id }));
+
+  if (input.variantId !== undefined) {
+    updates.variant_id = input.variantId;
   }
+
+  if (input.isActive !== undefined) {
+    updates.is_active = input.isActive;
+  }
+
+  if (input.stops !== undefined) {
+    updates.stops = input.stops.map(({ kind, id }) => ({
+      kind,
+      id,
+    }));
+  }
+
   if (input.moderationStatus !== undefined) {
     if (input.moderationStatus === "pending") {
       throw new AdminInputError(
         "A moderated route cannot be returned to pending.",
       );
     }
+
     updates.moderation_status = input.moderationStatus;
+
     updates.moderation_note =
       input.moderationStatus === "rejected"
         ? input.moderationNote ?? null
@@ -763,16 +899,20 @@ export async function updateAdminRoute(
   }
 
   if (Object.keys(updates).length > 0) {
-    const { error } = await client.rpc("manage_transit_record", {
-      p_entity_type: "route",
-      p_action: "update",
-      p_entity_id: routeId,
-      p_payload: updates,
-    });
+    const { error } = await client.rpc(
+      "manage_transit_record",
+      {
+        p_entity_type: "route",
+        p_action: "update",
+        p_entity_id: routeId,
+        p_payload: updates,
+      },
+    );
 
     if (error?.code === "P0002") {
       throw new AdminNotFoundError("Route not found.");
     }
+
     if (error) throw error;
   }
 }
@@ -781,16 +921,20 @@ export async function deleteAdminRoute(
   client: SupabaseClient,
   routeId: number,
 ): Promise<void> {
-  const { error } = await client.rpc("manage_transit_record", {
-    p_entity_type: "route",
-    p_action: "archive",
-    p_entity_id: routeId,
-    p_payload: {},
-  });
+  const { error } = await client.rpc(
+    "manage_transit_record",
+    {
+      p_entity_type: "route",
+      p_action: "archive",
+      p_entity_id: routeId,
+      p_payload: {},
+    },
+  );
 
   if (error?.code === "P0002") {
     throw new AdminNotFoundError("Route not found.");
   }
+
   if (error) throw error;
 }
 
@@ -799,9 +943,12 @@ export async function toggleAdminUserBan(
   userId: string,
   ban: boolean,
 ): Promise<void> {
-  const { error } = await adminClient.auth.admin.updateUserById(userId, {
-    ban_duration: ban ? "876000h" : "none",
-  });
+  const { error } = await adminClient.auth.admin.updateUserById(
+    userId,
+    {
+      ban_duration: ban ? "876000h" : "none",
+    },
+  );
 
   if (error) throw error;
 }

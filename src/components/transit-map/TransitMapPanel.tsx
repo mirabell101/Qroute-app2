@@ -1,13 +1,21 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 
-import { Accessibility, GraduationCap, UserRound } from "lucide-react";
+import {
+  Accessibility,
+  GraduationCap,
+  UserRound,
+  Users,
+} from "lucide-react";
+
 import { useNavigate } from "react-router-dom";
 
 import { findRouteStopIndex } from "@/lib/routeMap";
 import type { RouteDetails } from "@/lib/routes";
+
 import { hasSavedBookmark } from "@/lib/savedItems";
 import type { SavedKind } from "@/lib/savedItems";
+
 import { useSavedItems } from "@/components/saved/savedItemsStore";
 
 import { stopTypeLabel } from "./useTransitMap";
@@ -27,6 +35,7 @@ export function TransitMapPanel({
   renderRouteActions?: (route: RouteDetails) => ReactNode;
 }) {
   const navigate = useNavigate();
+
   const {
     userId,
     bookmarkIds,
@@ -35,12 +44,13 @@ export function TransitMapPanel({
     addBookmark,
     removeBookmark,
   } = useSavedItems();
-  const [bookmarkActionKey, setBookmarkActionKey] = useState<string | null>(
-    null
-  );
-  const [bookmarkActionError, setBookmarkActionError] = useState<string | null>(
-    null
-  );
+
+  const [bookmarkActionKey, setBookmarkActionKey] =
+    useState<string | null>(null);
+
+  const [bookmarkActionError, setBookmarkActionError] =
+    useState<string | null>(null);
+
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
 
   const {
@@ -65,9 +75,9 @@ export function TransitMapPanel({
     destinationIndex,
     boardingStop,
     destinationStop,
-    fareOptions,
-    fareOptionsLoading,
-    fareOptionsError,
+    fareOption,
+    fareOptionLoading,
+    fareOptionError,
     railFareLoading,
     railFareError,
     hasTripSegment,
@@ -82,7 +92,7 @@ export function TransitMapPanel({
   const toggleBookmark = async (
     kind: SavedKind,
     targetId: number,
-    isSaved: boolean
+    isSaved: boolean,
   ) => {
     if (!userId) {
       setShowLoginPrompt(true);
@@ -90,6 +100,7 @@ export function TransitMapPanel({
     }
 
     const key = `${kind}:${targetId}`;
+
     setBookmarkActionKey(key);
     setBookmarkActionError(null);
 
@@ -103,17 +114,30 @@ export function TransitMapPanel({
       setBookmarkActionError(
         cause instanceof Error
           ? cause.message
-          : "Unable to update this saved item."
+          : "Unable to update this saved item.",
       );
     } finally {
       setBookmarkActionKey(null);
     }
   };
 
-  const bookmarkButton = (kind: SavedKind, targetId: number) => {
+  const bookmarkButton = (
+    kind: SavedKind,
+    targetId: number,
+  ) => {
     const label =
-      kind === "route" ? "Route" : kind === "stop" ? "Stop" : "Terminal";
-    const isSaved = hasSavedBookmark(bookmarkIds, kind, targetId);
+      kind === "route"
+        ? "Route"
+        : kind === "stop"
+          ? "Stop"
+          : "Terminal";
+
+    const isSaved = hasSavedBookmark(
+      bookmarkIds,
+      kind,
+      targetId,
+    );
+
     const key = `${kind}:${targetId}`;
     const isPending = bookmarkActionKey === key;
 
@@ -122,7 +146,9 @@ export function TransitMapPanel({
         type="button"
         aria-pressed={isSaved}
         disabled={bookmarksLoading || isPending}
-        onClick={() => void toggleBookmark(kind, targetId, isSaved)}
+        onClick={() =>
+          void toggleBookmark(kind, targetId, isSaved)
+        }
         className="w-full rounded-lg border border-[#0f2a47] px-3 py-2 text-xs font-semibold text-[#0f2a47] hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {isPending
@@ -144,7 +170,9 @@ export function TransitMapPanel({
     routeError ||
     (!routesLoading && routeMapIndex.routes.length === 0);
 
-  if (!visible) return null;
+  if (!visible) {
+    return null;
+  }
 
   return (
     <div className={className}>
@@ -190,14 +218,22 @@ export function TransitMapPanel({
         </p>
       )}
 
-      {!routesLoading && !routeMapError && routeMapIndex.routes.length === 0 && (
-        <p className="text-sm text-gray-500">No active routes found.</p>
-      )}
+      {!routesLoading &&
+        !routeMapError &&
+        routeMapIndex.routes.length === 0 && (
+          <p className="text-sm text-gray-500">
+            No active routes found.
+          </p>
+        )}
 
       {selectedPlace && (
         <section
           aria-labelledby="selected-place-title"
-          className={selectedRoute ? "border-b border-gray-200 pb-4" : ""}
+          className={
+            selectedRoute
+              ? "border-b border-gray-200 pb-4"
+              : ""
+          }
         >
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -207,10 +243,12 @@ export function TransitMapPanel({
               >
                 {selectedPlace.name}
               </h2>
+
               <p className="mt-1 text-xs text-gray-500">
                 {stopTypeLabel(selectedPlace)}
               </p>
             </div>
+
             <button
               type="button"
               aria-label="Close place details"
@@ -229,6 +267,7 @@ export function TransitMapPanel({
                 loading="lazy"
                 className="h-36 w-full rounded-lg object-cover"
               />
+
               {!selectedPlaceImage.is_approved && (
                 <p className="mt-1 text-[10px] text-amber-700">
                   Photo pending admin review
@@ -242,28 +281,36 @@ export function TransitMapPanel({
               {selectedPlace.description}
             </p>
           )}
+
           <p className="mt-2 text-[11px] text-gray-500">
             {selectedPlace.latitude.toFixed(5)},{" "}
             {selectedPlace.longitude.toFixed(5)}
           </p>
 
           <div className="mt-3">
-            {bookmarkButton(selectedPlace.kind, selectedPlace.ref_id)}
+            {bookmarkButton(
+              selectedPlace.kind,
+              selectedPlace.ref_id,
+            )}
           </div>
 
           {selectedPlace.routes.length > 1 && (
             <p className="mt-2 text-xs text-gray-600">
-              Several routes serve this place. Click a colored route line to
-              choose one; click again to cycle through overlapping lines.
+              Several routes serve this place. Click a colored
+              route line to choose one; click again to cycle
+              through overlapping lines.
             </p>
           )}
 
           {selectedRoute &&
             !routeStopsLoading &&
-            findRouteStopIndex(selectedRouteStops, selectedPlace) === null && (
+            findRouteStopIndex(
+              selectedRouteStops,
+              selectedPlace,
+            ) === null && (
               <p className="mt-2 text-xs text-amber-700">
-                This place is not served by {selectedRoute.name}. Select a
-                compatible route to use it as a trip stop.
+                This place is not served by {selectedRoute.name}.
+                Select a compatible route to use it as a trip stop.
               </p>
             )}
         </section>
@@ -295,7 +342,9 @@ export function TransitMapPanel({
       {/* Active route details */}
       {selectedRoute && (
         <div
-          className={`flex min-h-0 flex-col ${selectedPlace ? "mt-4" : ""}`}
+          className={`flex min-h-0 flex-col ${
+            selectedPlace ? "mt-4" : ""
+          }`}
         >
           <div className="flex flex-wrap gap-2">
             <span
@@ -318,7 +367,10 @@ export function TransitMapPanel({
             {selectedRoute.name}
           </h2>
 
-          <p className="mt-2 text-[11px] text-gray-500">Origin: {originName}</p>
+          <p className="mt-2 text-[11px] text-gray-500">
+            Origin: {originName}
+          </p>
+
           <p className="mt-1 text-[11px] text-gray-500">
             Destination: {destinationName}
           </p>
@@ -331,6 +383,7 @@ export function TransitMapPanel({
           <div className="mt-3 rounded-lg bg-gray-50 p-3 text-[11px] text-gray-700">
             <div className="flex justify-between gap-2">
               <span>Boarding</span>
+
               <span className="text-right font-medium">
                 {boardingStop?.name ?? "Tap a stop or terminal"}
               </span>
@@ -338,30 +391,35 @@ export function TransitMapPanel({
 
             <div className="mt-1 flex justify-between gap-2">
               <span>Destination</span>
+
               <span className="text-right font-medium">
                 {destinationStop?.name ?? "Tap a later stop"}
               </span>
             </div>
 
-            {fareOptionsLoading && (
+            {fareOptionLoading && (
               <p role="status" className="mt-2 text-gray-500">
-                Loading fare comparisons...
+                Loading assigned vehicle fare...
               </p>
             )}
 
-            {fareOptionsError && (
+            {fareOptionError && (
               <p role="alert" className="mt-2 text-red-600">
-                {fareOptionsError}
+                {fareOptionError}
               </p>
             )}
 
             {isRailRoute && (
               <>
                 {railFareLoading && (
-                  <p role="status" className="mt-2 text-gray-500">
+                  <p
+                    role="status"
+                    className="mt-2 text-gray-500"
+                  >
                     Loading station fares...
                   </p>
                 )}
+
                 {railFareError && (
                   <p role="alert" className="mt-2 text-red-600">
                     {railFareError}
@@ -370,62 +428,77 @@ export function TransitMapPanel({
               </>
             )}
 
-            {!isRailRoute && selectedRoute.fare_area_id === null && (
-              <p className="mt-2 text-amber-700">
-                Fare area is not assigned to this route. Fare estimates are
-                unavailable until its area and matching rules are configured.
-              </p>
-            )}
-
-            {!hasTripSegment && (
-              <p className="mt-2 text-gray-600">
-                Select any stop on this route to board, then any other stop as
-                your destination to compare fares.
-              </p>
-            )}
-
-            {hasTripSegment && !isRailRoute && tripDistanceMeters === null && (
-              <p className="mt-2 text-gray-600">
-                {roadRouteLoading
-                  ? "Calculating distance along the route..."
-                  : "Route distance is unavailable, so fare estimates cannot be calculated."}
-              </p>
-            )}
-
-            {!fareOptionsLoading &&
-              !fareOptionsError &&
-              fareOptions.length === 0 && (
+            {!fareOptionLoading &&
+              !fareOptionError &&
+              !fareOption && (
                 <p className="mt-2 text-amber-700">
-                  No active fare variants are configured for this transport
-                  type.
+                  The fare configuration for this route's assigned
+                  vehicle variant is unavailable.
                 </p>
               )}
 
-            {hasTripSegment && isRailRoute && railFareLoading && (
-              <p role="status" className="mt-2 text-gray-500">
-                Loading station fares...
+            {!isRailRoute &&
+              fareOption &&
+              !fareOptionLoading &&
+              !fareOptionError &&
+              !fareOption.fareRule && (
+                <p className="mt-2 text-amber-700">
+                  No currently effective road fare rule is
+                  configured for {fareOption.variant.name}.
+                </p>
+              )}
+
+            {!hasTripSegment && (
+              <p className="mt-2 text-gray-600">
+                Select any stop on this route to board, then any
+                other stop as your destination to view the fare.
               </p>
             )}
 
             {hasTripSegment &&
-              !fareOptionsLoading &&
-              !fareOptionsError &&
-              fareOptions.length > 0 &&
-              (!isRailRoute || (isRailRoute && !railFareLoading)) &&
+              !isRailRoute &&
+              tripDistanceMeters === null && (
+                <p className="mt-2 text-gray-600">
+                  {roadRouteLoading
+                    ? "Calculating distance along the route..."
+                    : "Route distance is unavailable, so the fare cannot be calculated."}
+                </p>
+              )}
+
+            {hasTripSegment &&
+              isRailRoute &&
+              railFareLoading && (
+                <p role="status" className="mt-2 text-gray-500">
+                  Loading station fares...
+                </p>
+              )}
+
+            {hasTripSegment &&
+              !fareOptionLoading &&
+              !fareOptionError &&
+              fareOption &&
+              (!isRailRoute || !railFareLoading) &&
               (isRailRoute || tripDistanceMeters !== null) && (
-                <section aria-label="Estimated fares" className="mt-3">
+                <section
+                  aria-label="Estimated fares"
+                  className="mt-3"
+                >
                   <p className="mb-2 text-[10px] leading-snug text-gray-500">
-                    Estimates only. Fares are based on the selected route and
-                    configured rules.
+                    Estimates only. The fare is based on this
+                    route's assigned vehicle and configured fare
+                    rules.
                   </p>
-                  <div className="grid gap-2 sm:grid-cols-3">
+
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {fareCards.map((card) => {
                       const Icon =
                         card.category === "regular"
                           ? UserRound
                           : card.category === "student"
                             ? GraduationCap
-                            : Accessibility;
+                            : card.category === "senior_citizen"
+                              ? Users
+                              : Accessibility;
 
                       return (
                         <article
@@ -457,6 +530,7 @@ export function TransitMapPanel({
                                       {option.variantName}
                                     </p>
                                   )}
+
                                   {option.amounts.length > 0 ? (
                                     option.amounts.map((amount) => (
                                       <p
@@ -468,10 +542,11 @@ export function TransitMapPanel({
                                             {amount.label}:{" "}
                                           </span>
                                         )}
+
                                         {amount.amount === null
                                           ? option.unavailableReason ??
                                             "Fare unavailable"
-                                          : isRailRoute
+                                          : card.category === "regular"
                                             ? peso(amount.amount)
                                             : wholePeso(amount.amount)}
                                       </p>
@@ -493,7 +568,8 @@ export function TransitMapPanel({
                 </section>
               )}
 
-            {(boardingIndex !== null || destinationIndex !== null) && (
+            {(boardingIndex !== null ||
+              destinationIndex !== null) && (
               <button
                 type="button"
                 onClick={clearTrip}
@@ -516,7 +592,8 @@ export function TransitMapPanel({
           >
             {selectedRouteStops.map((stop, index) => {
               const isBoarding = index === boardingIndex;
-              const isDestination = index === destinationIndex;
+              const isDestination =
+                index === destinationIndex;
 
               return (
                 <li
@@ -526,7 +603,10 @@ export function TransitMapPanel({
                   {index < selectedRouteStops.length - 1 && (
                     <span
                       className="absolute left-[11px] top-6 h-[calc(100%-12px)] w-px"
-                      style={{ backgroundColor: routeColor, opacity: 0.4 }}
+                      style={{
+                        backgroundColor: routeColor,
+                        opacity: 0.4,
+                      }}
                     />
                   )}
 
@@ -537,7 +617,9 @@ export function TransitMapPanel({
                   >
                     <span
                       className={`z-10 flex h-6 w-6 shrink-0 items-center justify-center text-[10px] font-semibold text-white ${
-                        stop.kind === "terminal" ? "rounded-md" : "rounded-full"
+                        stop.kind === "terminal"
+                          ? "rounded-md"
+                          : "rounded-full"
                       } ${
                         isBoarding
                           ? "ring-2 ring-green-500"
@@ -552,13 +634,19 @@ export function TransitMapPanel({
 
                     <span className="text-[11px] text-gray-800">
                       {stop.name}
-                      {stop.kind === "terminal" ? " (Terminal)" : ""}
-                      {stop.stop_type === "train_station" ? " (Station)" : ""}
+                      {stop.kind === "terminal"
+                        ? " (Terminal)"
+                        : ""}
+                      {stop.stop_type === "train_station"
+                        ? " (Station)"
+                        : ""}
+
                       {isBoarding && (
                         <span className="ml-1 font-semibold text-green-700">
                           · Boarding
                         </span>
                       )}
+
                       {isDestination && (
                         <span className="ml-1 font-semibold text-red-700">
                           · Destination
@@ -599,10 +687,12 @@ export function TransitMapPanel({
             >
               Sign in to save map information
             </h2>
+
             <p className="mt-2 text-sm text-gray-600">
-              Sign in or create an account to save routes, stops, and
-              terminals.
+              Sign in or create an account to save routes, stops,
+              and terminals.
             </p>
+
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
@@ -611,6 +701,7 @@ export function TransitMapPanel({
               >
                 Cancel
               </button>
+
               <button
                 type="button"
                 onClick={() => navigate("/login")}
