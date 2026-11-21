@@ -15,6 +15,7 @@ import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route as RouteIcon,
+  Receipt,
   FileText,
   Flag,
   Users,
@@ -38,10 +39,8 @@ import {
 const navigationItems = [
   { label: "Dashboard", icon: LayoutDashboard },
   { label: "Route Management", icon: RouteIcon },
-  {
-    label: "Post Management",
-    icon: FileText,
-  },
+  { label: "Fare Management", icon: Receipt },
+  { label: "Post Management", icon: FileText },
   { label: "Reports", icon: Flag },
   { label: "User Management", icon: Users },
   { label: "Settings", icon: Settings },

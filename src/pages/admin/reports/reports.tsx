@@ -15,6 +15,7 @@ import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route as RouteIcon,
+  Receipt,
   FileText,
   Flag,
   Users,
@@ -37,6 +38,7 @@ export type ReportStatus = "Pending" | "Reviewed" | "Dismissed";
 const navigationItems = [
   { label: "Dashboard", icon: LayoutDashboard },
   { label: "Route Management", icon: RouteIcon },
+  { label: "Fare Management", icon: Receipt },
   { label: "Post Management", icon: FileText },
   { label: "Reports", icon: Flag },
   { label: "User Management", icon: Users },

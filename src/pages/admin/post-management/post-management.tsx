@@ -18,8 +18,9 @@ import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
 import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
-  Route as RouteIcon,
   FileText,
+  Route,
+  Receipt,
   Flag,
   Users,
   Settings,
@@ -40,15 +41,13 @@ import {
 } from "./postManagementModel";
 
 const navigationItems = [
-  { label: "Dashboard", icon: LayoutDashboard },
-  { label: "Route Management", icon: RouteIcon },
-  {
-    label: "Post Management",
-    icon: FileText,
-  },
-  { label: "Reports", icon: Flag },
-  { label: "User Management", icon: Users },
-  { label: "Settings", icon: Settings },
+  { label: "Dashboard", icon: LayoutDashboard, active: true },
+  { label: "Route Management", icon: Route, active: false },
+  { label: "Fare Management", icon: Receipt, active: false },
+  { label: "Post Management", icon: FileText, active: false },
+  { label: "Reports", icon: Flag, active: false },
+  { label: "User Management", icon: Users, active: false },
+  { label: "Settings", icon: Settings, active: false },
 ];
 
 function formatPostDate(value: string): string {

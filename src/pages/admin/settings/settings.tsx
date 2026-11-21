@@ -10,6 +10,7 @@ import { supabase } from "@/lib/supabase";
 import {
   LayoutDashboard,
   Route,
+  Receipt,
   FileText,
   Flag,
   Users,
@@ -42,6 +43,11 @@ type Backup = {
 const navigationItems = [
   { label: "Dashboard", icon: LayoutDashboard, path: "/admin/dashboard" },
   { label: "Route Management", icon: Route, path: "/admin/routes" },
+  {
+    label: "Fare Management",
+    icon: Receipt,
+    path: "/admin/fare-management",
+  },
   {
     label: "Post Management",
     icon: FileText,
