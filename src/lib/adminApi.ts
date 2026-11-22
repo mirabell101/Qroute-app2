@@ -2,6 +2,10 @@ import { API_BASE_URL } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import type { CommunityPost } from "@/lib/community";
 
+/* -------------------------------------------------------------------------- */
+/*                                 ADMIN TYPES                                */
+/* -------------------------------------------------------------------------- */
+
 export interface AdminRecentActivityItem {
   id: string;
   actionKey: string;
@@ -23,6 +27,10 @@ export interface AdminSummary {
   recentActivity: AdminRecentActivityItem[] | null;
 }
 
+/* -------------------------------------------------------------------------- */
+/*                               ROUTE TYPES                                  */
+/* -------------------------------------------------------------------------- */
+
 interface AdminRoutePoint {
   id: number;
   name: string;
@@ -36,10 +44,12 @@ interface AdminRouteStop {
   route_id: number;
   stop_order: number;
   terminals: AdminRoutePoint | null;
-  stops: (AdminRoutePoint & {
-    description: string | null;
-    stop_type: "road_stop" | "train_station" | null;
-  }) | null;
+  stops:
+    | (AdminRoutePoint & {
+        description: string | null;
+        stop_type: "road_stop" | "train_station" | null;
+      })
+    | null;
 }
 
 export interface AdminRouteRecord {
@@ -52,7 +62,10 @@ export interface AdminRouteRecord {
   is_deleted: boolean;
   moderation_status: "pending" | "approved" | "rejected";
   moderation_note?: string | null;
-  transport_types: { name: string; color: string } | null;
+  transport_types: {
+    name: string;
+    color: string;
+  } | null;
   transport_variants: {
     id: number;
     code: string;
@@ -76,7 +89,10 @@ export interface AdminTransitPointRecord {
   is_deleted: boolean | null;
   moderation_status: "pending" | "approved" | "rejected";
   moderation_note: string | null;
-  transport_types: { name: string; color: string } | null;
+  transport_types: {
+    name: string;
+    color: string;
+  } | null;
 }
 
 export interface AdminTransportTypeRecord {
@@ -90,46 +106,6 @@ export interface AdminRouteManagementData {
   stops: AdminTransitPointRecord[];
   terminals: AdminTransitPointRecord[];
   transportTypes: AdminTransportTypeRecord[];
-}
-
-export interface AdminUserRecord {
-  id: string;
-  email: string | null;
-  username: string | null;
-  createdAt: string;
-  role: "registered_user" | "moderator";
-  banned?: boolean;
-}
-
-export interface AdminReportRecord {
-  id: number;
-  type: "Post" | "Comment" | "User";
-  targetType: "post" | "comment" | "user";
-  postId: string | null;
-  commentId: string | null;
-  reportedUserId: string | null;
-  reason: string;
-  reportedContent: string;
-  reporter: string;
-  reportedUser: string;
-  date: string;
-  status: "Pending" | "Reviewed" | "Dismissed";
-  description: string;
-}
-
-export interface AdminNotificationRecord {
-  id: string;
-  postId: string;
-  reportId: number | null;
-  title: string;
-  message: string;
-  createdAt: string;
-  isRead: boolean;
-}
-
-export interface AdminNotificationList {
-  notifications: AdminNotificationRecord[];
-  unreadCount: number;
 }
 
 export interface AdminRouteStopPayload {
@@ -147,6 +123,165 @@ export interface AdminRouteUpdatePayload {
   stops?: AdminRouteStopPayload[];
 }
 
+export type RouteManagementEntityType =
+  | "route"
+  | "stop"
+  | "terminal";
+
+/* -------------------------------------------------------------------------- */
+/*                              USER MANAGEMENT                              */
+/* -------------------------------------------------------------------------- */
+
+export type AdminUserRole =
+  | "registered_user"
+  | "admin";
+
+export type AdminUserRestrictionAction =
+  | "mute"
+  | "unmute"
+  | "ban_temporary"
+  | "ban_permanent"
+  | "unban";
+
+/**
+ * The username is returned only for internal search matching.
+ *
+ * Do not render searchUsername in User Management.
+ * The user-facing identity fields are displayName and email.
+ */
+export interface AdminUserRecord {
+  id: string;
+  email: string | null;
+  displayName: string;
+  searchUsername: string | null;
+  createdAt: string;
+
+  role: AdminUserRole;
+  isDeleted: boolean;
+
+  isBanned: boolean;
+  isMuted: boolean;
+  isPermanentBan: boolean;
+
+  banExpiresAt: string | null;
+  muteExpiresAt: string | null;
+
+  banReason: string | null;
+  muteReason: string | null;
+
+  /**
+   * Indicates whether the Supabase Auth ban state matches
+   * the database moderation state.
+   *
+   * This is informational. It is not a general-purpose
+   * synchronization/retry action.
+   */
+  authBanSynced: boolean;
+}
+
+/**
+ * Payload accepted by POST /api/admin/users/:id/restrictions.
+ *
+ * For mute:
+ * - durationSeconds: null or omitted means indefinite mute.
+ * - A positive duration creates a temporary mute.
+ *
+ * For ban_temporary:
+ * - durationSeconds is required.
+ *
+ * For ban_permanent:
+ * - durationSeconds is not needed.
+ *
+ * For unmute and unban:
+ * - reason is optional.
+ */
+export interface AdminUserRestrictionPayload {
+  action: AdminUserRestrictionAction;
+  durationSeconds?: number | null;
+  reason?: string;
+}
+
+export interface AdminUserModerationHistoryItem {
+  id: string;
+  actionKey: string;
+  category: string;
+  title: string;
+  detail: string;
+  adminDisplayName: string;
+  occurredAt: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 REPORT TYPES                               */
+/* -------------------------------------------------------------------------- */
+
+export interface AdminReportRecord {
+  id: number;
+  type: "Post" | "Comment" | "User";
+  targetType: "post" | "comment" | "user";
+  postId: string | null;
+  commentId: string | null;
+  reportedUserId: string | null;
+  reason: string;
+  reportedContent: string;
+  reporter: string;
+  reportedUser: string;
+  date: string;
+  status: "Pending" | "Reviewed" | "Dismissed";
+  description: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              NOTIFICATION TYPES                           */
+/* -------------------------------------------------------------------------- */
+
+export interface AdminNotificationRecord {
+  id: string;
+  postId: string;
+  reportId: number | null;
+  title: string;
+  message: string;
+  createdAt: string;
+  isRead: boolean;
+}
+
+export interface AdminNotificationList {
+  notifications: AdminNotificationRecord[];
+  unreadCount: number;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              API ERROR TYPE                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Preserves useful HTTP response information for frontend handling.
+ *
+ * In particular, restrictionSaved tells the UI whether the database
+ * restriction was successfully saved even though Auth synchronization
+ * subsequently failed.
+ */
+export class AdminApiError extends Error {
+  readonly status: number;
+  readonly restrictionSaved: boolean;
+
+  constructor(
+    message: string,
+    status: number,
+    restrictionSaved = false,
+  ) {
+    super(message);
+
+    this.name = "AdminApiError";
+    this.status = status;
+    this.restrictionSaved = restrictionSaved;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              VALIDATION HELPERS                            */
+/* -------------------------------------------------------------------------- */
+
 function isRecord(
   value: unknown,
 ): value is Record<string, unknown> {
@@ -157,35 +292,68 @@ function isRecord(
   );
 }
 
-function isNonNegativeInteger(value: unknown): value is number {
+function isNonNegativeInteger(
+  value: unknown,
+): value is number {
   return (
-    Number.isInteger(value) &&
     typeof value === "number" &&
+    Number.isInteger(value) &&
     value >= 0
+  );
+}
+
+function isPositiveInteger(
+  value: unknown,
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0
   );
 }
 
 function isNullableString(
   value: unknown,
 ): value is string | null {
-  return value === null || typeof value === "string";
+  return (
+    value === null ||
+    typeof value === "string"
+  );
 }
 
 function isNullableBoolean(
   value: unknown,
 ): value is boolean | null {
-  return value === null || typeof value === "boolean";
+  return (
+    value === null ||
+    typeof value === "boolean"
+  );
 }
 
 function isNullableRecord(
   value: unknown,
-  predicate: (record: Record<string, unknown>) => boolean,
+  predicate: (
+    record: Record<string, unknown>,
+  ) => boolean,
 ): boolean {
   return (
     value === null ||
     (isRecord(value) && predicate(value))
   );
 }
+
+function isNullableCount(
+  value: unknown,
+): value is number | null {
+  return (
+    value === null ||
+    isNonNegativeInteger(value)
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*                            ROUTE VALIDATORS                                */
+/* -------------------------------------------------------------------------- */
 
 function isRoutePoint(
   value: unknown,
@@ -228,8 +396,14 @@ function isAdminRouteStop(
     );
 
   return (
-    isNullableRecord(value.terminals, isRoutePoint) &&
-    isNullableRecord(value.stops, isStopRecord)
+    isNullableRecord(
+      value.terminals,
+      isRoutePoint,
+    ) &&
+    isNullableRecord(
+      value.stops,
+      isStopRecord,
+    )
   );
 }
 
@@ -339,22 +513,54 @@ function isAdminTransportTypeRecord(
   );
 }
 
-function isNullableCount(
+/* -------------------------------------------------------------------------- */
+/*                            USER VALIDATORS                                 */
+/* -------------------------------------------------------------------------- */
+
+function isAdminUserRecord(
   value: unknown,
-): value is number | null {
+): value is AdminUserRecord {
   return (
-    value === null ||
-    isNonNegativeInteger(value)
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    isNullableString(value.email) &&
+    typeof value.displayName === "string" &&
+    isNullableString(value.searchUsername) &&
+    typeof value.createdAt === "string" &&
+    (
+      value.role === "registered_user" ||
+      value.role === "admin"
+    ) &&
+    typeof value.isDeleted === "boolean" &&
+    typeof value.isBanned === "boolean" &&
+    typeof value.isMuted === "boolean" &&
+    typeof value.isPermanentBan === "boolean" &&
+    isNullableString(value.banExpiresAt) &&
+    isNullableString(value.muteExpiresAt) &&
+    isNullableString(value.banReason) &&
+    isNullableString(value.muteReason) &&
+    typeof value.authBanSynced === "boolean"
   );
 }
 
-function isPositiveInteger(value: unknown): value is number {
+function isAdminUserModerationHistoryItem(
+  value: unknown,
+): value is AdminUserModerationHistoryItem {
   return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value > 0
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.actionKey === "string" &&
+    typeof value.category === "string" &&
+    typeof value.title === "string" &&
+    typeof value.detail === "string" &&
+    typeof value.adminDisplayName === "string" &&
+    typeof value.occurredAt === "string"
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/*                           REPORT VALIDATORS                                */
+/* -------------------------------------------------------------------------- */
 
 function isAdminReportRecord(
   value: unknown,
@@ -389,6 +595,10 @@ function isAdminReportRecord(
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/*                         NOTIFICATION VALIDATORS                            */
+/* -------------------------------------------------------------------------- */
+
 function isAdminNotificationRecord(
   value: unknown,
 ): value is AdminNotificationRecord {
@@ -408,6 +618,10 @@ function isAdminNotificationRecord(
     typeof value.isRead === "boolean"
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/*                         SUMMARY VALIDATORS                                 */
+/* -------------------------------------------------------------------------- */
 
 function isRecentActivityItem(
   value: unknown,
@@ -440,7 +654,13 @@ function isNullableRecentActivity(
   );
 }
 
-function parseAdminSummary(value: unknown): AdminSummary {
+/* -------------------------------------------------------------------------- */
+/*                              RESPONSE PARSERS                              */
+/* -------------------------------------------------------------------------- */
+
+function parseAdminSummary(
+  value: unknown,
+): AdminSummary {
   if (
     !isRecord(value) ||
     !isNonNegativeInteger(value.registeredUsers) ||
@@ -475,7 +695,7 @@ function parseAdminRoutes(
     );
   }
 
-  return value;
+  return value as AdminRouteRecord[];
 }
 
 function parseAdminUsers(
@@ -483,25 +703,29 @@ function parseAdminUsers(
 ): AdminUserRecord[] {
   if (
     !Array.isArray(value) ||
-    !value.every(
-      (user) =>
-        isRecord(user) &&
-        typeof user.id === "string" &&
-        isNullableString(user.email) &&
-        isNullableString(user.username) &&
-        typeof user.createdAt === "string" &&
-        (
-          user.role === "registered_user" ||
-          user.role === "moderator"
-        ),
-    )
+    !value.every(isAdminUserRecord)
   ) {
     throw new Error(
-      "Admin service returned an invalid response.",
+      "Admin service returned invalid user data.",
     );
   }
 
-  return value;
+  return value as AdminUserRecord[];
+}
+
+function parseAdminUserModerationHistory(
+  value: unknown,
+): AdminUserModerationHistoryItem[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every(isAdminUserModerationHistoryItem)
+  ) {
+    throw new Error(
+      "Admin service returned invalid moderation history.",
+    );
+  }
+
+  return value as AdminUserModerationHistoryItem[];
 }
 
 function parseAdminNotifications(
@@ -511,7 +735,9 @@ function parseAdminNotifications(
     !isRecord(value) ||
     !isNonNegativeInteger(value.unreadCount) ||
     !Array.isArray(value.notifications) ||
-    !value.notifications.every(isAdminNotificationRecord)
+    !value.notifications.every(
+      isAdminNotificationRecord,
+    )
   ) {
     throw new Error(
       "Admin service returned an invalid response.",
@@ -519,10 +745,15 @@ function parseAdminNotifications(
   }
 
   return {
-    notifications: value.notifications,
+    notifications:
+      value.notifications as AdminNotificationRecord[],
     unreadCount: value.unreadCount,
   };
 }
+
+/* -------------------------------------------------------------------------- */
+/*                               REQUEST HANDLER                              */
+/* -------------------------------------------------------------------------- */
 
 async function requestApi(
   basePath: string,
@@ -538,7 +769,8 @@ async function requestApi(
       ? "Admin"
       : "Route Management";
 
-  const { data, error } = await supabase.auth.getSession();
+  const { data, error } =
+    await supabase.auth.getSession();
 
   if (error) {
     throw new Error(error.message);
@@ -547,7 +779,9 @@ async function requestApi(
   const session = data.session;
 
   if (!session?.access_token) {
-    throw new Error("Please sign in to continue.");
+    throw new Error(
+      "Please sign in to continue.",
+    );
   }
 
   if (session.user.id !== expectedUserId) {
@@ -556,17 +790,22 @@ async function requestApi(
     );
   }
 
+  const hasBody =
+    options?.body !== undefined;
+
   const response = await fetch(
     `${API_BASE_URL}${basePath}${path}`,
     {
       method: options?.method ?? "GET",
       headers: {
         Authorization: `Bearer ${session.access_token}`,
-        ...(options?.body
-          ? { "Content-Type": "application/json" }
+        ...(hasBody
+          ? {
+              "Content-Type": "application/json",
+            }
           : {}),
       },
-      ...(options?.body
+      ...(hasBody
         ? {
             body: JSON.stringify(options.body),
           }
@@ -580,8 +819,9 @@ async function requestApi(
     payload = await response.json();
   } catch {
     if (!response.ok) {
-      throw new Error(
+      throw new AdminApiError(
         `${serviceName} request failed (HTTP ${response.status}).`,
+        response.status,
       );
     }
 
@@ -597,10 +837,21 @@ async function requestApi(
         ? payload.message
         : `${serviceName} request failed (HTTP ${response.status}).`;
 
-    throw new Error(message);
+    const restrictionSaved =
+      isRecord(payload) &&
+      payload.restrictionSaved === true;
+
+    throw new AdminApiError(
+      message,
+      response.status,
+      restrictionSaved,
+    );
   }
 
-  if (!isRecord(payload) || payload.success !== true) {
+  if (
+    !isRecord(payload) ||
+    payload.success !== true
+  ) {
     throw new Error(
       `${serviceName} service returned an invalid response.`,
     );
@@ -608,6 +859,10 @@ async function requestApi(
 
   return payload;
 }
+
+/* -------------------------------------------------------------------------- */
+/*                          REQUEST SHORTCUTS                                 */
+/* -------------------------------------------------------------------------- */
 
 function requestAdmin(
   path: string,
@@ -641,6 +896,10 @@ function requestRouteManagement(
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/*                              ADMIN SUMMARY                                 */
+/* -------------------------------------------------------------------------- */
+
 export async function getAdminSummary(
   expectedUserId: string,
 ): Promise<AdminSummary> {
@@ -652,6 +911,10 @@ export async function getAdminSummary(
   return parseAdminSummary(payload.summary);
 }
 
+/* -------------------------------------------------------------------------- */
+/*                              ADMIN ROUTES                                  */
+/* -------------------------------------------------------------------------- */
+
 export async function getAdminRoutes(
   expectedUserId: string,
 ): Promise<AdminRouteRecord[]> {
@@ -662,6 +925,10 @@ export async function getAdminRoutes(
 
   return parseAdminRoutes(payload.routes);
 }
+
+/* -------------------------------------------------------------------------- */
+/*                         ROUTE MANAGEMENT DATA                              */
+/* -------------------------------------------------------------------------- */
 
 export async function getRouteManagementData(
   expectedUserId: string,
@@ -676,9 +943,13 @@ export async function getRouteManagementData(
     !Array.isArray(payload.records.routes) ||
     !payload.records.routes.every(isAdminRouteRecord) ||
     !Array.isArray(payload.records.stops) ||
-    !payload.records.stops.every(isAdminTransitPointRecord) ||
+    !payload.records.stops.every(
+      isAdminTransitPointRecord,
+    ) ||
     !Array.isArray(payload.records.terminals) ||
-    !payload.records.terminals.every(isAdminTransitPointRecord) ||
+    !payload.records.terminals.every(
+      isAdminTransitPointRecord,
+    ) ||
     !Array.isArray(payload.records.transportTypes) ||
     !payload.records.transportTypes.every(
       isAdminTransportTypeRecord,
@@ -690,17 +961,20 @@ export async function getRouteManagementData(
   }
 
   return {
-    routes: payload.records.routes,
-    stops: payload.records.stops,
-    terminals: payload.records.terminals,
-    transportTypes: payload.records.transportTypes,
+    routes:
+      payload.records.routes as AdminRouteRecord[],
+    stops:
+      payload.records.stops as AdminTransitPointRecord[],
+    terminals:
+      payload.records.terminals as AdminTransitPointRecord[],
+    transportTypes:
+      payload.records.transportTypes as AdminTransportTypeRecord[],
   };
 }
 
-export type RouteManagementEntityType =
-  | "route"
-  | "stop"
-  | "terminal";
+/* -------------------------------------------------------------------------- */
+/*                         ROUTE MANAGEMENT ACTIONS                           */
+/* -------------------------------------------------------------------------- */
 
 export async function moderateRouteManagementRecord(
   expectedUserId: string,
@@ -723,7 +997,9 @@ export async function moderateRouteManagementRecord(
       body: {
         action,
         ...(moderationNote
-          ? { moderation_note: moderationNote }
+          ? {
+              moderation_note: moderationNote,
+            }
           : {}),
       },
     },
@@ -770,7 +1046,10 @@ export async function createAdminTransportType(
     expectedUserId,
     {
       method: "POST",
-      body: { name, color },
+      body: {
+        name,
+        color,
+      },
     },
   );
 }
@@ -786,10 +1065,17 @@ export async function updateAdminTransportType(
     expectedUserId,
     {
       method: "PATCH",
-      body: { name, color },
+      body: {
+        name,
+        color,
+      },
     },
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/*                              USER MANAGEMENT                              */
+/* -------------------------------------------------------------------------- */
 
 export async function getAdminUsers(
   expectedUserId: string,
@@ -801,6 +1087,168 @@ export async function getAdminUsers(
 
   return parseAdminUsers(payload.users);
 }
+
+/**
+ * Changes a user's role.
+ *
+ * Supported roles:
+ * - registered_user
+ * - admin
+ *
+ * The backend performs authorization, deleted-account checks,
+ * self-demotion protection, last-admin protection, and auditing.
+ */
+export async function setAdminUserRole(
+  expectedUserId: string,
+  id: string,
+  role: AdminUserRole,
+): Promise<void> {
+  await requestAdmin(
+    `/users/${encodeURIComponent(id)}/role`,
+    expectedUserId,
+    {
+      method: "PATCH",
+      body: {
+        role,
+      },
+    },
+  );
+}
+
+/**
+ * Applies or removes a user restriction.
+ *
+ * Supported actions:
+ * - mute
+ * - unmute
+ * - ban_temporary
+ * - ban_permanent
+ * - unban
+ *
+ * New restrictions require a reason.
+ * Temporary bans require a duration between 60 seconds
+ * and 365 days.
+ *
+ * The backend remains authoritative and repeats all validation.
+ */
+export async function applyAdminUserRestriction(
+  expectedUserId: string,
+  id: string,
+  restriction: AdminUserRestrictionPayload,
+): Promise<void> {
+  const {
+    action,
+    durationSeconds,
+    reason,
+  } = restriction;
+
+  const requiresReason =
+    action === "mute" ||
+    action === "ban_temporary" ||
+    action === "ban_permanent";
+
+  if (
+    requiresReason &&
+    (!reason || !reason.trim())
+  ) {
+    throw new Error(
+      "A reason is required for this restriction.",
+    );
+  }
+
+  if (action === "ban_temporary") {
+    if (
+      typeof durationSeconds !== "number" ||
+      !Number.isSafeInteger(durationSeconds) ||
+      durationSeconds < 60 ||
+      durationSeconds > 365 * 24 * 60 * 60
+    ) {
+      throw new Error(
+        "A temporary ban must be between 60 seconds and 365 days.",
+      );
+    }
+  }
+
+  if (
+    action === "mute" &&
+    durationSeconds !== undefined &&
+    durationSeconds !== null &&
+    (
+      !Number.isSafeInteger(durationSeconds) ||
+      durationSeconds < 60 ||
+      durationSeconds > 365 * 24 * 60 * 60
+    )
+  ) {
+    throw new Error(
+      "A temporary mute must be between 60 seconds and 365 days.",
+    );
+  }
+
+  if (
+    action === "ban_permanent" &&
+    durationSeconds !== undefined &&
+    durationSeconds !== null
+  ) {
+    throw new Error(
+      "A permanent ban must not have a duration.",
+    );
+  }
+
+  if (
+    action === "unmute" ||
+    action === "unban"
+  ) {
+    if (
+      durationSeconds !== undefined &&
+      durationSeconds !== null
+    ) {
+      throw new Error(
+        "A removal action must not have a duration.",
+      );
+    }
+  }
+
+  await requestAdmin(
+    `/users/${encodeURIComponent(id)}/restrictions`,
+    expectedUserId,
+    {
+      method: "POST",
+      body: {
+        action,
+        durationSeconds: durationSeconds ?? null,
+        ...(reason?.trim()
+          ? {
+              reason: reason.trim(),
+            }
+          : {}),
+      },
+    },
+  );
+}
+
+/**
+ * Retrieves the moderation audit history for one user.
+ *
+ * User-facing history should use adminDisplayName.
+ * It should not display usernames.
+ */
+export async function getAdminUserModerationHistory(
+  expectedUserId: string,
+  id: string,
+): Promise<AdminUserModerationHistoryItem[]> {
+  const payload = await requestAdmin(
+    `/users/${encodeURIComponent(id)}/moderation-history`,
+    expectedUserId,
+  );
+
+  return parseAdminUserModerationHistory(
+    payload.history,
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*                            COMMUNITY POSTS                                */
+/* -------------------------------------------------------------------------- */
 
 export async function getAdminCommunityPosts(
   expectedUserId: string,
@@ -819,6 +1267,10 @@ export async function getAdminCommunityPosts(
   return payload.posts as CommunityPost[];
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                  REPORTS                                   */
+/* -------------------------------------------------------------------------- */
+
 export async function getAdminReports(
   expectedUserId: string,
 ): Promise<AdminReportRecord[]> {
@@ -836,7 +1288,7 @@ export async function getAdminReports(
     );
   }
 
-  return payload.reports;
+  return payload.reports as AdminReportRecord[];
 }
 
 export async function updateAdminReportStatus(
@@ -849,17 +1301,23 @@ export async function updateAdminReportStatus(
     expectedUserId,
     {
       method: "PATCH",
-      body: { status },
+      body: {
+        status,
+      },
     },
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/*                           COMMUNITY POST ACTIONS                           */
+/* -------------------------------------------------------------------------- */
 
 export async function deleteAdminCommunityPost(
   expectedUserId: string,
   id: string,
 ): Promise<void> {
   await requestAdmin(
-    `/posts/${id}`,
+    `/posts/${encodeURIComponent(id)}`,
     expectedUserId,
     {
       method: "DELETE",
@@ -867,63 +1325,26 @@ export async function deleteAdminCommunityPost(
   );
 }
 
-export async function toggleAdminUserBan(
+export async function setAdminPostVisibility(
   expectedUserId: string,
-  id: string,
-  ban: boolean,
+  postId: string,
+  isHidden: boolean,
 ): Promise<void> {
   await requestAdmin(
-    `/users/${id}/ban`,
+    `/posts/${encodeURIComponent(postId)}/visibility`,
     expectedUserId,
     {
       method: "PATCH",
-      body: { ban },
+      body: {
+        isHidden,
+      },
     },
   );
 }
 
-export async function setAdminUserRole(
-  expectedUserId: string,
-  id: string,
-  role: AdminUserRecord["role"],
-): Promise<void> {
-  await requestAdmin(
-    `/users/${id}/role`,
-    expectedUserId,
-    {
-      method: "PATCH",
-      body: { role },
-    },
-  );
-}
-
-export async function updateAdminRoute(
-  expectedUserId: string,
-  routeId: number,
-  payload: AdminRouteUpdatePayload,
-): Promise<void> {
-  await requestAdmin(
-    `/routes/${routeId}`,
-    expectedUserId,
-    {
-      method: "PATCH",
-      body: payload,
-    },
-  );
-}
-
-export async function deleteAdminRoute(
-  expectedUserId: string,
-  routeId: number,
-): Promise<void> {
-  await requestAdmin(
-    `/routes/${routeId}`,
-    expectedUserId,
-    {
-      method: "DELETE",
-    },
-  );
-}
+/* -------------------------------------------------------------------------- */
+/*                               NOTIFICATIONS                                */
+/* -------------------------------------------------------------------------- */
 
 export async function getAdminUnreadNotificationCount(
   expectedUserId: string,
@@ -966,17 +1387,34 @@ export async function markAdminNotificationRead(
   );
 }
 
-export async function setAdminPostVisibility(
+/* -------------------------------------------------------------------------- */
+/*                              ROUTE ACTIONS                                 */
+/* -------------------------------------------------------------------------- */
+
+export async function updateAdminRoute(
   expectedUserId: string,
-  postId: string,
-  isHidden: boolean,
+  routeId: number,
+  payload: AdminRouteUpdatePayload,
 ): Promise<void> {
   await requestAdmin(
-    `/posts/${encodeURIComponent(postId)}/visibility`,
+    `/routes/${routeId}`,
     expectedUserId,
     {
       method: "PATCH",
-      body: { isHidden },
+      body: payload,
+    },
+  );
+}
+
+export async function deleteAdminRoute(
+  expectedUserId: string,
+  routeId: number,
+): Promise<void> {
+  await requestAdmin(
+    `/routes/${routeId}`,
+    expectedUserId,
+    {
+      method: "DELETE",
     },
   );
 }

@@ -1,17 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
-import AccountAvatar from "@/components/account/AccountAvatar";
 import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
+
 import {
+  AdminApiError,
+  applyAdminUserRestriction,
+  getAdminUserModerationHistory,
   getAdminUsers,
   setAdminUserRole,
-  toggleAdminUserBan,
+  type AdminUserModerationHistoryItem,
   type AdminUserRecord,
+  type AdminUserRestrictionAction,
+  type AdminUserRole,
 } from "@/lib/adminApi";
+
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
 import { supabase } from "@/lib/supabase";
+
 import {
   LayoutDashboard,
   Route as RouteIcon,
@@ -29,12 +37,30 @@ import {
   UserRound,
   Ban as BanIcon,
   ShieldCheck,
+  Shield,
   LogOut,
+  Clock,
+  History,
+  LockKeyhole,
 } from "lucide-react";
-import {
-  getUserStatus,
-  type UserStatus,
-} from "./userManagementModel";
+
+/* -------------------------------------------------------------------------- */
+/*                                    TYPES                                   */
+/* -------------------------------------------------------------------------- */
+
+type UserFilter =
+  | "All"
+  | "Active"
+  | "Muted"
+  | "Banned"
+  | "Deleted";
+
+type DurationUnit = "minutes" | "hours" | "days";
+
+type ActionNotice = {
+  type: "success" | "warning";
+  message: string;
+};
 
 const navigationItems = [
   { label: "Dashboard", icon: LayoutDashboard },
@@ -46,100 +72,582 @@ const navigationItems = [
   { label: "Settings", icon: Settings },
 ];
 
+const FILTER_OPTIONS: UserFilter[] = [
+  "All",
+  "Active",
+  "Muted",
+  "Banned",
+  "Deleted",
+];
+
+const MAX_RESTRICTION_SECONDS = 365 * 24 * 60 * 60;
+
+const DURATION_FACTORS: Record<DurationUnit, number> = {
+  minutes: 60,
+  hours: 60 * 60,
+  days: 24 * 60 * 60,
+};
+
+/* -------------------------------------------------------------------------- */
+/*                              FORMAT HELPERS                                */
+/* -------------------------------------------------------------------------- */
+
 function formatCreatedAt(value: string): string {
   const date = new Date(value);
+
   return Number.isNaN(date.getTime())
     ? "Date unavailable"
     : date.toLocaleDateString();
 }
 
+function formatDateTime(value: string | null): string {
+  if (!value) {
+    return "No expiration";
+  }
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime())
+    ? "Date unavailable"
+    : date.toLocaleString();
+}
+
+function getDisplayName(user: AdminUserRecord): string {
+  return user.displayName.trim() || "Unnamed user";
+}
+
+function getUserStatusBadges(
+  user: AdminUserRecord,
+): { label: string; className: string }[] {
+  const badges: {
+    label: string;
+    className: string;
+  }[] = [];
+
+  if (user.isDeleted) {
+    badges.push({
+      label: "Deleted",
+      className: "bg-slate-100 text-slate-600",
+    });
+  }
+
+  if (user.isBanned) {
+    badges.push({
+      label: user.isPermanentBan
+        ? "Permanently banned"
+        : "Banned",
+      className: "bg-red-50 text-red-700",
+    });
+  }
+
+  if (user.isMuted) {
+    badges.push({
+      label: "Muted",
+      className: "bg-amber-50 text-amber-700",
+    });
+  }
+
+  if (badges.length === 0) {
+    badges.push({
+      label: "Active",
+      className: "bg-green-50 text-green-700",
+    });
+  }
+
+  return badges;
+}
+
+function matchesUserFilter(
+  user: AdminUserRecord,
+  filter: UserFilter,
+): boolean {
+  switch (filter) {
+    case "Active":
+      // Muted users retain normal account access.
+      return !user.isDeleted && !user.isBanned;
+
+    case "Muted":
+      return user.isMuted;
+
+    case "Banned":
+      return user.isBanned;
+
+    case "Deleted":
+      return user.isDeleted;
+
+    case "All":
+    default:
+      return true;
+  }
+}
+
+function getRestrictionActionLabel(
+  action: AdminUserRestrictionAction,
+): string {
+  switch (action) {
+    case "mute":
+      return "Mute";
+
+    case "unmute":
+      return "Unmute";
+
+    case "ban_temporary":
+      return "Temporary ban";
+
+    case "ban_permanent":
+      return "Permanent ban";
+
+    case "unban":
+      return "Unban";
+
+    default:
+      return "Restriction";
+  }
+}
+
+function getRestrictionSuccessMessage(
+  action: AdminUserRestrictionAction,
+  displayName: string,
+): string {
+  switch (action) {
+    case "mute":
+      return `${displayName} has been muted.`;
+
+    case "unmute":
+      return `${displayName} has been unmuted.`;
+
+    case "ban_temporary":
+      return `${displayName} has been temporarily banned.`;
+
+    case "ban_permanent":
+      return `${displayName} has been permanently banned.`;
+
+    case "unban":
+      return `${displayName} has been unbanned.`;
+
+    default:
+      return "The restriction was updated.";
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              MAIN COMPONENT                                */
+/* -------------------------------------------------------------------------- */
+
 export default function UserManagement() {
   const navigate = useNavigate();
   const { userId, account } = useAccountProfile();
 
+  /* ------------------------------------------------------------------------ */
+  /*                              ADMIN PROFILE                               */
+  /* ------------------------------------------------------------------------ */
+
+  // Do not use account.username as a fallback here.
+  // This page must not render usernames.
   const adminDisplayName =
-    account?.displayName?.trim() ||
-    account?.username?.trim() ||
-    (account?.email ? account.email.split("@")[0] : null) ||
-    "Admin";
-  const adminEmail = account?.email || "Administrator";
+    account?.displayName?.trim() || "Administrator";
+
+  const adminEmail =
+    account?.email || "Administrator";
+
+  const adminInitials = adminDisplayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+
+  /* ------------------------------------------------------------------------ */
+  /*                                  STATE                                   */
+  /* ------------------------------------------------------------------------ */
 
   const [users, setUsers] = useState<AdminUserRecord[]>([]);
+
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"All" | UserStatus>("All");
-  const [quickFilter, setQuickFilter] = useState<"All" | UserStatus>("All");
-  const [selectedUser, setSelectedUser] = useState<AdminUserRecord | null>(
-    null,
-  );
+
+  const [statusFilter, setStatusFilter] =
+    useState<UserFilter>("All");
+
+  const [quickFilter, setQuickFilter] =
+    useState<UserFilter>("All");
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
   const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const [errorMessage, setErrorMessage] =
+    useState<string | null>(null);
+
   const [retryCount, setRetryCount] = useState(0);
-  const [pendingUserId, setPendingUserId] = useState<string | null>(null);
-  const [isBanning, setIsBanning] = useState(false);
-  const [updatingRoleUserId, setUpdatingRoleUserId] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+
+  const [actionError, setActionError] =
+    useState<string | null>(null);
+
+  const [actionNotice, setActionNotice] =
+    useState<ActionNotice | null>(null);
+
+  /* ------------------------------------------------------------------------ */
+  /*                           SELECTED USER STATE                            */
+  /* ------------------------------------------------------------------------ */
+
+  const [selectedUserId, setSelectedUserId] =
+    useState<string | null>(null);
+
+  const selectedUser = useMemo(
+    () =>
+      selectedUserId
+        ? users.find((user) => user.id === selectedUserId) ?? null
+        : null,
+    [users, selectedUserId],
+  );
+
+  /* ------------------------------------------------------------------------ */
+  /*                           ROLE CHANGE STATE                              */
+  /* ------------------------------------------------------------------------ */
+
+  const [roleChangeTargetId, setRoleChangeTargetId] =
+    useState<string | null>(null);
+
+  const [updatingRoleUserId, setUpdatingRoleUserId] =
+    useState<string | null>(null);
+
+  const [roleError, setRoleError] =
+    useState<string | null>(null);
+
+  const roleChangeTarget = useMemo(
+    () =>
+      roleChangeTargetId
+        ? users.find((user) => user.id === roleChangeTargetId) ?? null
+        : null,
+    [users, roleChangeTargetId],
+  );
+
+  const nextRole: AdminUserRole | null =
+    roleChangeTarget
+      ? roleChangeTarget.role === "admin"
+        ? "registered_user"
+        : "admin"
+      : null;
+
+  /* ------------------------------------------------------------------------ */
+  /*                         RESTRICTION DIALOG STATE                         */
+  /* ------------------------------------------------------------------------ */
+
+  const [restrictionUserId, setRestrictionUserId] =
+    useState<string | null>(null);
+
+  const [restrictionAction, setRestrictionAction] =
+    useState<AdminUserRestrictionAction>("mute");
+
+  const [restrictionReason, setRestrictionReason] =
+    useState("");
+
+  const [durationAmount, setDurationAmount] =
+    useState("1");
+
+  const [durationUnit, setDurationUnit] =
+    useState<DurationUnit>("days");
+
+  const [indefiniteMute, setIndefiniteMute] =
+    useState(false);
+
+  const [isApplyingRestriction, setIsApplyingRestriction] =
+    useState(false);
+
+  const [restrictionError, setRestrictionError] =
+    useState<string | null>(null);
+
+  const restrictionTarget = useMemo(
+    () =>
+      restrictionUserId
+        ? users.find((user) => user.id === restrictionUserId) ?? null
+        : null,
+    [users, restrictionUserId],
+  );
+
+  /* ------------------------------------------------------------------------ */
+  /*                         MODERATION HISTORY STATE                         */
+  /* ------------------------------------------------------------------------ */
+
+  const [historyVisible, setHistoryVisible] =
+    useState(false);
+
+  const [historyItems, setHistoryItems] =
+    useState<AdminUserModerationHistoryItem[]>([]);
+
+  const [historyLoading, setHistoryLoading] =
+    useState(false);
+
+  const [historyError, setHistoryError] =
+    useState<string | null>(null);
+
+  const [historyLoadedFor, setHistoryLoadedFor] =
+    useState<string | null>(null);
+
+  /* ------------------------------------------------------------------------ */
+  /*                           DERIVED USER DATA                              */
+  /* ------------------------------------------------------------------------ */
+
+  const filteredUsers = useMemo(() => {
+    const search = searchTerm.toLowerCase().trim();
+
+    return users.filter((user) => {
+      /*
+       * searchUsername is deliberately used only for matching.
+       * It is never rendered in the page.
+       */
+      const matchesSearch =
+        !search ||
+        [
+          user.displayName,
+          user.email ?? "",
+          user.searchUsername ?? "",
+        ].some((value) =>
+          value.toLowerCase().includes(search),
+        );
+
+      return (
+        matchesSearch &&
+        matchesUserFilter(user, statusFilter) &&
+        matchesUserFilter(user, quickFilter)
+      );
+    });
+  }, [
+    users,
+    searchTerm,
+    statusFilter,
+    quickFilter,
+  ]);
+
+  const activeCount = users.filter(
+    (user) => !user.isDeleted && !user.isBanned,
+  ).length;
+
+  const bannedCount = users.filter(
+    (user) => user.isBanned,
+  ).length;
+
+  const mutedCount = users.filter(
+    (user) => user.isMuted,
+  ).length;
+
+  const deletedCount = users.filter(
+    (user) => user.isDeleted,
+  ).length;
+
+  /* ------------------------------------------------------------------------ */
+  /*                             DATA REFRESH                                 */
+  /* ------------------------------------------------------------------------ */
+
+  const refreshUsers = useCallback(async () => {
+    if (!userId) {
+      throw new Error(
+        "Please sign in to continue.",
+      );
+    }
+
+    const data = await getAdminUsers(userId);
+
+    setUsers(data);
+
+    setSelectedUserId((currentId) => {
+      if (
+        currentId &&
+        !data.some((user) => user.id === currentId)
+      ) {
+        return null;
+      }
+
+      return currentId;
+    });
+
+    return data;
+  }, [userId]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadUsers = async () => {
+      setIsLoading(true);
+      setErrorMessage(null);
+
+      if (!userId) {
+        if (active) {
+          setUsers([]);
+          setErrorMessage(
+            "Please sign in to view user management.",
+          );
+          setIsLoading(false);
+        }
+
+        return;
+      }
+
+      try {
+        const data = await getAdminUsers(userId);
+
+        if (active) {
+          setUsers(data);
+          setErrorMessage(null);
+        }
+      } catch (error: unknown) {
+        if (active) {
+          setUsers([]);
+
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load user accounts.",
+          );
+        }
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadUsers();
+
+    return () => {
+      active = false;
+    };
+  }, [userId, retryCount]);
+
+  /* ------------------------------------------------------------------------ */
+  /*                                LOGOUT                                    */
+  /* ------------------------------------------------------------------------ */
 
   const handleLogout = async () => {
-    await supabase.auth.signOut({ scope: "local" });
+    await supabase.auth.signOut({
+      scope: "local",
+    });
+
     localStorage.removeItem("qroute_current_user");
     sessionStorage.removeItem("qroute_current_user");
-    navigate("/login", { replace: true });
+
+    navigate("/login", {
+      replace: true,
+    });
   };
 
-  const handleToggleBan = async (targetUserId: string) => {
-    const targetUser = users.find((u) => u.id === targetUserId);
-    if (!targetUser) return;
-    if (!userId) {
-      setActionError("Please sign in to continue.");
+  /* ------------------------------------------------------------------------ */
+  /*                              RETRY LOADING                              */
+  /* ------------------------------------------------------------------------ */
+
+  const retryLoadingUsers = () => {
+    setUsers([]);
+    setErrorMessage(null);
+    setIsLoading(true);
+    setRetryCount((count) => count + 1);
+  };
+
+  /* ------------------------------------------------------------------------ */
+  /*                           USER DETAILS MODAL                            */
+  /* ------------------------------------------------------------------------ */
+
+  const openUserDetails = (targetUser: AdminUserRecord) => {
+    setSelectedUserId(targetUser.id);
+    setActionError(null);
+    setActionNotice(null);
+
+    setHistoryVisible(false);
+    setHistoryItems([]);
+    setHistoryError(null);
+    setHistoryLoadedFor(null);
+  };
+
+  const closeUserDetails = () => {
+    setSelectedUserId(null);
+
+    setHistoryVisible(false);
+    setHistoryItems([]);
+    setHistoryError(null);
+    setHistoryLoadedFor(null);
+  };
+
+  /* ------------------------------------------------------------------------ */
+  /*                           ROLE CHANGE ACTION                             */
+  /* ------------------------------------------------------------------------ */
+
+  const openRoleChangeDialog = (
+    targetUser: AdminUserRecord,
+  ) => {
+    if (
+      targetUser.isDeleted ||
+      targetUser.id === userId
+    ) {
       return;
     }
 
-    const nextBannedState = !targetUser.banned;
-    setIsBanning(true);
-    try {
-      await toggleAdminUserBan(userId, targetUserId, nextBannedState);
-      setUsers((current) =>
-        current.map((u) =>
-          u.id === targetUserId ? { ...u, banned: nextBannedState } : u
-        )
-      );
-      if (selectedUser?.id === targetUserId) {
-        setSelectedUser((current) =>
-          current ? { ...current, banned: nextBannedState } : null
-        );
-      }
-      setPendingUserId(null);
-      setActionError(null);
-    } catch (error: unknown) {
-      setActionError(
-        error instanceof Error
-          ? error.message
-          : "Unable to update the user's access.",
-      );
-    } finally {
-      setIsBanning(false);
-    }
+    setSelectedUserId(null);
+    setRoleChangeTargetId(targetUser.id);
+    setRoleError(null);
+    setActionError(null);
+    setActionNotice(null);
   };
 
-  const handleToggleModerator = async (targetUserId: string) => {
-    const targetUser = users.find((user) => user.id === targetUserId);
-    if (!targetUser || !userId) return;
+  const closeRoleChangeDialog = () => {
+    if (updatingRoleUserId) {
+      return;
+    }
 
-    const role =
-      targetUser.role === "moderator" ? "registered_user" : "moderator";
-    setUpdatingRoleUserId(targetUserId);
-    setActionError(null);
+    setRoleChangeTargetId(null);
+    setRoleError(null);
+  };
+
+  const handleConfirmRoleChange = async () => {
+    if (
+      !userId ||
+      !roleChangeTarget ||
+      !nextRole
+    ) {
+      return;
+    }
+
+    if (
+      roleChangeTarget.isDeleted ||
+      roleChangeTarget.id === userId
+    ) {
+      setRoleError(
+        "This account is not eligible for a role change.",
+      );
+      return;
+    }
+
+    setUpdatingRoleUserId(roleChangeTarget.id);
+    setRoleError(null);
 
     try {
-      await setAdminUserRole(userId, targetUserId, role);
-      setUsers((current) =>
-        current.map((user) =>
-          user.id === targetUserId ? { ...user, role } : user,
-        ),
+      await setAdminUserRole(
+        userId,
+        roleChangeTarget.id,
+        nextRole,
       );
+
+      const displayName = getDisplayName(roleChangeTarget);
+
+      setRoleChangeTargetId(null);
+
+      setActionNotice({
+        type: "success",
+        message:
+          nextRole === "admin"
+            ? `${displayName} is now an administrator.`
+            : `${displayName} is now a registered user.`,
+      });
+
+      try {
+        await refreshUsers();
+      } catch {
+        setActionNotice({
+          type: "warning",
+          message:
+            "The role change was saved, but the user list could not be refreshed. Reload the page to view the latest role.",
+        });
+      }
     } catch (error: unknown) {
-      setActionError(
+      setRoleError(
         error instanceof Error
           ? error.message
           : "Unable to update the user's role.",
@@ -149,70 +657,292 @@ export default function UserManagement() {
     }
   };
 
-  useEffect(() => {
-    let active = true;
+  /* ------------------------------------------------------------------------ */
+  /*                       RESTRICTION DIALOG ACTIONS                         */
+  /* ------------------------------------------------------------------------ */
 
-    void getAdminUsers(userId ?? "")
-      .then((data) => {
-        if (active) {
-          setUsers(data);
-          setErrorMessage(null);
-        }
-      })
-      .catch((error: unknown) => {
-        if (active) {
-          setUsers([]);
-          setErrorMessage(
-            error instanceof Error
-              ? error.message
-              : "Unable to load registered users.",
+  const openRestrictionDialog = (
+    targetUser: AdminUserRecord,
+  ) => {
+    if (
+      targetUser.isDeleted ||
+      targetUser.role !== "registered_user"
+    ) {
+      return;
+    }
+
+    setSelectedUserId(null);
+
+    setRestrictionUserId(targetUser.id);
+
+    setRestrictionAction(
+      targetUser.isMuted
+        ? "unmute"
+        : targetUser.isBanned
+          ? "unban"
+          : "mute",
+    );
+
+    setRestrictionReason("");
+    setDurationAmount("1");
+    setDurationUnit("days");
+    setIndefiniteMute(false);
+    setRestrictionError(null);
+
+    setActionError(null);
+    setActionNotice(null);
+  };
+
+  const closeRestrictionDialog = () => {
+    if (isApplyingRestriction) {
+      return;
+    }
+
+    setRestrictionUserId(null);
+    setRestrictionError(null);
+  };
+
+  const handleRestrictionActionChange = (
+    action: AdminUserRestrictionAction,
+  ) => {
+    setRestrictionAction(action);
+    setRestrictionReason("");
+    setRestrictionError(null);
+    setIndefiniteMute(false);
+  };
+
+  const calculateDurationSeconds = (): number | null => {
+    const amount = Number(durationAmount);
+
+    if (
+      !Number.isSafeInteger(amount) ||
+      amount <= 0
+    ) {
+      return null;
+    }
+
+    const seconds =
+      amount * DURATION_FACTORS[durationUnit];
+
+    if (
+      !Number.isSafeInteger(seconds) ||
+      seconds < 60 ||
+      seconds > MAX_RESTRICTION_SECONDS
+    ) {
+      return null;
+    }
+
+    return seconds;
+  };
+
+  const handleApplyRestriction = async () => {
+    if (
+      !userId ||
+      !restrictionTarget
+    ) {
+      return;
+    }
+
+    if (
+      restrictionTarget.isDeleted ||
+      restrictionTarget.role !== "registered_user"
+    ) {
+      setRestrictionError(
+        "This account is not eligible for restrictions.",
+      );
+      return;
+    }
+
+    const reason = restrictionReason.trim();
+
+    const requiresReason =
+      restrictionAction === "mute" ||
+      restrictionAction === "ban_temporary" ||
+      restrictionAction === "ban_permanent";
+
+    if (requiresReason && !reason) {
+      setRestrictionError(
+        "A reason is required for a new restriction.",
+      );
+      return;
+    }
+
+    let durationSeconds: number | null = null;
+
+    if (restrictionAction === "mute") {
+      if (!indefiniteMute) {
+        durationSeconds = calculateDurationSeconds();
+
+        if (durationSeconds === null) {
+          setRestrictionError(
+            "Enter a valid mute duration between 60 seconds and 365 days, or select indefinite mute.",
           );
+          return;
         }
-      })
-      .finally(() => {
-        if (active) setIsLoading(false);
+      }
+    }
+
+    if (restrictionAction === "ban_temporary") {
+      durationSeconds = calculateDurationSeconds();
+
+      if (durationSeconds === null) {
+        setRestrictionError(
+          "A temporary ban must be between 60 seconds and 365 days.",
+        );
+        return;
+      }
+    }
+
+    if (
+      restrictionAction === "ban_permanent" ||
+      restrictionAction === "unmute" ||
+      restrictionAction === "unban"
+    ) {
+      durationSeconds = null;
+    }
+
+    setIsApplyingRestriction(true);
+    setRestrictionError(null);
+    setActionError(null);
+    setActionNotice(null);
+
+    try {
+      await applyAdminUserRestriction(
+        userId,
+        restrictionTarget.id,
+        {
+          action: restrictionAction,
+          durationSeconds,
+          ...(reason
+            ? {
+                reason,
+              }
+            : {}),
+        },
+      );
+
+      const successMessage =
+        getRestrictionSuccessMessage(
+          restrictionAction,
+          getDisplayName(restrictionTarget),
+        );
+
+      setRestrictionUserId(null);
+
+      setActionNotice({
+        type: "success",
+        message: successMessage,
       });
 
-    return () => {
-      active = false;
-    };
-  }, [userId, retryCount]);
+      try {
+        await refreshUsers();
+      } catch {
+        setActionNotice({
+          type: "warning",
+          message:
+            `${successMessage} However, the user list could not be refreshed. Reload the page to view the latest restriction state.`,
+        });
+      }
+    } catch (error: unknown) {
+      /*
+       * A 502 response with restrictionSaved=true means:
+       * - The database restriction was saved.
+       * - Auth synchronization failed afterward.
+       *
+       * Do not automatically repeat the action or offer a generic
+       * Auth synchronization retry here.
+       */
+      if (
+        error instanceof AdminApiError &&
+        error.restrictionSaved
+      ) {
+        const actionLabel =
+          getRestrictionActionLabel(restrictionAction);
 
-  const filteredUsers = useMemo(() => {
-    const search = searchTerm.toLowerCase().trim();
+        setRestrictionUserId(null);
 
-    return users.filter((user) => {
-      const matchesSearch =
-        (user.username?.toLowerCase().includes(search) ?? false) ||
-        (user.email?.toLowerCase().includes(search) ?? false);
-      const status = getUserStatus(user.banned);
+        setActionNotice({
+          type: "warning",
+          message:
+            `The ${actionLabel.toLowerCase()} change was saved in the database, but Supabase Auth synchronization failed. The sign-in state may not yet match the saved restriction. Do not repeat the action automatically; the synchronization issue needs separate investigation.`,
+        });
 
-      return (
-        matchesSearch &&
-        (statusFilter === "All" || status === statusFilter) &&
-        (quickFilter === "All" || status === quickFilter)
-      );
-    });
-  }, [users, searchTerm, statusFilter, quickFilter]);
-
-  const activeCount = users.filter(
-    (user) => getUserStatus(user.banned) === "Active",
-  ).length;
-  const bannedCount = users.filter(
-    (user) => getUserStatus(user.banned) === "Banned",
-  ).length;
-
-  const getStatusStyle = (status: UserStatus) =>
-    status === "Active"
-      ? "bg-green-50 text-green-700"
-      : "bg-red-50 text-red-700";
-
-  const retryLoadingUsers = () => {
-    setUsers([]);
-    setErrorMessage(null);
-    setIsLoading(true);
-    setRetryCount((count) => count + 1);
+        try {
+          await refreshUsers();
+        } catch {
+          setActionNotice({
+            type: "warning",
+            message:
+              `The ${actionLabel.toLowerCase()} change was saved, but Auth synchronization and refreshing the user list both failed. Reload the page and investigate the Auth synchronization issue before taking another action.`,
+          });
+        }
+      } else {
+        setRestrictionError(
+          error instanceof Error
+            ? error.message
+            : "Unable to update the user's restriction.",
+        );
+      }
+    } finally {
+      setIsApplyingRestriction(false);
+    }
   };
+
+  /* ------------------------------------------------------------------------ */
+  /*                         MODERATION HISTORY                               */
+  /* ------------------------------------------------------------------------ */
+
+  const handleLoadModerationHistory = async () => {
+    if (!userId || !selectedUser) {
+      return;
+    }
+
+    setHistoryVisible(true);
+    setHistoryError(null);
+
+    if (historyLoadedFor === selectedUser.id) {
+      return;
+    }
+
+    setHistoryLoading(true);
+
+    try {
+      const history =
+        await getAdminUserModerationHistory(
+          userId,
+          selectedUser.id,
+        );
+
+      setHistoryItems(history);
+      setHistoryLoadedFor(selectedUser.id);
+    } catch (error: unknown) {
+      setHistoryError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load moderation history.",
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  /* ------------------------------------------------------------------------ */
+  /*                              STYLE HELPERS                               */
+  /* ------------------------------------------------------------------------ */
+
+  const getFilterButtonClass = (
+    filter: UserFilter,
+    currentFilter: UserFilter,
+  ) =>
+    `min-w-[70px] rounded-full border px-4 py-2.5 text-sm font-medium shadow-sm transition ${
+      currentFilter === filter
+        ? "border-[#102E4D] bg-[#102E4D] text-white"
+        : "border-slate-200 bg-white text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]"
+    }`;
+
+  /* ------------------------------------------------------------------------ */
+  /*                                  RENDER                                  */
+  /* ------------------------------------------------------------------------ */
 
   return (
     <div className="min-h-screen bg-[#F4F8FC] text-slate-800">
@@ -234,11 +964,12 @@ export default function UserManagement() {
       >
         <div className="flex h-[105px] items-center border-b border-white/10 px-7">
           <div>
-             <img
-                src={qrouteWhiteLogo}
-                alt="QRoute Logo"
-                className="h-auto w-[150px] object-contain"
-              />
+            <img
+              src={qrouteWhiteLogo}
+              alt="QRoute Logo"
+              className="h-auto w-[150px] object-contain"
+            />
+
             <p className="mt-0.5 text-xs tracking-wide text-blue-200">
               ADMINISTRATION
             </p>
@@ -254,7 +985,8 @@ export default function UserManagement() {
             {navigationItems.map((item) => {
               const Icon = item.icon;
               const active = item.label === "User Management";
-              const destination = getAdminNavigationDestination(item.label);
+              const destination =
+                getAdminNavigationDestination(item.label);
 
               return (
                 <button
@@ -268,7 +1000,10 @@ export default function UserManagement() {
                   }
                   onClick={() => {
                     setSidebarOpen(false);
-                    if (destination) navigate(destination);
+
+                    if (destination) {
+                      navigate(destination);
+                    }
                   }}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${
                     active
@@ -279,9 +1014,13 @@ export default function UserManagement() {
                   }`}
                 >
                   <Icon size={19} strokeWidth={1.8} />
+
                   <span>{item.label}</span>
+
                   {!destination && (
-                    <span className="ml-auto text-[10px]">Unavailable</span>
+                    <span className="ml-auto text-[10px]">
+                      Unavailable
+                    </span>
                   )}
                 </button>
               );
@@ -295,9 +1034,15 @@ export default function UserManagement() {
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-200 text-[#102E4D]">
                 <Users size={20} />
               </div>
+
               <div>
-                <p className="text-sm font-semibold">Admin Panel</p>
-                <p className="text-xs text-slate-300">System management</p>
+                <p className="text-sm font-semibold">
+                  Admin Panel
+                </p>
+
+                <p className="text-xs text-slate-300">
+                  System management
+                </p>
               </div>
             </div>
           </div>
@@ -306,8 +1051,13 @@ export default function UserManagement() {
             type="button"
             onClick={() => {
               const destination =
-                getAdminNavigationDestination("Preview of the System");
-              if (destination) navigate(destination);
+                getAdminNavigationDestination(
+                  "Preview of the System",
+                );
+
+              if (destination) {
+                navigate(destination);
+              }
             }}
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-4 py-3 text-sm font-medium transition hover:bg-white/10"
           >
@@ -344,28 +1094,32 @@ export default function UserManagement() {
               <h2 className="text-xl font-bold tracking-tight text-[#102E4D] sm:text-2xl">
                 User Management
               </h2>
+
               <p className="mt-1 text-xs text-slate-500 sm:text-sm">
-                View registered-user accounts
+                Manage registered-user and administrator accounts
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-3 sm:gap-5">
-            <AdminNotificationBell adminUserId={userId ?? ""} />
+            <AdminNotificationBell
+              adminUserId={userId ?? ""}
+            />
 
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
+
             <div className="flex items-center gap-2.5">
-              <AccountAvatar
-                account={account}
-                className="h-10 w-10 bg-[#DCE9F7] font-bold text-[#102E4D]"
-                iconSize={20}
-              />
-              <div className="hidden sm:block text-left">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#DCE9F7] text-sm font-bold text-[#102E4D]">
+                {adminInitials || "A"}
+              </div>
+
+              <div className="hidden text-left sm:block">
                 <p className="text-sm font-semibold text-slate-800">
                   {adminDisplayName}
                 </p>
+
                 <p
-                  className="text-xs text-slate-500 max-w-[180px] truncate"
+                  className="max-w-[180px] truncate text-xs text-slate-500"
                   title={adminEmail}
                 >
                   {adminEmail}
@@ -379,51 +1133,99 @@ export default function UserManagement() {
           {/* Page heading */}
           <section className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
-
               <h3 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">
-                Registered Users
+                User Accounts
               </h3>
 
               <p className="mt-2 text-sm text-slate-500">
-                Review accounts with a verified registered-user role.
+                Review account information, roles, and independent access restrictions.
               </p>
             </div>
+
+            {/* Account statistics */}
             <div className="flex flex-wrap gap-3">
               <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-50 text-green-700">
                   <ShieldCheck size={20} />
                 </div>
+
                 <div>
-                  <p className="text-xs text-slate-500">Active</p>
+                  <p className="text-xs text-slate-500">
+                    Active
+                  </p>
+
                   <p className="text-xl font-bold text-[#102E4D]">
                     {activeCount}
                   </p>
                 </div>
               </div>
+
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <LockKeyhole size={20} />
+                </div>
+
+                <div>
+                  <p className="text-xs text-slate-500">
+                    Muted
+                  </p>
+
+                  <p className="text-xl font-bold text-[#102E4D]">
+                    {mutedCount}
+                  </p>
+                </div>
+              </div>
+
               <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-50 text-red-600">
                   <BanIcon size={20} />
                 </div>
+
                 <div>
-                  <p className="text-xs text-slate-500">Banned</p>
+                  <p className="text-xs text-slate-500">
+                    Banned
+                  </p>
+
                   <p className="text-xl font-bold text-[#102E4D]">
                     {bannedCount}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+                  <Users size={20} />
+                </div>
+
+                <div>
+                  <p className="text-xs text-slate-500">
+                    Deleted
+                  </p>
+
+                  <p className="text-xl font-bold text-[#102E4D]">
+                    {deletedCount}
                   </p>
                 </div>
               </div>
             </div>
           </section>
 
+          {/* Search and status filter */}
           <section className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-sm transition focus-within:border-[#102E4D] focus-within:ring-2 focus-within:ring-blue-100">
-              <Search size={18} className="shrink-0 text-slate-400" />
+              <Search
+                size={18}
+                className="shrink-0 text-slate-400"
+              />
 
               <input
                 type="text"
                 value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Search username or email..."
-                aria-label="Search username or email"
+                onChange={(event) =>
+                  setSearchTerm(event.target.value)
+                }
+                placeholder="Search display name, email, or username..."
+                aria-label="Search user accounts"
                 className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-slate-400"
               />
 
@@ -438,19 +1240,25 @@ export default function UserManagement() {
                 </button>
               )}
             </div>
-            <div className="relative sm:w-[180px]">
+
+            <div className="relative sm:w-[190px]">
               <select
                 value={statusFilter}
                 onChange={(event) =>
-                  setStatusFilter(event.target.value as "All" | UserStatus)
+                  setStatusFilter(
+                    event.target.value as UserFilter,
+                  )
                 }
                 aria-label="Filter accounts by status"
                 className="h-12 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm shadow-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
               >
-                <option value="All">All Status</option>
+                <option value="All">All Statuses</option>
                 <option value="Active">Active</option>
+                <option value="Muted">Muted</option>
                 <option value="Banned">Banned</option>
+                <option value="Deleted">Deleted</option>
               </select>
+
               <ChevronDown
                 size={16}
                 className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-500"
@@ -458,23 +1266,24 @@ export default function UserManagement() {
             </div>
           </section>
 
+          {/* Quick filters */}
           <section className="mb-7 flex flex-wrap gap-2.5">
-            {(["All", "Active", "Banned"] as const).map((filter) => (
+            {FILTER_OPTIONS.map((filter) => (
               <button
                 key={filter}
                 type="button"
                 onClick={() => setQuickFilter(filter)}
-                className={`min-w-[70px] rounded-full border px-5 py-2.5 text-sm font-medium shadow-sm transition ${
-                  quickFilter === filter
-                    ? "border-[#102E4D] bg-[#102E4D] text-white"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]"
-                }`}
+                className={getFilterButtonClass(
+                  filter,
+                  quickFilter,
+                )}
               >
                 {filter}
               </button>
             ))}
           </section>
 
+          {/* Global action feedback */}
           {actionError && (
             <p
               role="alert"
@@ -484,13 +1293,29 @@ export default function UserManagement() {
             </p>
           )}
 
+          {actionNotice && (
+            <div
+              role="status"
+              className={`mb-4 rounded-lg border px-4 py-3 text-sm ${
+                actionNotice.type === "warning"
+                  ? "border-amber-200 bg-amber-50 text-amber-900"
+                  : "border-green-200 bg-green-50 text-green-800"
+              }`}
+            >
+              {actionNotice.message}
+            </div>
+          )}
+
           {/* User table */}
           <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_3px_14px_rgba(15,23,42,0.035)]">
             <div className="flex flex-col gap-1 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
               <div>
-                <h4 className="font-bold text-slate-900">User Accounts</h4>
+                <h4 className="font-bold text-slate-900">
+                  User Accounts
+                </h4>
+
                 <p className="mt-1 text-xs text-slate-500">
-                  Registered User and Moderator accounts.
+                  Registered users and administrators.
                 </p>
               </div>
 
@@ -501,133 +1326,189 @@ export default function UserManagement() {
             </div>
 
             <div className="w-full overflow-x-auto">
-              <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+              <table className="w-full min-w-[1050px] border-collapse text-left text-sm">
                 <thead className="bg-[#DFEAF4] text-xs text-slate-700">
                   <tr>
-                    <th className="px-5 py-4 font-semibold">Username</th>
-                    <th className="px-5 py-4 font-semibold">Email</th>
-                    <th className="px-5 py-4 font-semibold">Joined</th>
-                    <th className="px-5 py-4 font-semibold">Role</th>
-                    <th className="px-5 py-4 font-semibold">Status</th>
+                    <th className="px-5 py-4 font-semibold">
+                      Display Name
+                    </th>
+
+                    <th className="px-5 py-4 font-semibold">
+                      Email
+                    </th>
+
+                    <th className="px-5 py-4 font-semibold">
+                      Joined
+                    </th>
+
+                    <th className="px-5 py-4 font-semibold">
+                      Role
+                    </th>
+
+                    <th className="px-5 py-4 font-semibold">
+                      Status
+                    </th>
+
                     <th className="px-5 py-4 text-center font-semibold">
-                      Action
+                      Actions
                     </th>
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-slate-100">
-                  {filteredUsers.map((user) => (
-                    <tr
-                      key={user.id}
-                      className="transition hover:bg-[#F8FAFD]"
-                    >
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#DCE9F7] text-[#102E4D]">
-                            <UserRound size={17} />
+                  {filteredUsers.map((user) => {
+                    const isSelf = user.id === userId;
+                    const canManageRestrictions =
+                      !user.isDeleted &&
+                      user.role === "registered_user";
+
+                    const canChangeRole =
+                      !user.isDeleted &&
+                      !isSelf;
+
+                    const statusBadges =
+                      getUserStatusBadges(user);
+
+                    return (
+                      <tr
+                        key={user.id}
+                        className="transition hover:bg-[#F8FAFD]"
+                      >
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#DCE9F7] text-[#102E4D]">
+                              <UserRound size={17} />
+                            </div>
+
+                            <div className="min-w-0">
+                              <p className="font-medium text-slate-700">
+                                {getDisplayName(user)}
+                              </p>
+
+                              {isSelf && (
+                                <p className="mt-0.5 text-[11px] text-slate-400">
+                                  Current account
+                                </p>
+                              )}
+                            </div>
                           </div>
-                          <span className="font-medium text-slate-700">
-                            {user.username ? `@${user.username}` : "Not set"}
-                          </span>
-                        </div>
-                      </td>
+                        </td>
 
-                      <td className="px-5 py-4 text-slate-600">
-                        {user.email ?? "Email unavailable"}
-                      </td>
+                        <td className="px-5 py-4 text-slate-600">
+                          {user.email ?? "Email unavailable"}
+                        </td>
 
-                      <td className="px-5 py-4 text-slate-600">
-                        {formatCreatedAt(user.createdAt)}
-                      </td>
+                        <td className="px-5 py-4 text-slate-600">
+                          {formatCreatedAt(user.createdAt)}
+                        </td>
 
-                      <td className="px-5 py-4">
-                        <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-                          {user.role === "moderator" ? "Moderator" : "Registered user"}
-                        </span>
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <span
-                          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${getStatusStyle(getUserStatus(user.banned))}`}
-                        >
+                        <td className="px-5 py-4">
                           <span
-                            className={`h-1.5 w-1.5 rounded-full ${
-                              user.banned ? "bg-red-500" : "bg-green-500"
+                            className={`rounded-full px-3 py-1 text-xs font-medium ${
+                              user.role === "admin"
+                                ? "bg-indigo-50 text-indigo-700"
+                                : "bg-blue-50 text-blue-700"
                             }`}
-                          />
-                          {getUserStatus(user.banned)}
-                        </span>
-                      </td>
+                          >
+                            {user.role === "admin"
+                              ? "Administrator"
+                              : "Registered user"}
+                          </span>
+                        </td>
 
-                      <td className="px-5 py-4">
-                        <div className="flex items-center justify-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedUser(user)}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D]"
-                          >
-                            <Eye size={14} />
-                            View
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPendingUserId(user.id);
-                              setActionError(null);
-                            }}
-                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-medium transition ${
-                              user.banned
-                                ? "border-green-200 bg-white text-green-700 hover:bg-green-50"
-                                : "border-red-200 bg-white text-red-600 hover:bg-red-50"
-                            }`}
-                          >
-                            {user.banned ? (
-                              <ShieldCheck size={14} />
-                            ) : (
-                              <BanIcon size={14} />
+                        <td className="px-5 py-4">
+                          <div className="flex max-w-[220px] flex-wrap gap-1.5">
+                            {statusBadges.map((badge) => (
+                              <span
+                                key={badge.label}
+                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium ${badge.className}`}
+                              >
+                                {badge.label}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <div className="flex flex-wrap items-center justify-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openUserDetails(user)
+                              }
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D]"
+                            >
+                              <Eye size={14} />
+                              View
+                            </button>
+
+                            {canManageRestrictions && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openRestrictionDialog(user)
+                                }
+                                disabled={isApplyingRestriction}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <Shield size={14} />
+                                Restrictions
+                              </button>
                             )}
-                            {user.banned ? "Unban" : "Ban"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleToggleModerator(user.id)}
-                            disabled={updatingRoleUserId === user.id}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D] disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {updatingRoleUserId === user.id
-                              ? "Saving..."
-                              : user.role === "moderator"
-                                ? "Revoke Moderator"
-                                : "Make Moderator"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+
+                            {canChangeRole && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openRoleChangeDialog(user)
+                                }
+                                disabled={
+                                  updatingRoleUserId === user.id
+                                }
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D] disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {updatingRoleUserId === user.id
+                                  ? "Saving..."
+                                  : user.role === "admin"
+                                    ? "Revoke Admin"
+                                    : "Make Admin"}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
 
                   {filteredUsers.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-16 text-center">
+                      <td
+                        colSpan={6}
+                        className="px-6 py-16 text-center"
+                      >
                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                           <Search size={22} />
                         </div>
+
                         <p className="mt-3 font-semibold text-slate-700">
                           {isLoading
-                            ? "Loading registered users..."
+                            ? "Loading user accounts..."
                             : errorMessage
                               ? "Users could not be loaded"
                               : users.length === 0
-                                ? "No registered users are available"
+                                ? "No user accounts are available"
                                 : "No users found"}
                         </p>
+
                         <p className="mt-1 text-sm text-slate-500">
                           {errorMessage ??
                             (isLoading
                               ? "Loading account records from the server."
                               : users.length === 0
-                                ? "The database returned no registered-user accounts."
-                                : "Try another username or email search.")}
+                                ? "The database returned no user accounts."
+                                : "Try another display name, email, or search term.")}
                         </p>
+
                         {errorMessage ? (
                           <button
                             type="button"
@@ -667,18 +1548,21 @@ export default function UserManagement() {
         </div>
       </main>
 
-      {/* User details modal */}
+      {/* ------------------------------------------------------------------ */}
+      {/*                           USER DETAILS                             */}
+      {/* ------------------------------------------------------------------ */}
+
       {selectedUser && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
-          onClick={() => setSelectedUser(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-4"
+          onClick={closeUserDetails}
         >
           <section
             role="dialog"
             aria-modal="true"
             aria-labelledby="user-modal-title"
             onClick={(event) => event.stopPropagation()}
-            className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl"
+            className="my-6 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
           >
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -688,168 +1572,768 @@ export default function UserManagement() {
                 >
                   User Details
                 </h3>
+
                 <p className="mt-1 text-sm text-slate-500">
-                  View registered account information.
+                  Account information, role, and restriction status.
                 </p>
               </div>
 
               <button
                 type="button"
                 aria-label="Close user details"
-                onClick={() => setSelectedUser(null)}
+                onClick={closeUserDetails}
                 className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
               >
                 <X size={20} />
               </button>
             </div>
 
+            {/* Identity */}
             <div className="mt-6 flex flex-col items-center rounded-xl bg-[#F4F8FC] p-6">
               <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#DCE9F7] text-[#102E4D]">
                 <UserRound size={30} />
               </div>
+
               <h4 className="mt-3 text-lg font-bold text-slate-800">
-                {selectedUser.username
-                  ? `@${selectedUser.username}`
-                  : "Username not set"}
+                {getDisplayName(selectedUser)}
               </h4>
-              <span className="mt-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                Registered user
+
+              <span
+                className={`mt-2 rounded-full px-3 py-1 text-xs font-semibold ${
+                  selectedUser.role === "admin"
+                    ? "bg-indigo-50 text-indigo-700"
+                    : "bg-blue-50 text-blue-700"
+                }`}
+              >
+                {selectedUser.role === "admin"
+                  ? "Administrator"
+                  : "Registered user"}
               </span>
+
+              {selectedUser.isDeleted && (
+                <span className="mt-2 rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-700">
+                  Deleted account
+                </span>
+              )}
             </div>
 
-            <div className="mt-5 space-y-4">
-              <div>
+            {/* Account information */}
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <div className="rounded-xl bg-[#F4F8FC] p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
                   Email address
                 </p>
+
                 <p className="mt-1 break-all font-medium text-slate-800">
                   {selectedUser.email ?? "Email unavailable"}
                 </p>
               </div>
 
               <div className="rounded-xl bg-[#F4F8FC] p-4">
-                <p className="text-xs text-slate-500">Date joined</p>
-                <p className="mt-1 text-sm font-semibold text-[#102E4D]">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                  Date joined
+                </p>
+
+                <p className="mt-1 font-semibold text-[#102E4D]">
                   {formatCreatedAt(selectedUser.createdAt)}
                 </p>
               </div>
             </div>
 
-            <div className="mt-6 flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={() => setSelectedUser(null)}
-                className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-              >
-                Close
-              </button>
+            {/* Current account statuses */}
+            <div className="mt-5">
+              <h4 className="text-sm font-bold text-slate-800">
+                Account Status
+              </h4>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {getUserStatusBadges(selectedUser).map(
+                  (badge) => (
+                    <span
+                      key={badge.label}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${badge.className}`}
+                    >
+                      {badge.label}
+                    </span>
+                  ),
+                )}
+              </div>
+            </div>
+
+            {/* Independent restriction details */}
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 p-4">
+                <div className="flex items-center gap-2">
+                  <BanIcon
+                    size={17}
+                    className="text-red-600"
+                  />
+
+                  <h4 className="text-sm font-bold text-slate-800">
+                    Ban
+                  </h4>
+                </div>
+
+                <p className="mt-3 text-sm font-semibold text-slate-700">
+                  {selectedUser.isBanned
+                    ? selectedUser.isPermanentBan
+                      ? "Permanent ban"
+                      : "Temporary ban"
+                    : "Not banned"}
+                </p>
+
+                {selectedUser.isBanned && (
+                  <>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Expires:{" "}
+                      {selectedUser.isPermanentBan
+                        ? "Never"
+                        : formatDateTime(
+                            selectedUser.banExpiresAt,
+                          )}
+                    </p>
+
+                    <p className="mt-3 break-words text-xs text-slate-600">
+                      <span className="font-semibold">
+                        Reason:
+                      </span>{" "}
+                      {selectedUser.banReason ||
+                        "No reason recorded"}
+                    </p>
+                  </>
+                )}
+              </div>
+
+              <div className="rounded-xl border border-slate-200 p-4">
+                <div className="flex items-center gap-2">
+                  <LockKeyhole
+                    size={17}
+                    className="text-amber-600"
+                  />
+
+                  <h4 className="text-sm font-bold text-slate-800">
+                    Mute
+                  </h4>
+                </div>
+
+                <p className="mt-3 text-sm font-semibold text-slate-700">
+                  {selectedUser.isMuted
+                    ? "Muted"
+                    : "Not muted"}
+                </p>
+
+                {selectedUser.isMuted && (
+                  <>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Expires:{" "}
+                      {formatDateTime(
+                        selectedUser.muteExpiresAt,
+                      )}
+                    </p>
+
+                    <p className="mt-3 break-words text-xs text-slate-600">
+                      <span className="font-semibold">
+                        Reason:
+                      </span>{" "}
+                      {selectedUser.muteReason ||
+                        "No reason recorded"}
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Auth synchronization status */}
+            {!selectedUser.authBanSynced && (
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-sm font-semibold text-amber-900">
+                  Sign-in restriction synchronization needs attention
+                </p>
+
+                <p className="mt-1 text-xs leading-5 text-amber-800">
+                  The Supabase Auth ban state does not currently match the database moderation state. Do not repeat a restriction action automatically. Investigate the synchronization state separately.
+                </p>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className="mt-6 flex flex-col gap-3 border-t border-slate-100 pt-5">
+              {!selectedUser.isDeleted &&
+                selectedUser.role === "registered_user" && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openRestrictionDialog(selectedUser)
+                    }
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-800 transition hover:bg-amber-100"
+                  >
+                    <Shield size={16} />
+                    Manage Restrictions
+                  </button>
+                )}
+
+              {!selectedUser.isDeleted &&
+                selectedUser.id !== userId && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openRoleChangeDialog(selectedUser)
+                    }
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <Users size={16} />
+                    {selectedUser.role === "admin"
+                      ? "Revoke Administrator Role"
+                      : "Promote to Administrator"}
+                  </button>
+                )}
 
               <button
                 type="button"
-                onClick={() => {
-                  setPendingUserId(selectedUser.id);
-                  setActionError(null);
-                }}
-                className={`rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition ${
-                  selectedUser.banned
-                    ? "bg-green-700 hover:bg-green-800"
-                    : "bg-red-600 hover:bg-red-700"
-                }`}
+                onClick={() =>
+                  void handleLoadModerationHistory()
+                }
+                disabled={historyLoading}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
               >
-                {selectedUser.banned ? "Unban User" : "Ban User"}
+                <History size={16} />
+                {historyLoading
+                  ? "Loading History..."
+                  : "View Moderation History"}
+              </button>
+            </div>
+
+            {/* Moderation history */}
+            {historyVisible && (
+              <div className="mt-5 rounded-xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h4 className="font-bold text-slate-800">
+                    Moderation History
+                  </h4>
+
+                  <button
+                    type="button"
+                    onClick={() => setHistoryVisible(false)}
+                    aria-label="Hide moderation history"
+                    className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  >
+                    <X size={17} />
+                  </button>
+                </div>
+
+                {historyLoading && (
+                  <p className="mt-4 text-sm text-slate-500">
+                    Loading moderation history...
+                  </p>
+                )}
+
+                {historyError && (
+                  <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3">
+                    <p className="text-sm text-red-800">
+                      {historyError}
+                    </p>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHistoryLoadedFor(null);
+                        void handleLoadModerationHistory();
+                      }}
+                      className="mt-2 text-xs font-semibold text-red-800 underline underline-offset-2"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                {!historyLoading &&
+                  !historyError &&
+                  historyItems.length === 0 && (
+                    <p className="mt-4 text-sm text-slate-500">
+                      No moderation history is available for this account.
+                    </p>
+                  )}
+
+                {!historyLoading &&
+                  historyItems.length > 0 && (
+                    <div className="mt-4 max-h-[320px] space-y-3 overflow-y-auto">
+                      {historyItems.map((item) => (
+                        <div
+                          key={item.id}
+                          className="rounded-lg bg-[#F8FAFD] p-3"
+                        >
+                          <div className="flex flex-col justify-between gap-1 sm:flex-row sm:items-start">
+                            <p className="text-sm font-semibold text-slate-800">
+                              {item.title}
+                            </p>
+
+                            <span className="text-[11px] text-slate-400">
+                              {formatDateTime(item.occurredAt)}
+                            </span>
+                          </div>
+
+                          <p className="mt-1 text-xs text-slate-600">
+                            {item.detail}
+                          </p>
+
+                          <p className="mt-2 text-[11px] text-slate-500">
+                            By {item.adminDisplayName}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end border-t border-slate-100 pt-5">
+              <button
+                type="button"
+                onClick={closeUserDetails}
+                className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              >
+                Close
               </button>
             </div>
           </section>
         </div>
       )}
 
-      {/* Ban / Unban confirmation dialog */}
-      {pendingUserId !== null &&
-        (() => {
-          const targetUser = users.find((user) => user.id === pendingUserId);
-          if (!targetUser) return null;
-          const banning = !targetUser.banned;
+      {/* ------------------------------------------------------------------ */}
+      {/*                         ROLE CHANGE DIALOG                          */}
+      {/* ------------------------------------------------------------------ */}
 
-          return (
-            <div
-              className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4"
-              onClick={() => {
-                setPendingUserId(null);
-                setActionError(null);
-              }}
+      {roleChangeTarget && nextRole && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4"
+          onClick={closeRoleChangeDialog}
+        >
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="role-confirm-title"
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700">
+              <Users size={23} />
+            </div>
+
+            <h3
+              id="role-confirm-title"
+              className="mt-4 text-xl font-bold text-[#102E4D]"
             >
-              <section
-                role="alertdialog"
-                aria-modal="true"
-                aria-labelledby="confirm-title"
-                onClick={(event) => event.stopPropagation()}
-                className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+              {nextRole === "admin"
+                ? "Promote to administrator?"
+                : "Revoke administrator role?"}
+            </h3>
+
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {nextRole === "admin"
+                ? `${getDisplayName(roleChangeTarget)} will receive administrator privileges.`
+                : `${getDisplayName(roleChangeTarget)} will lose administrator privileges and become a registered user.`}
+            </p>
+
+            {nextRole === "registered_user" && (
+              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                The system will reject this change if it would remove the last administrator.
+              </p>
+            )}
+
+            {roleError && (
+              <p
+                role="alert"
+                className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
               >
-                <div
-                  className={`flex h-12 w-12 items-center justify-center rounded-xl ${
-                    banning
-                      ? "bg-red-50 text-red-600"
-                      : "bg-green-50 text-green-700"
-                  }`}
-                >
-                  {banning ? (
-                    <BanIcon size={23} />
-                  ) : (
-                    <ShieldCheck size={23} />
-                  )}
+                {roleError}
+              </p>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeRoleChangeDialog}
+                disabled={updatingRoleUserId !== null}
+                className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={updatingRoleUserId !== null}
+                onClick={() =>
+                  void handleConfirmRoleChange()
+                }
+                className="rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#183D60] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {updatingRoleUserId !== null
+                  ? "Saving..."
+                  : "Confirm Change"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/*                         RESTRICTION DIALOG                          */}
+      {/* ------------------------------------------------------------------ */}
+
+      {restrictionTarget && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-slate-950/50 p-4"
+          onClick={closeRestrictionDialog}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="restriction-dialog-title"
+            onClick={(event) => event.stopPropagation()}
+            className="my-6 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <Shield size={23} />
                 </div>
 
                 <h3
-                  id="confirm-title"
+                  id="restriction-dialog-title"
                   className="mt-4 text-xl font-bold text-[#102E4D]"
                 >
-                  {banning ? "Ban this user?" : "Unban this user?"}
+                  Manage Restrictions
                 </h3>
 
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  {banning
-                    ? `Are you sure you want to ban @${targetUser.username ?? targetUser.email}? This will restrict their account access.`
-                    : `Are you sure you want to restore access for @${targetUser.username ?? targetUser.email}?`}
+                <p className="mt-1 text-sm text-slate-500">
+                  {getDisplayName(restrictionTarget)}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                aria-label="Close restriction dialog"
+                onClick={closeRestrictionDialog}
+                disabled={isApplyingRestriction}
+                className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Current restriction state */}
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <div className="rounded-lg bg-[#F8FAFD] p-3">
+                <p className="text-xs text-slate-500">
+                  Ban status
                 </p>
 
-                {actionError && (
-                  <p
-                    role="alert"
-                    className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+                <p
+                  className={`mt-1 text-sm font-semibold ${
+                    restrictionTarget.isBanned
+                      ? "text-red-700"
+                      : "text-green-700"
+                  }`}
+                >
+                  {restrictionTarget.isBanned
+                    ? restrictionTarget.isPermanentBan
+                      ? "Permanent"
+                      : "Temporary"
+                    : "Not banned"}
+                </p>
+              </div>
+
+              <div className="rounded-lg bg-[#F8FAFD] p-3">
+                <p className="text-xs text-slate-500">
+                  Mute status
+                </p>
+
+                <p
+                  className={`mt-1 text-sm font-semibold ${
+                    restrictionTarget.isMuted
+                      ? "text-amber-700"
+                      : "text-green-700"
+                  }`}
+                >
+                  {restrictionTarget.isMuted
+                    ? "Muted"
+                    : "Not muted"}
+                </p>
+              </div>
+            </div>
+
+            {/* Action selection */}
+            <div className="mt-5">
+              <label
+                htmlFor="restriction-action"
+                className="mb-2 block text-sm font-semibold text-slate-700"
+              >
+                Restriction action
+              </label>
+
+              <select
+                id="restriction-action"
+                value={restrictionAction}
+                onChange={(event) =>
+                  handleRestrictionActionChange(
+                    event.target.value as AdminUserRestrictionAction,
+                  )
+                }
+                disabled={isApplyingRestriction}
+                className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+              >
+                <optgroup label="Mute">
+                  <option value="mute">
+                    {restrictionTarget.isMuted
+                      ? "Set or update mute"
+                      : "Mute user"}
+                  </option>
+
+                  <option
+                    value="unmute"
+                    disabled={!restrictionTarget.isMuted}
                   >
-                    {actionError}
-                  </p>
+                    Remove mute
+                  </option>
+                </optgroup>
+
+                <optgroup label="Ban">
+                  <option value="ban_temporary">
+                    {restrictionTarget.isBanned
+                      ? "Set or update temporary ban"
+                      : "Temporary ban"}
+                  </option>
+
+                  <option value="ban_permanent">
+                    {restrictionTarget.isBanned
+                      ? "Set or update permanent ban"
+                      : "Permanent ban"}
+                  </option>
+
+                  <option
+                    value="unban"
+                    disabled={!restrictionTarget.isBanned}
+                  >
+                    Remove ban
+                  </option>
+                </optgroup>
+              </select>
+            </div>
+
+            {/* Duration settings */}
+            {(restrictionAction === "mute" ||
+              restrictionAction === "ban_temporary") && (
+              <div className="mt-5 rounded-xl border border-slate-200 p-4">
+                <div className="flex items-center gap-2">
+                  <Clock
+                    size={17}
+                    className="text-slate-500"
+                  />
+
+                  <h4 className="text-sm font-semibold text-slate-800">
+                    Restriction duration
+                  </h4>
+                </div>
+
+                {restrictionAction === "mute" && (
+                  <label className="mt-4 flex cursor-pointer items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={indefiniteMute}
+                      onChange={(event) => {
+                        setIndefiniteMute(
+                          event.target.checked,
+                        );
+                        setRestrictionError(null);
+                      }}
+                      disabled={isApplyingRestriction}
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#102E4D] focus:ring-[#102E4D]"
+                    />
+
+                    <span>
+                      <span className="block text-sm font-medium text-slate-700">
+                        Indefinite mute
+                      </span>
+
+                      <span className="mt-0.5 block text-xs text-slate-500">
+                        The mute remains until an administrator removes it.
+                      </span>
+                    </span>
+                  </label>
                 )}
 
-                <div className="mt-6 flex justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPendingUserId(null);
-                      setActionError(null);
-                    }}
-                    className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                  >
-                    Cancel
-                  </button>
+                {!(
+                  restrictionAction === "mute" &&
+                  indefiniteMute
+                ) && (
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div>
+                      <label
+                        htmlFor="restriction-duration"
+                        className="mb-1.5 block text-xs font-medium text-slate-600"
+                      >
+                        Duration
+                      </label>
 
-                  <button
-                    type="button"
-                    disabled={isBanning}
-                    onClick={() => void handleToggleBan(targetUser.id)}
-                    className={`rounded-lg px-4 py-2.5 text-sm font-semibold text-white ${
-                      banning
-                        ? "bg-red-600 hover:bg-red-700"
-                        : "bg-green-700 hover:bg-green-800"
-                    }`}
-                  >
-                    {isBanning ? "Processing..." : `Confirm ${banning ? "Ban" : "Unban"}`}
-                  </button>
-                </div>
-              </section>
+                      <input
+                        id="restriction-duration"
+                        type="number"
+                        min={1}
+                        max={
+                          Math.floor(
+                            MAX_RESTRICTION_SECONDS /
+                              DURATION_FACTORS[durationUnit],
+                          )
+                        }
+                        step={1}
+                        value={durationAmount}
+                        onChange={(event) => {
+                          setDurationAmount(
+                            event.target.value,
+                          );
+                          setRestrictionError(null);
+                        }}
+                        disabled={isApplyingRestriction}
+                        className="h-11 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="restriction-duration-unit"
+                        className="mb-1.5 block text-xs font-medium text-slate-600"
+                      >
+                        Unit
+                      </label>
+
+                      <select
+                        id="restriction-duration-unit"
+                        value={durationUnit}
+                        onChange={(event) => {
+                          setDurationUnit(
+                            event.target.value as DurationUnit,
+                          );
+                          setRestrictionError(null);
+                        }}
+                        disabled={isApplyingRestriction}
+                        className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+                      >
+                        <option value="minutes">
+                          Minutes
+                        </option>
+
+                        <option value="hours">
+                          Hours
+                        </option>
+
+                        <option value="days">
+                          Days
+                        </option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                <p className="mt-3 text-xs leading-5 text-slate-500">
+                  Timed restrictions must be between 60 seconds and 365 days.
+                </p>
+              </div>
+            )}
+
+            {restrictionAction === "ban_permanent" && (
+              <div className="mt-5 rounded-lg border border-red-100 bg-red-50 p-3">
+                <p className="text-sm font-semibold text-red-800">
+                  Permanent ban
+                </p>
+
+                <p className="mt-1 text-xs leading-5 text-red-700">
+                  This ban will not expire automatically. An administrator must explicitly unban the account.
+                </p>
+              </div>
+            )}
+
+            {/* Reason */}
+            <div className="mt-5">
+              <label
+                htmlFor="restriction-reason"
+                className="mb-2 block text-sm font-semibold text-slate-700"
+              >
+                Reason{" "}
+                {restrictionAction === "unmute" ||
+                restrictionAction === "unban"
+                  ? "(Optional)"
+                  : "(Required)"}
+              </label>
+
+              <textarea
+                id="restriction-reason"
+                value={restrictionReason}
+                onChange={(event) => {
+                  setRestrictionReason(event.target.value);
+                  setRestrictionError(null);
+                }}
+                maxLength={1000}
+                rows={4}
+                disabled={isApplyingRestriction}
+                placeholder={
+                  restrictionAction === "unmute"
+                    ? "Optional explanation for removing the mute..."
+                    : restrictionAction === "unban"
+                      ? "Optional explanation for removing the ban..."
+                      : "Explain why this restriction is being applied..."
+                }
+                className="w-full resize-y rounded-lg border border-slate-200 px-3 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
+              />
+
+              <p className="mt-1 text-right text-[11px] text-slate-400">
+                {restrictionReason.length}/1000
+              </p>
             </div>
-          );
-        })()}
+
+            {/* Restriction error */}
+            {restrictionError && (
+              <p
+                role="alert"
+                className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+              >
+                {restrictionError}
+              </p>
+            )}
+
+            {/* Actions */}
+            <div className="mt-6 flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={closeRestrictionDialog}
+                disabled={isApplyingRestriction}
+                className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  void handleApplyRestriction()
+                }
+                disabled={isApplyingRestriction}
+                className={`rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                  restrictionAction === "unmute" ||
+                  restrictionAction === "unban"
+                    ? "bg-green-700 hover:bg-green-800"
+                    : restrictionAction === "mute"
+                      ? "bg-amber-600 hover:bg-amber-700"
+                      : "bg-red-600 hover:bg-red-700"
+                }`}
+              >
+                {isApplyingRestriction
+                  ? "Processing..."
+                  : `Confirm ${getRestrictionActionLabel(restrictionAction)}`}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,14 +1,20 @@
+
 import type { SupabaseClient } from "@supabase/supabase-js";
+
 import type {
   AdminRouteStopInput,
   AdminRouteUpdateInput,
 } from "./adminValidation.ts";
+
 import { getRecentAdminAuditLogsWithClient } from "./adminAudit.ts";
 
 const authUsersPerPage = 1000;
+const userRolesPerPage = 1000;
 const profileBatchSize = 200;
 const recentActivityLimit = 5;
 const communityPhotoBucket = "community-post-photos";
+const authBanSyncMaxAttempts = 3;
+const permanentAuthBanDuration = "876000h";
 
 export class AdminInputError extends Error {
   constructor(message: string) {
@@ -23,6 +29,35 @@ export class AdminNotFoundError extends Error {
     this.name = "AdminNotFoundError";
   }
 }
+
+export class AdminForbiddenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AdminForbiddenError";
+  }
+}
+
+/**
+ * The database restriction transaction has already committed,
+ * but the corresponding Supabase Auth ban could not be synchronized.
+ */
+export class AdminAuthSyncError extends Error {
+  readonly restrictionSaved = true;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "AdminAuthSyncError";
+  }
+}
+
+export type AdminUserRole = "registered_user" | "admin";
+
+export type AdminUserRestrictionAction =
+  | "mute"
+  | "unmute"
+  | "ban_temporary"
+  | "ban_permanent"
+  | "unban";
 
 export interface AdminRecentActivityItem {
   id: string;
@@ -58,10 +93,12 @@ interface AdminRouteStop {
   route_id: number;
   stop_order: number;
   terminals: AdminRoutePoint | null;
-  stops: (AdminRoutePoint & {
-    description: string | null;
-    stop_type: "road_stop" | "train_station";
-  }) | null;
+  stops:
+    | (AdminRoutePoint & {
+        description: string | null;
+        stop_type: "road_stop" | "train_station";
+      })
+    | null;
 }
 
 export interface AdminRouteRecord {
@@ -114,13 +151,55 @@ export interface AdminRouteManagementData {
   transportTypes: AdminTransportTypeRecord[];
 }
 
+/**
+ * Usernames are included only for internal search matching.
+ * Never render searchUsername in the User Management interface.
+ */
 export interface AdminUserRecord {
   id: string;
+  displayName: string | null;
   email: string | null;
-  username: string | null;
+  searchUsername: string | null;
   createdAt: string;
-  role: "registered_user" | "moderator";
-  banned?: boolean;
+  role: AdminUserRole;
+  isDeleted: boolean;
+
+  // Effective database restriction states.
+  isBanned: boolean;
+  isMuted: boolean;
+  isPermanentBan: boolean;
+
+  banExpiresAt: string | null;
+  muteExpiresAt: string | null;
+
+  banReason: string | null;
+  muteReason: string | null;
+
+  // Indicates whether the database ban state and Supabase Auth
+  // sign-in ban state currently agree.
+  authBanSynced: boolean;
+}
+
+export interface AdminUserRestrictionResult {
+  userId: string;
+  action: AdminUserRestrictionAction;
+  isBanned: boolean;
+  isMuted: boolean;
+  isPermanentBan: boolean;
+  banExpiresAt: string | null;
+  muteExpiresAt: string | null;
+  isEffectivelyBanned: boolean;
+  isEffectivelyMuted: boolean;
+}
+
+export interface AdminUserModerationHistoryItem {
+  id: string;
+  actionKey: string;
+  title: string;
+  description: string;
+  adminDisplayName: string;
+  occurredAt: string;
+  metadata: Record<string, unknown>;
 }
 
 export interface AdminReportRecord {
@@ -138,6 +217,248 @@ export interface AdminReportRecord {
   status: "Pending" | "Reviewed" | "Dismissed";
   description: string;
 }
+
+// -----------------------------------------------------------------------------
+// Shared internal validation and moderation helpers
+// -----------------------------------------------------------------------------
+
+function isNullableDatabaseString(
+  value: unknown,
+): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isPlainRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
+
+function isValidDateString(value: string): boolean {
+  return Number.isFinite(new Date(value).getTime());
+}
+
+interface UserBanModerationState {
+  is_banned: boolean;
+  is_permanent_ban: boolean;
+  ban_expires_at: string | null;
+}
+
+interface UserMuteModerationState {
+  is_muted: boolean;
+  mute_expires_at: string | null;
+}
+
+interface UserModerationBanRow
+  extends UserBanModerationState,
+    UserMuteModerationState {
+  user_id: string;
+  ban_reason: string | null;
+  mute_reason: string | null;
+}
+
+interface EffectiveBanSnapshot {
+  isBanned: boolean;
+  isPermanentBan: boolean;
+  banExpiresAt: string | null;
+}
+
+/**
+ * Mirrors public.is_user_banned().
+ *
+ * A null expiration on an active ban is treated as indefinite.
+ * Invalid expiration data fails closed rather than silently
+ * treating an uncertain restriction as expired.
+ */
+function isEffectiveBan(
+  moderation: UserBanModerationState | null,
+  now = Date.now(),
+): boolean {
+  if (!moderation?.is_banned) {
+    return false;
+  }
+
+  if (moderation.is_permanent_ban) {
+    return true;
+  }
+
+  if (moderation.ban_expires_at === null) {
+    return true;
+  }
+
+  const expiresAt = new Date(
+    moderation.ban_expires_at,
+  ).getTime();
+
+  return !Number.isFinite(expiresAt) || expiresAt > now;
+}
+
+/**
+ * Mirrors public.is_user_muted().
+ *
+ * A null mute expiration means an indefinite mute.
+ */
+function isEffectiveMute(
+  moderation: UserMuteModerationState | null,
+  now = Date.now(),
+): boolean {
+  if (!moderation?.is_muted) {
+    return false;
+  }
+
+  if (moderation.mute_expires_at === null) {
+    return true;
+  }
+
+  const expiresAt = new Date(
+    moderation.mute_expires_at,
+  ).getTime();
+
+  return !Number.isFinite(expiresAt) || expiresAt > now;
+}
+
+function getEffectiveBanSnapshot(
+  moderation: UserBanModerationState | null,
+  now = Date.now(),
+): EffectiveBanSnapshot {
+  const isBanned = isEffectiveBan(moderation, now);
+
+  if (!isBanned || !moderation) {
+    return {
+      isBanned: false,
+      isPermanentBan: false,
+      banExpiresAt: null,
+    };
+  }
+
+  return {
+    isBanned: true,
+    isPermanentBan: moderation.is_permanent_ban,
+    banExpiresAt: moderation.ban_expires_at,
+  };
+}
+
+function sameEffectiveBanSnapshot(
+  left: EffectiveBanSnapshot,
+  right: EffectiveBanSnapshot,
+): boolean {
+  return (
+    left.isBanned === right.isBanned &&
+    left.isPermanentBan === right.isPermanentBan &&
+    left.banExpiresAt === right.banExpiresAt
+  );
+}
+
+function getAuthBanDuration(
+  moderation: UserBanModerationState | null,
+  now = Date.now(),
+): string | "none" {
+  if (!isEffectiveBan(moderation, now)) {
+    return "none";
+  }
+
+  if (
+    moderation?.is_permanent_ban ||
+    moderation?.ban_expires_at === null
+  ) {
+    return permanentAuthBanDuration;
+  }
+
+  if (!moderation?.ban_expires_at) {
+    return "none";
+  }
+
+  const expiration = new Date(
+    moderation.ban_expires_at,
+  ).getTime();
+
+  if (!Number.isFinite(expiration)) {
+    // Fail closed: do not lift an active restriction because
+    // its expiration timestamp could not be interpreted.
+    return permanentAuthBanDuration;
+  }
+
+  const remainingSeconds = Math.ceil(
+    (expiration - now) / 1000,
+  );
+
+  if (remainingSeconds <= 0) {
+    return "none";
+  }
+
+  return `${remainingSeconds}s`;
+}
+
+/**
+ * Retrieves and validates the authoritative database ban state.
+ */
+async function getUserBanModerationState(
+  adminClient: SupabaseClient,
+  userId: string,
+): Promise<UserBanModerationState | null> {
+  const { data, error } = await adminClient
+    .from("user_moderation")
+    .select(
+      "is_banned, is_permanent_ban, ban_expires_at",
+    )
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  if (!data) {
+    return null;
+  }
+
+  if (
+    typeof data.is_banned !== "boolean" ||
+    typeof data.is_permanent_ban !== "boolean" ||
+    !isNullableDatabaseString(data.ban_expires_at)
+  ) {
+    throw new Error(
+      "User moderation returned an invalid ban state.",
+    );
+  }
+
+  return {
+    is_banned: data.is_banned,
+    is_permanent_ban: data.is_permanent_ban,
+    ban_expires_at: data.ban_expires_at,
+  };
+}
+
+function throwAdminRpcError(error: {
+  code?: string;
+  message?: string;
+}): never {
+  const message =
+    error.message || "The administrative operation failed.";
+
+  if (error.code === "P0002") {
+    throw new AdminNotFoundError(message);
+  }
+
+  if (error.code === "42501") {
+    throw new AdminForbiddenError(message);
+  }
+
+  if (
+    error.code === "22023" ||
+    error.code === "P0001"
+  ) {
+    throw new AdminInputError(message);
+  }
+
+  throw new Error(message);
+}
+
+// -----------------------------------------------------------------------------
+// Admin dashboard summary
+// -----------------------------------------------------------------------------
 
 export async function getAdminSummary(
   client: SupabaseClient,
@@ -170,6 +491,7 @@ export async function getAdminSummary(
 
   if (userRolesResult.error) throw userRolesResult.error;
   if (routesResult.error) throw routesResult.error;
+
   if (communityPostsResult.error) {
     throw communityPostsResult.error;
   }
@@ -211,7 +533,7 @@ export async function getAdminSummary(
     reports = reportsCountResult.count;
   }
 
-  // Dashboard Recent Activity now comes exclusively from admin audit logs.
+  // Dashboard Recent Activity comes exclusively from admin audit logs.
   let recentActivity: AdminRecentActivityItem[] | null = null;
 
   try {
@@ -234,6 +556,10 @@ export async function getAdminSummary(
     recentActivity,
   };
 }
+
+// -----------------------------------------------------------------------------
+// Route management
+// -----------------------------------------------------------------------------
 
 export async function getAdminRoutes(
   client: SupabaseClient,
@@ -345,26 +671,66 @@ export async function getAdminRouteManagementData(
   };
 }
 
+// -----------------------------------------------------------------------------
+// User Management
+// -----------------------------------------------------------------------------
+
+/**
+ * Retrieves all registered-user and admin role records.
+ *
+ * Pagination is explicit because Supabase projects commonly have
+ * a default PostgREST response limit of 1,000 rows.
+ */
+async function getAllAdminUserRoleRows(
+  client: SupabaseClient,
+): Promise<Array<{ user_id: string; role: unknown }>> {
+  const rows: Array<{ user_id: string; role: unknown }> = [];
+
+  for (let page = 0; ; page += 1) {
+    const from = page * userRolesPerPage;
+    const to = from + userRolesPerPage - 1;
+
+    const { data, error } = await client
+      .from("user_roles")
+      .select("user_id, role")
+      .in("role", ["registered_user", "admin"])
+      .order("user_id", { ascending: true })
+      .range(from, to);
+
+    if (error) throw error;
+
+    if (!Array.isArray(data)) {
+      throw new Error(
+        "Admin user query returned incomplete role data.",
+      );
+    }
+
+    rows.push(...data);
+
+    if (data.length < userRolesPerPage) {
+      break;
+    }
+  }
+
+  return rows;
+}
+
+/**
+ * Returns a validated list of Registered User and Admin accounts.
+ *
+ * Usernames are returned only as searchUsername for internal
+ * search matching. The frontend must never display that field.
+ *
+ * Database moderation state is authoritative for effective mute
+ * and ban status. Supabase Auth is inspected separately so the
+ * backend can identify synchronization mismatches.
+ */
 export async function getAdminUsers(
   client: SupabaseClient,
 ): Promise<AdminUserRecord[]> {
-  const { data: roleRows, error: roleError } = await client
-    .from("user_roles")
-    .select("user_id, role")
-    .in("role", ["registered_user", "moderator"]);
+  const roleRows = await getAllAdminUserRoleRows(client);
 
-  if (roleError) throw roleError;
-
-  if (!Array.isArray(roleRows)) {
-    throw new Error(
-      "Admin user query returned incomplete role data.",
-    );
-  }
-
-  const userRoles = new Map<
-    string,
-    AdminUserRecord["role"]
-  >();
+  const userRoles = new Map<string, AdminUserRole>();
 
   for (const row of roleRows) {
     if (
@@ -372,7 +738,7 @@ export async function getAdminUsers(
       !row.user_id ||
       (
         row.role !== "registered_user" &&
-        row.role !== "moderator"
+        row.role !== "admin"
       )
     ) {
       throw new Error(
@@ -387,6 +753,9 @@ export async function getAdminUsers(
     return [];
   }
 
+  const ids = [...userRoles.keys()];
+
+  // Load all Auth accounts using the privileged backend client.
   const authUsers = [];
 
   for (let page = 1; ; page += 1) {
@@ -411,26 +780,34 @@ export async function getAdminUsers(
   }
 
   const authUsersById = new Map(
-    authUsers.map((user) => [user.id, user]),
+    authUsers.map((user) => [user.id, user] as const),
   );
 
-  const missingUserId = [...userRoles.keys()].find(
+  const missingUserId = ids.find(
     (id) => !authUsersById.has(id),
   );
 
   if (missingUserId) {
     throw new Error(
-      "A registered user account could not be loaded.",
+      "A user-role account could not be loaded from Auth Admin.",
     );
   }
 
-  const profileUsernames = new Map<
+  const profilesById = new Map<
     string,
-    string | null
+    {
+      displayName: string | null;
+      username: string | null;
+      isDeleted: boolean;
+    }
   >();
 
-  const ids = [...userRoles.keys()];
+  const moderationById = new Map<
+    string,
+    UserModerationBanRow
+  >();
 
+  // Load profiles and moderation rows in manageable batches.
   for (
     let start = 0;
     start < ids.length;
@@ -441,97 +818,483 @@ export async function getAdminUsers(
       start + profileBatchSize,
     );
 
-    const { data: profiles, error: profileError } =
-      await client
+    const [
+      { data: profiles, error: profileError },
+      { data: moderationRows, error: moderationError },
+    ] = await Promise.all([
+      client
         .from("profiles")
-        .select("id, username")
-        .in("id", batch);
+        .select("id, display_name, username, is_deleted")
+        .in("id", batch),
+
+      client
+        .from("user_moderation")
+        .select(
+          [
+            "user_id",
+            "is_banned",
+            "is_muted",
+            "is_permanent_ban",
+            "ban_expires_at",
+            "mute_expires_at",
+            "ban_reason",
+            "mute_reason",
+          ].join(", "),
+        )
+        .in("user_id", batch),
+    ]);
 
     if (profileError) throw profileError;
+    if (moderationError) throw moderationError;
 
-    if (!Array.isArray(profiles)) {
+    if (
+      !Array.isArray(profiles) ||
+      !Array.isArray(moderationRows)
+    ) {
       throw new Error(
-        "Admin user query returned incomplete profile data.",
+        "Admin user query returned incomplete profile or moderation data.",
       );
     }
 
     for (const profile of profiles) {
       if (
         typeof profile.id !== "string" ||
-        !(
-          profile.username === null ||
-          typeof profile.username === "string"
-        )
+        !isNullableDatabaseString(profile.display_name) ||
+        !isNullableDatabaseString(profile.username) ||
+        typeof profile.is_deleted !== "boolean"
       ) {
         throw new Error(
           "Admin user query returned an invalid profile record.",
         );
       }
 
-      profileUsernames.set(
-        profile.id,
-        profile.username,
-      );
+      profilesById.set(profile.id, {
+        displayName:
+          profile.display_name?.trim() || null,
+        username: profile.username,
+        isDeleted: profile.is_deleted,
+      });
     }
-  }
 
-  return [...userRoles]
-    .map(([id, role]) => {
-      const user = authUsersById.get(id);
-
-      if (!user) {
+    for (const row of moderationRows) {
+      if (
+        typeof row.user_id !== "string" ||
+        typeof row.is_banned !== "boolean" ||
+        typeof row.is_muted !== "boolean" ||
+        typeof row.is_permanent_ban !== "boolean" ||
+        !isNullableDatabaseString(row.ban_expires_at) ||
+        !isNullableDatabaseString(row.mute_expires_at) ||
+        !isNullableDatabaseString(row.ban_reason) ||
+        !isNullableDatabaseString(row.mute_reason)
+      ) {
         throw new Error(
-          "A registered user account could not be loaded.",
+          "Admin user query returned an invalid moderation record.",
         );
       }
 
-      const bannedUntil = user.banned_until;
+      moderationById.set(row.user_id, {
+        user_id: row.user_id,
+        is_banned: row.is_banned,
+        is_muted: row.is_muted,
+        is_permanent_ban: row.is_permanent_ban,
+        ban_expires_at: row.ban_expires_at,
+        mute_expires_at: row.mute_expires_at,
+        ban_reason: row.ban_reason,
+        mute_reason: row.mute_reason,
+      });
+    }
+  }
 
-      const isBanned = Boolean(
-        bannedUntil &&
-        new Date(bannedUntil).getTime() > Date.now(),
-      );
+  // Profile records are expected for accounts created by the
+  // project's account-creation profile trigger.
+  //
+  // Fail closed when a role record has no profile: the backend
+  // cannot safely determine its deleted-account state.
+  const missingProfileId = ids.find(
+    (id) => !profilesById.has(id),
+  );
 
-      const record: AdminUserRecord = {
-        id,
-        email: user.email ?? null,
-        username: profileUsernames.get(id) ?? null,
-        createdAt: user.created_at,
-        role,
-      };
+  if (missingProfileId) {
+    throw new Error(
+      "A user account profile is missing. User Management cannot safely determine its account status.",
+    );
+  }
 
-      if (isBanned) {
-        record.banned = true;
+  const now = Date.now();
+
+  return [...userRoles]
+    .map(([id, role]) => {
+      const authUser = authUsersById.get(id);
+      const profile = profilesById.get(id);
+
+      if (!authUser || !profile) {
+        throw new Error(
+          "A user account could not be loaded completely.",
+        );
       }
 
-      return record;
+      const moderation = moderationById.get(id) ?? null;
+
+      const isBanned = isEffectiveBan(moderation, now);
+      const isMuted = isEffectiveMute(moderation, now);
+
+      const authBannedUntil = authUser.banned_until;
+
+      const authIsBanned = Boolean(
+        authBannedUntil &&
+          new Date(authBannedUntil).getTime() > now,
+      );
+
+      return {
+        id,
+        displayName: profile.displayName,
+        email: authUser.email ?? null,
+
+        // Internal search support only. Never render in the UI.
+        searchUsername: profile.username,
+
+        createdAt: authUser.created_at,
+        role,
+        isDeleted: profile.isDeleted,
+
+        isBanned,
+        isMuted,
+        isPermanentBan:
+          isBanned && moderation?.is_permanent_ban === true,
+
+        banExpiresAt:
+          moderation?.ban_expires_at ?? null,
+
+        muteExpiresAt:
+          moderation?.mute_expires_at ?? null,
+
+        banReason:
+          moderation?.ban_reason ?? null,
+
+        muteReason:
+          moderation?.mute_reason ?? null,
+
+        authBanSynced: isBanned === authIsBanned,
+      };
     })
     .sort((left, right) =>
       right.createdAt.localeCompare(left.createdAt),
     );
 }
 
+/**
+ * Changes a user role through the verified transactional database RPC.
+ *
+ * The RPC:
+ * - Accepts only registered_user/admin.
+ * - Verifies the acting administrator.
+ * - Rejects deleted administrators.
+ * - Protects the last administrator.
+ * - Prevents self-demotion.
+ * - Rejects promotion of deleted or effectively banned accounts.
+ * - Writes its audit event in the same transaction.
+ *
+ * Do not write a second audit entry in Express.
+ */
 export async function updateAdminUserRole(
   client: SupabaseClient,
+  adminUserId: string,
   userId: string,
-  role: AdminUserRecord["role"],
+  role: AdminUserRole,
 ): Promise<void> {
+  const { error } = await client.rpc(
+    "admin_set_user_role",
+    {
+      p_admin_user_id: adminUserId,
+      p_target_user_id: userId,
+      p_new_role: role,
+    },
+  );
+
+  if (error) {
+    throwAdminRpcError(error);
+  }
+}
+
+/**
+ * Synchronizes Supabase Auth's ban with the authoritative
+ * public.user_moderation record.
+ *
+ * It never accepts a desired ban state from the caller.
+ * The desired state is always read from the database.
+ *
+ * The function rechecks the database after each Auth update.
+ * If the ban changed while the Auth request was in flight,
+ * another pass reconciles the latest database state.
+ */
+export async function syncAdminUserAuthBan(
+  adminClient: SupabaseClient,
+  userId: string,
+): Promise<void> {
+  for (
+    let attempt = 1;
+    attempt <= authBanSyncMaxAttempts;
+    attempt += 1
+  ) {
+    const moderationBefore =
+      await getUserBanModerationState(
+        adminClient,
+        userId,
+      );
+
+    const updateStartedAt = Date.now();
+
+    const banDuration = getAuthBanDuration(
+      moderationBefore,
+      updateStartedAt,
+    );
+
+    const { error: authError } =
+      await adminClient.auth.admin.updateUserById(
+        userId,
+        {
+          ban_duration: banDuration,
+        },
+      );
+
+    if (authError) {
+      console.error(
+        "[admin] Supabase Auth ban synchronization failed:",
+        authError.message,
+      );
+
+      throw new AdminAuthSyncError(
+        "The database restriction state is saved, but Supabase Auth sign-in access could not be synchronized.",
+      );
+    }
+
+    const moderationAfter =
+      await getUserBanModerationState(
+        adminClient,
+        userId,
+      );
+
+    const verificationTime = Date.now();
+
+    const beforeSnapshot = getEffectiveBanSnapshot(
+      moderationBefore,
+      verificationTime,
+    );
+
+    const afterSnapshot = getEffectiveBanSnapshot(
+      moderationAfter,
+      verificationTime,
+    );
+
+    const databaseStateChanged =
+      !sameEffectiveBanSnapshot(
+        beforeSnapshot,
+        afterSnapshot,
+      );
+
+    // If the ban expired while the Auth request was in flight,
+    // do not leave behind a short-lived Auth ban. Run another
+    // pass so the current database state produces "none".
+    const banExpiredDuringSynchronization =
+      !afterSnapshot.isBanned &&
+      banDuration !== "none";
+
+    if (
+      !databaseStateChanged &&
+      !banExpiredDuringSynchronization
+    ) {
+      return;
+    }
+  }
+
+  throw new AdminAuthSyncError(
+    "The account's database ban changed repeatedly during synchronization. The database state remains authoritative; retry Auth synchronization.",
+  );
+}
+
+/**
+ * Applies or removes a user restriction using the verified RPC.
+ *
+ * The database RPC performs the restriction update and audit
+ * insertion atomically.
+ *
+ * Only ban-related actions synchronize Supabase Auth.
+ * Mute/unmute never changes sign-in access.
+ */
+export async function applyAdminUserRestriction(
+  adminClient: SupabaseClient,
+  adminUserId: string,
+  userId: string,
+  action: AdminUserRestrictionAction,
+  durationSeconds: number | null,
+  reason: string | null,
+): Promise<AdminUserRestrictionResult> {
+  const { data, error } = await adminClient.rpc(
+    "admin_set_user_restriction",
+    {
+      p_admin_user_id: adminUserId,
+      p_target_user_id: userId,
+      p_action: action,
+      p_duration_seconds: durationSeconds,
+      p_reason: reason,
+    },
+  );
+
+  if (error) {
+    throwAdminRpcError(error);
+  }
+
+  if (!isPlainRecord(data)) {
+    throw new Error(
+      "The moderation RPC returned an invalid result.",
+    );
+  }
+
+  if (
+    data.userId !== userId ||
+    data.action !== action ||
+    typeof data.isBanned !== "boolean" ||
+    typeof data.isMuted !== "boolean" ||
+    typeof data.isPermanentBan !== "boolean" ||
+    typeof data.isEffectivelyBanned !== "boolean" ||
+    typeof data.isEffectivelyMuted !== "boolean" ||
+    !isNullableDatabaseString(data.banExpiresAt) ||
+    !isNullableDatabaseString(data.muteExpiresAt)
+  ) {
+    throw new Error(
+      "The moderation RPC returned an invalid result.",
+    );
+  }
+
+  // A successful RPC has already committed the moderation record
+  // and its audit log. Auth synchronization happens afterward.
+  //
+  // If synchronization fails, report partial success rather than
+  // incorrectly suggesting that the database update rolled back.
+  if (
+    action === "ban_temporary" ||
+    action === "ban_permanent" ||
+    action === "unban"
+  ) {
+    try {
+      await syncAdminUserAuthBan(
+        adminClient,
+        userId,
+      );
+    } catch (error) {
+      const detail =
+        error instanceof Error
+          ? error.message
+          : "Unknown Auth synchronization failure.";
+
+      console.error(
+        "[admin] Restriction was committed, but Auth synchronization failed:",
+        error,
+      );
+
+      throw new AdminAuthSyncError(
+        `The database restriction was saved successfully, but Supabase Auth synchronization failed. ${detail}`,
+      );
+    }
+  }
+
+  return {
+    userId,
+    action,
+    isBanned: data.isBanned,
+    isMuted: data.isMuted,
+    isPermanentBan: data.isPermanentBan,
+    banExpiresAt: data.banExpiresAt,
+    muteExpiresAt: data.muteExpiresAt,
+    isEffectivelyBanned: data.isEffectivelyBanned,
+    isEffectivelyMuted: data.isEffectivelyMuted,
+  };
+}
+
+/**
+ * Retrieves the moderation history for a particular account.
+ *
+ * The database RPCs already write moderation audit events
+ * transactionally. This function reads those existing entries;
+ * it does not create additional audit records.
+ */
+export async function getAdminUserModerationHistory(
+  client: SupabaseClient,
+  userId: string,
+): Promise<AdminUserModerationHistoryItem[]> {
+  const moderationActionKeys = [
+    "user_muted",
+    "user_unmuted",
+    "user_temporarily_banned",
+    "user_permanently_banned",
+    "user_unbanned",
+
+    // Retain compatibility with older Auth-only ban audit entries.
+    "user_banned",
+  ];
+
   const { data, error } = await client
-    .from("user_roles")
-    .update({ role })
-    .eq("user_id", userId)
-    .in("role", ["registered_user", "moderator"])
-    .select("user_id")
-    .maybeSingle();
+    .from("admin_audit_logs")
+    .select(
+      [
+        "id",
+        "action_key",
+        "action_title",
+        "description",
+        "admin_display_name",
+        "occurred_at",
+        "metadata",
+      ].join(", "),
+    )
+    .eq("target_type", "user")
+    .eq("target_id", userId)
+    .in("action_key", moderationActionKeys)
+    .order("occurred_at", { ascending: false })
+    .limit(100);
 
   if (error) throw error;
 
-  if (!data) {
-    throw new AdminNotFoundError(
-      "Registered user was not found.",
+  if (!Array.isArray(data)) {
+    throw new Error(
+      "Moderation history returned incomplete data.",
     );
   }
+
+  return data.map((row) => {
+    if (
+      typeof row.id !== "string" ||
+      typeof row.action_key !== "string" ||
+      typeof row.action_title !== "string" ||
+      typeof row.occurred_at !== "string" ||
+      !isNullableDatabaseString(row.description) ||
+      !isNullableDatabaseString(row.admin_display_name)
+    ) {
+      throw new Error(
+        "Moderation history returned an invalid record.",
+      );
+    }
+
+    const metadata = isPlainRecord(row.metadata)
+      ? row.metadata
+      : {};
+
+    return {
+      id: row.id,
+      actionKey: row.action_key,
+      title: row.action_title,
+      description: row.description ?? "",
+      adminDisplayName:
+        row.admin_display_name?.trim() ||
+        "Administrator",
+      occurredAt: row.occurred_at,
+      metadata,
+    };
+  });
 }
+
+// -----------------------------------------------------------------------------
+// Community reports
+// -----------------------------------------------------------------------------
 
 export async function getAdminReports(
   client: SupabaseClient,
@@ -577,8 +1340,14 @@ export async function getAdminReports(
         row.status !== "Dismissed"
       ) ||
       typeof row.created_at !== "string" ||
-      (row.post_id !== null && typeof row.post_id !== "string") ||
-      (row.comment_id !== null && typeof row.comment_id !== "string") ||
+      (
+        row.post_id !== null &&
+        typeof row.post_id !== "string"
+      ) ||
+      (
+        row.comment_id !== null &&
+        typeof row.comment_id !== "string"
+      ) ||
       (
         row.reported_user_id !== null &&
         typeof row.reported_user_id !== "string"
@@ -641,6 +1410,10 @@ export async function updateAdminReportStatus(
     );
   }
 }
+
+// -----------------------------------------------------------------------------
+// Community post management
+// -----------------------------------------------------------------------------
 
 export async function setCommunityPostVisibility(
   client: SupabaseClient,
@@ -780,6 +1553,10 @@ export async function deleteAdminPost(
   }
 }
 
+// -----------------------------------------------------------------------------
+// Route-stop utilities
+// -----------------------------------------------------------------------------
+
 interface RouteStopRow {
   route_id: number;
   stop_order: number;
@@ -801,16 +1578,22 @@ function toRouteStopRows(
   }));
 }
 
+/**
+ * Preserved existing helper for route-stop replacement.
+ * It retains the original restoration behavior if insertion fails.
+ */
 async function replaceRouteStops(
   client: SupabaseClient,
   routeId: number,
   stops: AdminRouteStopInput[],
 ): Promise<void> {
-  const { data: previousStops, error: captureError } =
-    await client
-      .from("route_stops")
-      .select("route_id, stop_order, terminal_id, stop_id")
-      .eq("route_id", routeId);
+  const {
+    data: previousStops,
+    error: captureError,
+  } = await client
+    .from("route_stops")
+    .select("route_id, stop_order, terminal_id, stop_id")
+    .eq("route_id", routeId);
 
   if (captureError) throw captureError;
 
@@ -852,6 +1635,10 @@ async function replaceRouteStops(
     throw insertError;
   }
 }
+
+// -----------------------------------------------------------------------------
+// Route updates and archival
+// -----------------------------------------------------------------------------
 
 export async function updateAdminRoute(
   client: SupabaseClient,
@@ -934,21 +1721,6 @@ export async function deleteAdminRoute(
   if (error?.code === "P0002") {
     throw new AdminNotFoundError("Route not found.");
   }
-
-  if (error) throw error;
-}
-
-export async function toggleAdminUserBan(
-  adminClient: SupabaseClient,
-  userId: string,
-  ban: boolean,
-): Promise<void> {
-  const { error } = await adminClient.auth.admin.updateUserById(
-    userId,
-    {
-      ban_duration: ban ? "876000h" : "none",
-    },
-  );
 
   if (error) throw error;
 }
