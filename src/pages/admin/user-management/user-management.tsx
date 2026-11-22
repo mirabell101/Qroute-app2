@@ -9,9 +9,11 @@ import {
   AdminApiError,
   applyAdminUserRestriction,
   getAdminUserModerationHistory,
-  getAdminUsers,
+  getAdminUsersPage,
   setAdminUserRole,
+  type AdminUserManagementStatus,
   type AdminUserModerationHistoryItem,
+  type AdminUserPageSize,
   type AdminUserRecord,
   type AdminUserRestrictionAction,
   type AdminUserRole,
@@ -33,6 +35,8 @@ import {
   Menu,
   X,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Eye,
   UserRound,
   Ban as BanIcon,
@@ -48,18 +52,17 @@ import {
 /*                                    TYPES                                   */
 /* -------------------------------------------------------------------------- */
 
-type UserFilter =
-  | "All"
-  | "Active"
-  | "Muted"
-  | "Banned"
-  | "Deleted";
-
 type DurationUnit = "minutes" | "hours" | "days";
 
 type ActionNotice = {
   type: "success" | "warning";
   message: string;
+};
+
+type UserAvatarProps = {
+  photoUrl: string | null;
+  displayName: string;
+  size?: "table" | "details";
 };
 
 const navigationItems = [
@@ -72,15 +75,26 @@ const navigationItems = [
   { label: "Settings", icon: Settings },
 ];
 
-const FILTER_OPTIONS: UserFilter[] = [
-  "All",
-  "Active",
-  "Muted",
-  "Banned",
-  "Deleted",
+const FILTER_OPTIONS: {
+  label: string;
+  value: AdminUserManagementStatus;
+}[] = [
+  { label: "All", value: "all" },
+  { label: "Active", value: "active" },
+  { label: "Muted", value: "muted" },
+  { label: "Banned", value: "banned" },
+  { label: "Deleted", value: "deleted" },
+];
+
+const PAGE_SIZE_OPTIONS: AdminUserPageSize[] = [
+  10,
+  25,
+  50,
+  100,
 ];
 
 const MAX_RESTRICTION_SECONDS = 365 * 24 * 60 * 60;
+const SEARCH_DEBOUNCE_MS = 350;
 
 const DURATION_FACTORS: Record<DurationUnit, number> = {
   minutes: 60,
@@ -157,30 +171,6 @@ function getUserStatusBadges(
   return badges;
 }
 
-function matchesUserFilter(
-  user: AdminUserRecord,
-  filter: UserFilter,
-): boolean {
-  switch (filter) {
-    case "Active":
-      // Muted users retain normal account access.
-      return !user.isDeleted && !user.isBanned;
-
-    case "Muted":
-      return user.isMuted;
-
-    case "Banned":
-      return user.isBanned;
-
-    case "Deleted":
-      return user.isDeleted;
-
-    case "All":
-    default:
-      return true;
-  }
-}
-
 function getRestrictionActionLabel(
   action: AdminUserRestrictionAction,
 ): string {
@@ -231,6 +221,54 @@ function getRestrictionSuccessMessage(
 }
 
 /* -------------------------------------------------------------------------- */
+/*                              PROFILE AVATAR                                */
+/* -------------------------------------------------------------------------- */
+
+function UserAvatar({
+  photoUrl,
+  displayName,
+  size = "table",
+}: UserAvatarProps) {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [photoUrl]);
+
+  const dimensions =
+    size === "details"
+      ? "h-20 w-20"
+      : "h-10 w-10";
+
+  const iconSize =
+    size === "details"
+      ? 34
+      : 18;
+
+  if (photoUrl && !imageFailed) {
+    return (
+      <img
+        src={photoUrl}
+        alt={`${displayName} profile`}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setImageFailed(true)}
+        className={`${dimensions} shrink-0 rounded-full border border-slate-200 bg-[#DCE9F7] object-cover`}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`flex ${dimensions} shrink-0 items-center justify-center rounded-full bg-[#DCE9F7] text-[#102E4D]`}
+      aria-label={`${displayName} profile placeholder`}
+    >
+      <UserRound size={iconSize} />
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*                              MAIN COMPONENT                                */
 /* -------------------------------------------------------------------------- */
 
@@ -242,8 +280,8 @@ export default function UserManagement() {
   /*                              ADMIN PROFILE                               */
   /* ------------------------------------------------------------------------ */
 
-  // Do not use account.username as a fallback here.
-  // This page must not render usernames.
+  // Do not use account.username as a fallback.
+  // Usernames must never be displayed in this page.
   const adminDisplayName =
     account?.displayName?.trim() || "Administrator";
 
@@ -263,13 +301,22 @@ export default function UserManagement() {
 
   const [users, setUsers] = useState<AdminUserRecord[]>([]);
 
+  const [totalCount, setTotalCount] = useState(0);
+
+  const [page, setPage] = useState(1);
+
+  const [pageSize, setPageSize] =
+    useState<AdminUserPageSize>(25);
+
+  const [totalPages, setTotalPages] = useState(0);
+
   const [searchTerm, setSearchTerm] = useState("");
 
-  const [statusFilter, setStatusFilter] =
-    useState<UserFilter>("All");
+  const [debouncedSearch, setDebouncedSearch] =
+    useState("");
 
-  const [quickFilter, setQuickFilter] =
-    useState<UserFilter>("All");
+  const [statusFilter, setStatusFilter] =
+    useState<AdminUserManagementStatus>("all");
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -385,39 +432,42 @@ export default function UserManagement() {
     useState<string | null>(null);
 
   /* ------------------------------------------------------------------------ */
-  /*                           DERIVED USER DATA                              */
+  /*                           PAGINATION HELPERS                             */
   /* ------------------------------------------------------------------------ */
 
-  const filteredUsers = useMemo(() => {
-    const search = searchTerm.toLowerCase().trim();
+  const pageNumbers = useMemo(() => {
+    if (totalPages <= 0) {
+      return [];
+    }
 
-    return users.filter((user) => {
-      /*
-       * searchUsername is deliberately used only for matching.
-       * It is never rendered in the page.
-       */
-      const matchesSearch =
-        !search ||
-        [
-          user.displayName,
-          user.email ?? "",
-          user.searchUsername ?? "",
-        ].some((value) =>
-          value.toLowerCase().includes(search),
-        );
+    const firstPage = Math.max(1, page - 2);
+    const lastPage = Math.min(totalPages, page + 2);
 
-      return (
-        matchesSearch &&
-        matchesUserFilter(user, statusFilter) &&
-        matchesUserFilter(user, quickFilter)
-      );
-    });
-  }, [
-    users,
-    searchTerm,
-    statusFilter,
-    quickFilter,
-  ]);
+    return Array.from(
+      { length: lastPage - firstPage + 1 },
+      (_, index) => firstPage + index,
+    );
+  }, [page, totalPages]);
+
+  const firstResult =
+    totalCount === 0
+      ? 0
+      : (page - 1) * pageSize + 1;
+
+  const lastResult =
+    totalCount === 0
+      ? 0
+      : Math.min(page * pageSize, totalCount);
+
+  /* ------------------------------------------------------------------------ */
+  /*                           PAGE STATISTICS                                */
+  /* ------------------------------------------------------------------------ */
+
+  /*
+   * These four statistics describe the currently loaded page only.
+   * The complete user list is deliberately not downloaded to calculate
+   * global status counts.
+   */
 
   const activeCount = users.filter(
     (user) => !user.isDeleted && !user.isBanned,
@@ -436,33 +486,68 @@ export default function UserManagement() {
   ).length;
 
   /* ------------------------------------------------------------------------ */
+  /*                             SEARCH DEBOUNCE                              */
+  /* ------------------------------------------------------------------------ */
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearch(searchTerm.trim());
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [searchTerm]);
+
+  /* ------------------------------------------------------------------------ */
   /*                             DATA REFRESH                                 */
   /* ------------------------------------------------------------------------ */
 
   const refreshUsers = useCallback(async () => {
     if (!userId) {
-      throw new Error(
-        "Please sign in to continue.",
-      );
+      throw new Error("Please sign in to continue.");
     }
 
-    const data = await getAdminUsers(userId);
+    setIsLoading(true);
 
-    setUsers(data);
+    try {
+      const data = await getAdminUsersPage(userId, {
+        page,
+        pageSize,
+        search: debouncedSearch,
+        status: statusFilter,
+      });
 
-    setSelectedUserId((currentId) => {
-      if (
-        currentId &&
-        !data.some((user) => user.id === currentId)
-      ) {
-        return null;
-      }
+      setUsers(data.users);
+      setTotalCount(data.totalCount);
+      setTotalPages(data.totalPages);
+      setPage(data.page);
+      setPageSize(data.pageSize);
 
-      return currentId;
-    });
+      setSelectedUserId((currentId) => {
+        if (
+          currentId &&
+          !data.users.some((user) => user.id === currentId)
+        ) {
+          return null;
+        }
 
-    return data;
-  }, [userId]);
+        return currentId;
+      });
+
+      setErrorMessage(null);
+
+      return data;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [
+    userId,
+    page,
+    pageSize,
+    debouncedSearch,
+    statusFilter,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -474,6 +559,8 @@ export default function UserManagement() {
       if (!userId) {
         if (active) {
           setUsers([]);
+          setTotalCount(0);
+          setTotalPages(0);
           setErrorMessage(
             "Please sign in to view user management.",
           );
@@ -484,15 +571,40 @@ export default function UserManagement() {
       }
 
       try {
-        const data = await getAdminUsers(userId);
+        const data = await getAdminUsersPage(userId, {
+          page,
+          pageSize,
+          search: debouncedSearch,
+          status: statusFilter,
+        });
 
-        if (active) {
-          setUsers(data);
-          setErrorMessage(null);
+        if (!active) {
+          return;
         }
+
+        setUsers(data.users);
+        setTotalCount(data.totalCount);
+        setTotalPages(data.totalPages);
+        setPage(data.page);
+        setPageSize(data.pageSize);
+
+        setSelectedUserId((currentId) => {
+          if (
+            currentId &&
+            !data.users.some((user) => user.id === currentId)
+          ) {
+            return null;
+          }
+
+          return currentId;
+        });
+
+        setErrorMessage(null);
       } catch (error: unknown) {
         if (active) {
           setUsers([]);
+          setTotalCount(0);
+          setTotalPages(0);
 
           setErrorMessage(
             error instanceof Error
@@ -512,7 +624,55 @@ export default function UserManagement() {
     return () => {
       active = false;
     };
-  }, [userId, retryCount]);
+  }, [
+    userId,
+    page,
+    pageSize,
+    debouncedSearch,
+    statusFilter,
+    retryCount,
+  ]);
+
+  /* ------------------------------------------------------------------------ */
+  /*                           SEARCH AND FILTERS                             */
+  /* ------------------------------------------------------------------------ */
+
+  const handleSearchChange = (value: string) => {
+    setSearchTerm(value);
+    setPage(1);
+  };
+
+  const handleStatusFilterChange = (
+    value: AdminUserManagementStatus,
+  ) => {
+    setStatusFilter(value);
+    setPage(1);
+  };
+
+  const handlePageSizeChange = (value: string) => {
+    const parsedValue = Number(value);
+
+    if (
+      PAGE_SIZE_OPTIONS.includes(
+        parsedValue as AdminUserPageSize,
+      )
+    ) {
+      setPageSize(parsedValue as AdminUserPageSize);
+      setPage(1);
+    }
+  };
+
+  const goToPage = (nextPage: number) => {
+    if (
+      nextPage < 1 ||
+      nextPage > totalPages ||
+      nextPage === page
+    ) {
+      return;
+    }
+
+    setPage(nextPage);
+  };
 
   /* ------------------------------------------------------------------------ */
   /*                                LOGOUT                                    */
@@ -536,18 +696,17 @@ export default function UserManagement() {
   /* ------------------------------------------------------------------------ */
 
   const retryLoadingUsers = () => {
-    setUsers([]);
     setErrorMessage(null);
-    setIsLoading(true);
     setRetryCount((count) => count + 1);
   };
 
   /* ------------------------------------------------------------------------ */
-  /*                           USER DETAILS MODAL                            */
+  /*                           USER DETAILS MODAL                             */
   /* ------------------------------------------------------------------------ */
 
   const openUserDetails = (targetUser: AdminUserRecord) => {
     setSelectedUserId(targetUser.id);
+
     setActionError(null);
     setActionNotice(null);
 
@@ -845,9 +1004,9 @@ export default function UserManagement() {
       }
     } catch (error: unknown) {
       /*
-       * A 502 response with restrictionSaved=true means:
+       * A response with restrictionSaved=true means:
        * - The database restriction was saved.
-       * - Auth synchronization failed afterward.
+       * - Supabase Auth synchronization failed afterward.
        *
        * Do not automatically repeat the action or offer a generic
        * Auth synchronization retry here.
@@ -931,14 +1090,17 @@ export default function UserManagement() {
   /* ------------------------------------------------------------------------ */
 
   const getFilterButtonClass = (
-    filter: UserFilter,
-    currentFilter: UserFilter,
+    filter: AdminUserManagementStatus,
+    currentFilter: AdminUserManagementStatus,
   ) =>
     `min-w-[70px] rounded-full border px-4 py-2.5 text-sm font-medium shadow-sm transition ${
       currentFilter === filter
         ? "border-[#102E4D] bg-[#102E4D] text-white"
         : "border-slate-200 bg-white text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]"
     }`;
+
+  const paginationButtonClass =
+    "flex h-9 min-w-9 items-center justify-center rounded-lg border px-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40";
 
   /* ------------------------------------------------------------------------ */
   /*                                  RENDER                                  */
@@ -1142,7 +1304,7 @@ export default function UserManagement() {
               </p>
             </div>
 
-            {/* Account statistics */}
+            {/* Current-page account statistics */}
             <div className="flex flex-wrap gap-3">
               <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-50 text-green-700">
@@ -1151,7 +1313,7 @@ export default function UserManagement() {
 
                 <div>
                   <p className="text-xs text-slate-500">
-                    Active
+                    Active on page
                   </p>
 
                   <p className="text-xl font-bold text-[#102E4D]">
@@ -1167,7 +1329,7 @@ export default function UserManagement() {
 
                 <div>
                   <p className="text-xs text-slate-500">
-                    Muted
+                    Muted on page
                   </p>
 
                   <p className="text-xl font-bold text-[#102E4D]">
@@ -1183,7 +1345,7 @@ export default function UserManagement() {
 
                 <div>
                   <p className="text-xs text-slate-500">
-                    Banned
+                    Banned on page
                   </p>
 
                   <p className="text-xl font-bold text-[#102E4D]">
@@ -1199,7 +1361,7 @@ export default function UserManagement() {
 
                 <div>
                   <p className="text-xs text-slate-500">
-                    Deleted
+                    Deleted on page
                   </p>
 
                   <p className="text-xl font-bold text-[#102E4D]">
@@ -1210,7 +1372,7 @@ export default function UserManagement() {
             </div>
           </section>
 
-          {/* Search and status filter */}
+          {/* Search and page size */}
           <section className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-sm transition focus-within:border-[#102E4D] focus-within:ring-2 focus-within:ring-blue-100">
               <Search
@@ -1222,7 +1384,7 @@ export default function UserManagement() {
                 type="text"
                 value={searchTerm}
                 onChange={(event) =>
-                  setSearchTerm(event.target.value)
+                  handleSearchChange(event.target.value)
                 }
                 placeholder="Search display name, email, or username..."
                 aria-label="Search user accounts"
@@ -1233,7 +1395,7 @@ export default function UserManagement() {
                 <button
                   type="button"
                   aria-label="Clear search"
-                  onClick={() => setSearchTerm("")}
+                  onClick={() => handleSearchChange("")}
                   className="text-slate-400 hover:text-slate-700"
                 >
                   <X size={17} />
@@ -1241,22 +1403,28 @@ export default function UserManagement() {
               )}
             </div>
 
-            <div className="relative sm:w-[190px]">
+            <div className="relative shrink-0 sm:w-[180px]">
+              <label
+                htmlFor="user-page-size"
+                className="sr-only"
+              >
+                Users per page
+              </label>
+
               <select
-                value={statusFilter}
+                id="user-page-size"
+                value={pageSize}
                 onChange={(event) =>
-                  setStatusFilter(
-                    event.target.value as UserFilter,
-                  )
+                  handlePageSizeChange(event.target.value)
                 }
-                aria-label="Filter accounts by status"
+                aria-label="Users per page"
                 className="h-12 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 text-sm shadow-sm outline-none transition focus:border-[#102E4D] focus:ring-2 focus:ring-blue-100"
               >
-                <option value="All">All Statuses</option>
-                <option value="Active">Active</option>
-                <option value="Muted">Muted</option>
-                <option value="Banned">Banned</option>
-                <option value="Deleted">Deleted</option>
+                {PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>
+                    {size} per page
+                  </option>
+                ))}
               </select>
 
               <ChevronDown
@@ -1266,19 +1434,22 @@ export default function UserManagement() {
             </div>
           </section>
 
-          {/* Quick filters */}
+          {/* Server-side status filters */}
           <section className="mb-7 flex flex-wrap gap-2.5">
             {FILTER_OPTIONS.map((filter) => (
               <button
-                key={filter}
+                key={filter.value}
                 type="button"
-                onClick={() => setQuickFilter(filter)}
+                onClick={() =>
+                  handleStatusFilterChange(filter.value)
+                }
+                aria-pressed={statusFilter === filter.value}
                 className={getFilterButtonClass(
-                  filter,
-                  quickFilter,
+                  filter.value,
+                  statusFilter,
                 )}
               >
-                {filter}
+                {filter.label}
               </button>
             ))}
           </section>
@@ -1307,7 +1478,10 @@ export default function UserManagement() {
           )}
 
           {/* User table */}
-          <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_3px_14px_rgba(15,23,42,0.035)]">
+          <section
+            aria-busy={isLoading}
+            className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_3px_14px_rgba(15,23,42,0.035)]"
+          >
             <div className="flex flex-col gap-1 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
               <div>
                 <h4 className="font-bold text-slate-900">
@@ -1320,8 +1494,10 @@ export default function UserManagement() {
               </div>
 
               <span className="text-xs font-medium text-slate-500">
-                {filteredUsers.length}{" "}
-                {filteredUsers.length === 1 ? "user" : "users"} found
+                {totalCount.toLocaleString()}{" "}
+                {totalCount === 1
+                  ? "matching user"
+                  : "matching users"}
               </span>
             </div>
 
@@ -1356,131 +1532,158 @@ export default function UserManagement() {
                 </thead>
 
                 <tbody className="divide-y divide-slate-100">
-                  {filteredUsers.map((user) => {
-                    const isSelf = user.id === userId;
-                    const canManageRestrictions =
-                      !user.isDeleted &&
-                      user.role === "registered_user";
-
-                    const canChangeRole =
-                      !user.isDeleted &&
-                      !isSelf;
-
-                    const statusBadges =
-                      getUserStatusBadges(user);
-
-                    return (
-                      <tr
-                        key={user.id}
-                        className="transition hover:bg-[#F8FAFD]"
+                  {isLoading && (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="px-6 py-16 text-center"
                       >
-                        <td className="px-5 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#DCE9F7] text-[#102E4D]">
-                              <UserRound size={17} />
-                            </div>
+                        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-[#102E4D]">
+                          <Clock size={22} className="animate-pulse" />
+                        </div>
 
-                            <div className="min-w-0">
-                              <p className="font-medium text-slate-700">
-                                {getDisplayName(user)}
-                              </p>
+                        <p className="mt-3 font-semibold text-slate-700">
+                          Loading user accounts...
+                        </p>
 
-                              {isSelf && (
-                                <p className="mt-0.5 text-[11px] text-slate-400">
-                                  Current account
+                        <p className="mt-1 text-sm text-slate-500">
+                          Retrieving the requested page from the server.
+                        </p>
+                      </td>
+                    </tr>
+                  )}
+
+                  {!isLoading &&
+                    users.map((user) => {
+                      const isSelf = user.id === userId;
+
+                      const canManageRestrictions =
+                        !user.isDeleted &&
+                        user.role === "registered_user";
+
+                      const canChangeRole =
+                        !user.isDeleted &&
+                        !isSelf;
+
+                      const statusBadges =
+                        getUserStatusBadges(user);
+
+                      const displayName = getDisplayName(user);
+
+                      return (
+                        <tr
+                          key={user.id}
+                          className="transition hover:bg-[#F8FAFD]"
+                        >
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <UserAvatar
+                                photoUrl={user.profilePhotoUrl}
+                                displayName={displayName}
+                                size="table"
+                              />
+
+                              <div className="min-w-0">
+                                <p className="font-medium text-slate-700">
+                                  {displayName}
                                 </p>
+
+                                {isSelf && (
+                                  <p className="mt-0.5 text-[11px] text-slate-400">
+                                    Current account
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-5 py-4 text-slate-600">
+                            {user.email ?? "Email unavailable"}
+                          </td>
+
+                          <td className="px-5 py-4 text-slate-600">
+                            {formatCreatedAt(user.createdAt)}
+                          </td>
+
+                          <td className="px-5 py-4">
+                            <span
+                              className={`rounded-full px-3 py-1 text-xs font-medium ${
+                                user.role === "admin"
+                                  ? "bg-indigo-50 text-indigo-700"
+                                  : "bg-blue-50 text-blue-700"
+                              }`}
+                            >
+                              {user.role === "admin"
+                                ? "Administrator"
+                                : "Registered user"}
+                            </span>
+                          </td>
+
+                          <td className="px-5 py-4">
+                            <div className="flex max-w-[220px] flex-wrap gap-1.5">
+                              {statusBadges.map((badge) => (
+                                <span
+                                  key={badge.label}
+                                  className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium ${badge.className}`}
+                                >
+                                  {badge.label}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+
+                          <td className="px-5 py-4">
+                            <div className="flex flex-wrap items-center justify-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openUserDetails(user)
+                                }
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D]"
+                              >
+                                <Eye size={14} />
+                                View
+                              </button>
+
+                              {canManageRestrictions && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    openRestrictionDialog(user)
+                                  }
+                                  disabled={isApplyingRestriction}
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <Shield size={14} />
+                                  Restrictions
+                                </button>
+                              )}
+
+                              {canChangeRole && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    openRoleChangeDialog(user)
+                                  }
+                                  disabled={
+                                    updatingRoleUserId === user.id
+                                  }
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D] disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {updatingRoleUserId === user.id
+                                    ? "Saving..."
+                                    : user.role === "admin"
+                                      ? "Revoke Admin"
+                                      : "Make Admin"}
+                                </button>
                               )}
                             </div>
-                          </div>
-                        </td>
+                          </td>
+                        </tr>
+                      );
+                    })}
 
-                        <td className="px-5 py-4 text-slate-600">
-                          {user.email ?? "Email unavailable"}
-                        </td>
-
-                        <td className="px-5 py-4 text-slate-600">
-                          {formatCreatedAt(user.createdAt)}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <span
-                            className={`rounded-full px-3 py-1 text-xs font-medium ${
-                              user.role === "admin"
-                                ? "bg-indigo-50 text-indigo-700"
-                                : "bg-blue-50 text-blue-700"
-                            }`}
-                          >
-                            {user.role === "admin"
-                              ? "Administrator"
-                              : "Registered user"}
-                          </span>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <div className="flex max-w-[220px] flex-wrap gap-1.5">
-                            {statusBadges.map((badge) => (
-                              <span
-                                key={badge.label}
-                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium ${badge.className}`}
-                              >
-                                {badge.label}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <div className="flex flex-wrap items-center justify-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                openUserDetails(user)
-                              }
-                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D]"
-                            >
-                              <Eye size={14} />
-                              View
-                            </button>
-
-                            {canManageRestrictions && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  openRestrictionDialog(user)
-                                }
-                                disabled={isApplyingRestriction}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                <Shield size={14} />
-                                Restrictions
-                              </button>
-                            )}
-
-                            {canChangeRole && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  openRoleChangeDialog(user)
-                                }
-                                disabled={
-                                  updatingRoleUserId === user.id
-                                }
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-[#102E4D] hover:bg-blue-50 hover:text-[#102E4D] disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {updatingRoleUserId === user.id
-                                  ? "Saving..."
-                                  : user.role === "admin"
-                                    ? "Revoke Admin"
-                                    : "Make Admin"}
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-
-                  {filteredUsers.length === 0 && (
+                  {!isLoading && users.length === 0 && (
                     <tr>
                       <td
                         colSpan={6}
@@ -1491,22 +1694,18 @@ export default function UserManagement() {
                         </div>
 
                         <p className="mt-3 font-semibold text-slate-700">
-                          {isLoading
-                            ? "Loading user accounts..."
-                            : errorMessage
-                              ? "Users could not be loaded"
-                              : users.length === 0
-                                ? "No user accounts are available"
-                                : "No users found"}
+                          {errorMessage
+                            ? "Users could not be loaded"
+                            : totalCount === 0
+                              ? "No user accounts found"
+                              : "No users on this page"}
                         </p>
 
                         <p className="mt-1 text-sm text-slate-500">
                           {errorMessage ??
-                            (isLoading
-                              ? "Loading account records from the server."
-                              : users.length === 0
-                                ? "The database returned no user accounts."
-                                : "Try another display name, email, or search term.")}
+                            (totalCount === 0
+                              ? "No accounts match the current search and status filter."
+                              : "There are no account records available on this page.")}
                         </p>
 
                         {errorMessage ? (
@@ -1518,17 +1717,16 @@ export default function UserManagement() {
                             Retry
                           </button>
                         ) : (
-                          searchTerm && (
+                          (searchTerm || statusFilter !== "all") && (
                             <button
                               type="button"
                               onClick={() => {
-                                setSearchTerm("");
-                                setStatusFilter("All");
-                                setQuickFilter("All");
+                                handleSearchChange("");
+                                handleStatusFilterChange("all");
                               }}
                               className="mt-4 text-sm font-semibold text-[#102E4D] underline underline-offset-4"
                             >
-                              Clear search
+                              Clear search and filters
                             </button>
                           )
                         )}
@@ -1537,6 +1735,113 @@ export default function UserManagement() {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Pagination */}
+            <div className="flex flex-col gap-4 border-t border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+              <div className="text-xs text-slate-500">
+                Showing{" "}
+                <span className="font-semibold text-slate-700">
+                  {firstResult.toLocaleString()}–{lastResult.toLocaleString()}
+                </span>{" "}
+                of{" "}
+                <span className="font-semibold text-slate-700">
+                  {totalCount.toLocaleString()}
+                </span>{" "}
+                matching accounts
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => goToPage(page - 1)}
+                  disabled={isLoading || page <= 1}
+                  aria-label="Previous page"
+                  className={`${paginationButtonClass} border-slate-200 bg-white text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]`}
+                >
+                  <ChevronLeft size={17} />
+                </button>
+
+                {pageNumbers.length > 0 && pageNumbers[0] > 1 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => goToPage(1)}
+                      disabled={isLoading}
+                      className={`${paginationButtonClass} border-slate-200 bg-white text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]`}
+                    >
+                      1
+                    </button>
+
+                    {pageNumbers[0] > 2 && (
+                      <span className="px-1 text-sm text-slate-400">
+                        ...
+                      </span>
+                    )}
+                  </>
+                )}
+
+                {pageNumbers.map((pageNumber) => (
+                  <button
+                    key={pageNumber}
+                    type="button"
+                    onClick={() => goToPage(pageNumber)}
+                    disabled={isLoading}
+                    aria-current={
+                      pageNumber === page
+                        ? "page"
+                        : undefined
+                    }
+                    className={`${paginationButtonClass} ${
+                      pageNumber === page
+                        ? "border-[#102E4D] bg-[#102E4D] text-white"
+                        : "border-slate-200 bg-white text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]"
+                    }`}
+                  >
+                    {pageNumber}
+                  </button>
+                ))}
+
+                {pageNumbers.length > 0 &&
+                  pageNumbers[pageNumbers.length - 1] < totalPages && (
+                    <>
+                      {pageNumbers[pageNumbers.length - 1] < totalPages - 1 && (
+                        <span className="px-1 text-sm text-slate-400">
+                          ...
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => goToPage(totalPages)}
+                        disabled={isLoading}
+                        className={`${paginationButtonClass} border-slate-200 bg-white text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]`}
+                      >
+                        {totalPages}
+                      </button>
+                    </>
+                  )}
+
+                <button
+                  type="button"
+                  onClick={() => goToPage(page + 1)}
+                  disabled={
+                    isLoading ||
+                    totalPages === 0 ||
+                    page >= totalPages
+                  }
+                  aria-label="Next page"
+                  className={`${paginationButtonClass} border-slate-200 bg-white text-slate-600 hover:border-[#102E4D] hover:text-[#102E4D]`}
+                >
+                  <ChevronRight size={17} />
+                </button>
+              </div>
+
+              <p className="text-right text-xs text-slate-400">
+                {totalPages > 0
+                  ? `Page ${page} of ${totalPages}`
+                  : "No pages"}
+              </p>
             </div>
 
             <div className="border-t border-slate-100 px-5 py-4 sm:px-6">
@@ -1590,9 +1895,11 @@ export default function UserManagement() {
 
             {/* Identity */}
             <div className="mt-6 flex flex-col items-center rounded-xl bg-[#F4F8FC] p-6">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#DCE9F7] text-[#102E4D]">
-                <UserRound size={30} />
-              </div>
+              <UserAvatar
+                photoUrl={selectedUser.profilePhotoUrl}
+                displayName={getDisplayName(selectedUser)}
+                size="details"
+              />
 
               <h4 className="mt-3 text-lg font-bold text-slate-800">
                 {getDisplayName(selectedUser)}
@@ -1873,7 +2180,7 @@ export default function UserManagement() {
                           </div>
 
                           <p className="mt-1 text-xs text-slate-600">
-                            {item.detail}
+                            {item.description}
                           </p>
 
                           <p className="mt-2 text-[11px] text-slate-500">
@@ -2179,12 +2486,10 @@ export default function UserManagement() {
                         id="restriction-duration"
                         type="number"
                         min={1}
-                        max={
-                          Math.floor(
-                            MAX_RESTRICTION_SECONDS /
-                              DURATION_FACTORS[durationUnit],
-                          )
-                        }
+                        max={Math.floor(
+                          MAX_RESTRICTION_SECONDS /
+                            DURATION_FACTORS[durationUnit],
+                        )}
                         step={1}
                         value={durationAmount}
                         onChange={(event) => {

@@ -7,10 +7,9 @@ import type {
 } from "./adminValidation.ts";
 
 import { getRecentAdminAuditLogsWithClient } from "./adminAudit.ts";
+import { getGoogleProfilePhotoUrl } from "./account.ts";
 
-const authUsersPerPage = 1000;
-const userRolesPerPage = 1000;
-const profileBatchSize = 200;
+const profilePhotoBucket = "profile-photos";
 const recentActivityLimit = 5;
 const communityPhotoBucket = "community-post-photos";
 const authBanSyncMaxAttempts = 3;
@@ -50,7 +49,9 @@ export class AdminAuthSyncError extends Error {
   }
 }
 
-export type AdminUserRole = "registered_user" | "admin";
+export type AdminUserRole =
+  | "registered_user"
+  | "admin";
 
 export type AdminUserRestrictionAction =
   | "mute"
@@ -58,6 +59,62 @@ export type AdminUserRestrictionAction =
   | "ban_temporary"
   | "ban_permanent"
   | "unban";
+
+export type AdminUserManagementStatus =
+  | "all"
+  | "active"
+  | "muted"
+  | "banned"
+  | "deleted";
+
+export interface AdminUserRecord {
+  id: string;
+
+  displayName: string;
+  email: string | null;
+
+  /**
+   * Internal search support only.
+   * Never render searchUsername in User Management.
+   */
+  searchUsername: string | null;
+
+  createdAt: string;
+
+  role: AdminUserRole;
+  isDeleted: boolean;
+
+  profilePhotoUrl: string | null;
+
+  // Effective database restriction states.
+  isBanned: boolean;
+  isMuted: boolean;
+  isPermanentBan: boolean;
+
+  banExpiresAt: string | null;
+  muteExpiresAt: string | null;
+
+  banReason: string | null;
+  muteReason: string | null;
+
+  // Database ban state versus Supabase Auth ban state.
+  authBanSynced: boolean;
+}
+
+export interface AdminUsersPageRequest {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: AdminUserManagementStatus;
+}
+
+export interface AdminUsersPage {
+  users: AdminUserRecord[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
 
 export interface AdminRecentActivityItem {
   id: string;
@@ -155,31 +212,6 @@ export interface AdminRouteManagementData {
  * Usernames are included only for internal search matching.
  * Never render searchUsername in the User Management interface.
  */
-export interface AdminUserRecord {
-  id: string;
-  displayName: string | null;
-  email: string | null;
-  searchUsername: string | null;
-  createdAt: string;
-  role: AdminUserRole;
-  isDeleted: boolean;
-
-  // Effective database restriction states.
-  isBanned: boolean;
-  isMuted: boolean;
-  isPermanentBan: boolean;
-
-  banExpiresAt: string | null;
-  muteExpiresAt: string | null;
-
-  banReason: string | null;
-  muteReason: string | null;
-
-  // Indicates whether the database ban state and Supabase Auth
-  // sign-in ban state currently agree.
-  authBanSynced: boolean;
-}
-
 export interface AdminUserRestrictionResult {
   userId: string;
   action: AdminUserRestrictionAction;
@@ -675,327 +707,380 @@ export async function getAdminRouteManagementData(
 // User Management
 // -----------------------------------------------------------------------------
 
+// -----------------------------------------------------------------------------
+// User Management
+// -----------------------------------------------------------------------------
+
 /**
- * Retrieves all registered-user and admin role records.
- *
- * Pagination is explicit because Supabase projects commonly have
- * a default PostgREST response limit of 1,000 rows.
+ * Supported page sizes are intentionally limited.
+ * The SQL RPC independently validates these values.
  */
-async function getAllAdminUserRoleRows(
-  client: SupabaseClient,
-): Promise<Array<{ user_id: string; role: unknown }>> {
-  const rows: Array<{ user_id: string; role: unknown }> = [];
+const allowedAdminUserPageSizes = [10, 25, 50, 100] as const;
 
-  for (let page = 0; ; page += 1) {
-    const from = page * userRolesPerPage;
-    const to = from + userRolesPerPage - 1;
+const defaultAdminUserPageSize = 25;
 
-    const { data, error } = await client
-      .from("user_roles")
-      .select("user_id, role")
-      .in("role", ["registered_user", "admin"])
-      .order("user_id", { ascending: true })
-      .range(from, to);
-
-    if (error) throw error;
-
-    if (!Array.isArray(data)) {
-      throw new Error(
-        "Admin user query returned incomplete role data.",
-      );
-    }
-
-    rows.push(...data);
-
-    if (data.length < userRolesPerPage) {
-      break;
-    }
-  }
-
-  return rows;
+/**
+ * Validates the JSON representation returned by the pagination RPC.
+ */
+function isAdminUserPageRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return isPlainRecord(value);
 }
 
 /**
- * Returns a validated list of Registered User and Admin accounts.
+ * Builds the existing public profile-photo URL.
  *
- * Usernames are returned only as searchUsername for internal
- * search matching. The frontend must never display that field.
+ * Uploaded profile photos take priority over Google metadata.
  *
- * Database moderation state is authoritative for effective mute
- * and ban status. Supabase Auth is inspected separately so the
- * backend can identify synchronization mismatches.
+ * Existing Storage convention:
+ * Bucket: profile-photos
+ * Path:   {userId}/profile
+ *
+ * No upload, bucket, or storage-path changes are performed here.
  */
-export async function getAdminUsers(
+function getAdminProfilePhotoUrl(
   client: SupabaseClient,
-): Promise<AdminUserRecord[]> {
-  const roleRows = await getAllAdminUserRoleRows(client);
+  userId: string,
+  profilePhotoPath: string | null,
+  userMetadata: Record<string, unknown>,
+): string | null {
+  if (profilePhotoPath !== null) {
+    const expectedPath = `${userId}/profile`;
 
-  const userRoles = new Map<string, AdminUserRole>();
+    if (profilePhotoPath !== expectedPath) {
+      throw new Error(
+        "Admin user query returned an invalid profile-photo path.",
+      );
+    }
 
-  for (const row of roleRows) {
+    const { data } = client.storage
+      .from(profilePhotoBucket)
+      .getPublicUrl(profilePhotoPath);
+
     if (
-      typeof row.user_id !== "string" ||
-      !row.user_id ||
-      (
-        row.role !== "registered_user" &&
-        row.role !== "admin"
-      )
+      typeof data.publicUrl === "string" &&
+      data.publicUrl.startsWith("https://")
     ) {
-      throw new Error(
-        "Admin user query returned an invalid user-role record.",
-      );
-    }
-
-    userRoles.set(row.user_id, row.role);
-  }
-
-  if (userRoles.size === 0) {
-    return [];
-  }
-
-  const ids = [...userRoles.keys()];
-
-  // Load all Auth accounts using the privileged backend client.
-  const authUsers = [];
-
-  for (let page = 1; ; page += 1) {
-    const { data, error } = await client.auth.admin.listUsers({
-      page,
-      perPage: authUsersPerPage,
-    });
-
-    if (error) throw error;
-
-    if (!Array.isArray(data.users)) {
-      throw new Error(
-        "Auth Admin returned incomplete user data.",
-      );
-    }
-
-    authUsers.push(...data.users);
-
-    if (data.users.length < authUsersPerPage) {
-      break;
+      return data.publicUrl;
     }
   }
 
-  const authUsersById = new Map(
-    authUsers.map((user) => [user.id, user] as const),
-  );
+  // Fall back to the existing Google metadata resolver.
+  return getGoogleProfilePhotoUrl(userMetadata);
+}
 
-  const missingUserId = ids.find(
-    (id) => !authUsersById.has(id),
-  );
-
-  if (missingUserId) {
+/**
+ * Validates and normalizes one account returned by the
+ * administrative pagination RPC.
+ *
+ * Internal metadata and Storage paths are not exposed
+ * in the final AdminUserRecord.
+ */
+function parseAdminUserPageRecord(
+  client: SupabaseClient,
+  value: unknown,
+): AdminUserRecord {
+  if (!isAdminUserPageRecord(value)) {
     throw new Error(
-      "A user-role account could not be loaded from Auth Admin.",
+      "Admin user query returned an invalid account record.",
     );
   }
 
-  const profilesById = new Map<
-    string,
-    {
-      displayName: string | null;
-      username: string | null;
-      isDeleted: boolean;
-    }
-  >();
+  const id = value.id;
+  const displayName = value.displayName;
+  const email = value.email;
+  const searchUsername = value.searchUsername;
+  const createdAt = value.createdAt;
+  const role = value.role;
+  const isDeleted = value.isDeleted;
 
-  const moderationById = new Map<
-    string,
-    UserModerationBanRow
-  >();
+  const isBanned = value.isBanned;
+  const isMuted = value.isMuted;
+  const isPermanentBan = value.isPermanentBan;
 
-  // Load profiles and moderation rows in manageable batches.
-  for (
-    let start = 0;
-    start < ids.length;
-    start += profileBatchSize
+  const banExpiresAt = value.banExpiresAt;
+  const muteExpiresAt = value.muteExpiresAt;
+
+  const banReason = value.banReason;
+  const muteReason = value.muteReason;
+
+  const authBanSynced = value.authBanSynced;
+
+  const profilePhotoPath = value.profilePhotoPath;
+  const userMetadata = value.userMetadata;
+
+  if (
+    typeof id !== "string" ||
+    !id ||
+    !isNullableDatabaseString(displayName) ||
+    !isNullableDatabaseString(email) ||
+    !isNullableDatabaseString(searchUsername) ||
+    typeof createdAt !== "string" ||
+    !isValidDateString(createdAt) ||
+    (
+      role !== "registered_user" &&
+      role !== "admin"
+    ) ||
+    typeof isDeleted !== "boolean" ||
+    typeof isBanned !== "boolean" ||
+    typeof isMuted !== "boolean" ||
+    typeof isPermanentBan !== "boolean" ||
+    !isNullableDatabaseString(banExpiresAt) ||
+    !isNullableDatabaseString(muteExpiresAt) ||
+    !isNullableDatabaseString(banReason) ||
+    !isNullableDatabaseString(muteReason) ||
+    typeof authBanSynced !== "boolean" ||
+    !isNullableDatabaseString(profilePhotoPath) ||
+    !isPlainRecord(userMetadata)
   ) {
-    const batch = ids.slice(
-      start,
-      start + profileBatchSize,
+    throw new Error(
+      "Admin user query returned an invalid account record.",
     );
-
-    const [
-      { data: profiles, error: profileError },
-      { data: moderationRows, error: moderationError },
-    ] = await Promise.all([
-      client
-        .from("profiles")
-        .select("id, display_name, username, is_deleted")
-        .in("id", batch),
-
-      client
-        .from("user_moderation")
-        .select(
-          [
-            "user_id",
-            "is_banned",
-            "is_muted",
-            "is_permanent_ban",
-            "ban_expires_at",
-            "mute_expires_at",
-            "ban_reason",
-            "mute_reason",
-          ].join(", "),
-        )
-        .in("user_id", batch),
-    ]);
-
-    if (profileError) throw profileError;
-    if (moderationError) throw moderationError;
-
-    if (
-      !Array.isArray(profiles) ||
-      !Array.isArray(moderationRows)
-    ) {
-      throw new Error(
-        "Admin user query returned incomplete profile or moderation data.",
-      );
-    }
-
-    for (const profile of profiles) {
-      if (
-        typeof profile.id !== "string" ||
-        !isNullableDatabaseString(profile.display_name) ||
-        !isNullableDatabaseString(profile.username) ||
-        typeof profile.is_deleted !== "boolean"
-      ) {
-        throw new Error(
-          "Admin user query returned an invalid profile record.",
-        );
-      }
-
-      profilesById.set(profile.id, {
-        displayName:
-          profile.display_name?.trim() || null,
-        username: profile.username,
-        isDeleted: profile.is_deleted,
-      });
-    }
-
-    for (const row of moderationRows) {
-      if (
-        typeof row.user_id !== "string" ||
-        typeof row.is_banned !== "boolean" ||
-        typeof row.is_muted !== "boolean" ||
-        typeof row.is_permanent_ban !== "boolean" ||
-        !isNullableDatabaseString(row.ban_expires_at) ||
-        !isNullableDatabaseString(row.mute_expires_at) ||
-        !isNullableDatabaseString(row.ban_reason) ||
-        !isNullableDatabaseString(row.mute_reason)
-      ) {
-        throw new Error(
-          "Admin user query returned an invalid moderation record.",
-        );
-      }
-
-      moderationById.set(row.user_id, {
-        user_id: row.user_id,
-        is_banned: row.is_banned,
-        is_muted: row.is_muted,
-        is_permanent_ban: row.is_permanent_ban,
-        ban_expires_at: row.ban_expires_at,
-        mute_expires_at: row.mute_expires_at,
-        ban_reason: row.ban_reason,
-        mute_reason: row.mute_reason,
-      });
-    }
   }
 
-  // Profile records are expected for accounts created by the
-  // project's account-creation profile trigger.
-  //
-  // Fail closed when a role record has no profile: the backend
-  // cannot safely determine its deleted-account state.
-  const missingProfileId = ids.find(
-    (id) => !profilesById.has(id),
+  const normalizedDisplayName =
+    displayName?.trim() || "Unnamed user";
+
+  const profilePhotoUrl = getAdminProfilePhotoUrl(
+    client,
+    id,
+    profilePhotoPath,
+    userMetadata,
   );
 
-  if (missingProfileId) {
-    throw new Error(
-      "A user account profile is missing. User Management cannot safely determine its account status.",
-    );
-  }
+  return {
+    id,
 
-  const now = Date.now();
+    displayName: normalizedDisplayName,
+    email,
 
-  return [...userRoles]
-    .map(([id, role]) => {
-      const authUser = authUsersById.get(id);
-      const profile = profilesById.get(id);
+    // Search-only value. The frontend must never display it.
+    searchUsername,
 
-      if (!authUser || !profile) {
-        throw new Error(
-          "A user account could not be loaded completely.",
-        );
-      }
+    createdAt,
 
-      const moderation = moderationById.get(id) ?? null;
+    role,
+    isDeleted,
 
-      const isBanned = isEffectiveBan(moderation, now);
-      const isMuted = isEffectiveMute(moderation, now);
+    profilePhotoUrl,
 
-      const authBannedUntil = authUser.banned_until;
+    isBanned,
+    isMuted,
 
-      const authIsBanned = Boolean(
-        authBannedUntil &&
-          new Date(authBannedUntil).getTime() > now,
-      );
+    isPermanentBan:
+      isBanned && isPermanentBan,
 
-      return {
-        id,
-        displayName: profile.displayName,
-        email: authUser.email ?? null,
+    banExpiresAt,
+    muteExpiresAt,
 
-        // Internal search support only. Never render in the UI.
-        searchUsername: profile.username,
+    banReason,
+    muteReason,
 
-        createdAt: authUser.created_at,
-        role,
-        isDeleted: profile.isDeleted,
-
-        isBanned,
-        isMuted,
-        isPermanentBan:
-          isBanned && moderation?.is_permanent_ban === true,
-
-        banExpiresAt:
-          moderation?.ban_expires_at ?? null,
-
-        muteExpiresAt:
-          moderation?.mute_expires_at ?? null,
-
-        banReason:
-          moderation?.ban_reason ?? null,
-
-        muteReason:
-          moderation?.mute_reason ?? null,
-
-        authBanSynced: isBanned === authIsBanned,
-      };
-    })
-    .sort((left, right) =>
-      right.createdAt.localeCompare(left.createdAt),
-    );
+    authBanSynced,
+  };
 }
 
 /**
- * Changes a user role through the verified transactional database RPC.
+ * Retrieves one server-side paginated User Management page.
  *
- * The RPC:
- * - Accepts only registered_user/admin.
- * - Verifies the acting administrator.
- * - Rejects deleted administrators.
- * - Protects the last administrator.
- * - Prevents self-demotion.
- * - Rejects promotion of deleted or effectively banned accounts.
- * - Writes its audit event in the same transaction.
+ * This replaces the previous implementation that loaded
+ * every user role, every Auth account, and all profiles.
  *
- * Do not write a second audit entry in Express.
+ * The database function:
+ *
+ * - Verifies the requesting administrator.
+ * - Searches display name, email, and username internally.
+ * - Applies the selected effective-status filter.
+ * - Calculates the total matching account count.
+ * - Retrieves only the requested page.
+ * - Returns uploaded profile-photo paths and Google metadata.
+ * - Calculates effective database mute and ban states.
+ *
+ * The Express backend uses its privileged Supabase client
+ * when invoking this function.
+ *
+ * Uploaded photos use the existing:
+ *
+ * profile-photos/{userId}/profile
+ *
+ * path.
  */
+export async function getAdminUsersPage(
+  client: SupabaseClient,
+  adminUserId: string,
+  options: AdminUsersPageRequest = {},
+): Promise<AdminUsersPage> {
+  // ----------------------------------------------------------
+  // Validate administrator identity
+  // ----------------------------------------------------------
+
+  if (
+    typeof adminUserId !== "string" ||
+    !adminUserId.trim()
+  ) {
+    throw new AdminInputError(
+      "An administrator ID is required.",
+    );
+  }
+
+  // ----------------------------------------------------------
+  // Normalize and validate pagination
+  // ----------------------------------------------------------
+
+  const page = options.page ?? 1;
+
+  const pageSize =
+    options.pageSize ?? defaultAdminUserPageSize;
+
+  if (
+    !Number.isSafeInteger(page) ||
+    page < 1
+  ) {
+    throw new AdminInputError(
+      "Page must be a positive integer.",
+    );
+  }
+
+  if (
+    !allowedAdminUserPageSizes.includes(
+      pageSize as (typeof allowedAdminUserPageSizes)[number],
+    )
+  ) {
+    throw new AdminInputError(
+      "Page size must be 10, 25, 50, or 100.",
+    );
+  }
+
+  // ----------------------------------------------------------
+  // Normalize and validate search
+  // ----------------------------------------------------------
+
+  const search =
+    typeof options.search === "string"
+      ? options.search.trim()
+      : "";
+
+  if (search.length > 100) {
+    throw new AdminInputError(
+      "Search text cannot exceed 100 characters.",
+    );
+  }
+
+  // ----------------------------------------------------------
+  // Validate status filter
+  // ----------------------------------------------------------
+
+  const status: AdminUserManagementStatus =
+    options.status ?? "all";
+
+  const allowedStatuses: AdminUserManagementStatus[] = [
+    "all",
+    "active",
+    "muted",
+    "banned",
+    "deleted",
+  ];
+
+  if (!allowedStatuses.includes(status)) {
+    throw new AdminInputError(
+      "Invalid user status filter.",
+    );
+  }
+
+  // ----------------------------------------------------------
+  // Execute the database pagination RPC
+  // ----------------------------------------------------------
+
+  const { data, error } = await client.rpc(
+    "admin_get_user_management_page_v1",
+    {
+      p_admin_user_id: adminUserId,
+      p_page: page,
+      p_page_size: pageSize,
+      p_search: search,
+      p_status: status,
+    },
+  );
+
+  if (error) {
+    throwAdminRpcError(error);
+  }
+
+  // ----------------------------------------------------------
+  // Validate the RPC response
+  // ----------------------------------------------------------
+
+  if (!isPlainRecord(data)) {
+    throw new Error(
+      "Admin user pagination returned an invalid response.",
+    );
+  }
+
+  const totalCount = data.totalCount;
+  const returnedPage = data.page;
+  const returnedPageSize = data.pageSize;
+  const totalPages = data.totalPages;
+  const rawUsers = data.users;
+
+  if (
+    typeof totalCount !== "number" ||
+    !Number.isSafeInteger(totalCount) ||
+    totalCount < 0 ||
+    typeof returnedPage !== "number" ||
+    !Number.isSafeInteger(returnedPage) ||
+    returnedPage < 1 ||
+    returnedPageSize !== pageSize ||
+    typeof totalPages !== "number" ||
+    !Number.isSafeInteger(totalPages) ||
+    totalPages < 0 ||
+    !Array.isArray(rawUsers)
+  ) {
+    throw new Error(
+      "Admin user pagination returned incomplete data.",
+    );
+  }
+
+  const expectedTotalPages =
+    totalCount === 0
+      ? 0
+      : Math.ceil(totalCount / pageSize);
+
+  if (
+    totalPages !== expectedTotalPages ||
+    (
+      totalPages === 0
+        ? returnedPage !== 1
+        : returnedPage > totalPages
+    ) ||
+    rawUsers.length > pageSize
+  ) {
+    throw new Error(
+      "Admin user pagination returned inconsistent page information.",
+    );
+  }
+
+  // ----------------------------------------------------------
+  // Parse and resolve only the requested page's photo URLs.
+  // ----------------------------------------------------------
+
+  const users = rawUsers.map((row) =>
+    parseAdminUserPageRecord(client, row),
+  );
+
+  // ----------------------------------------------------------
+  // Return the normalized page.
+  // ----------------------------------------------------------
+
+  return {
+    users,
+    totalCount,
+    page: returnedPage,
+    pageSize,
+    totalPages,
+  };
+}
+
 export async function updateAdminUserRole(
   client: SupabaseClient,
   adminUserId: string,

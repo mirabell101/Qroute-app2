@@ -17,11 +17,12 @@ import {
   getAdminRoutes,
   getAdminSummary,
   getAdminUserModerationHistory,
-  getAdminUsers,
+  getAdminUsersPage,
   setCommunityPostVisibility,
   updateAdminReportStatus,
   updateAdminRoute,
   updateAdminUserRole,
+  type AdminUserManagementStatus,
   type AdminUserRestrictionAction,
   type AdminUserRole,
 } from "../admin.ts";
@@ -94,6 +95,85 @@ function parseRouteId(value: string): number | null {
 function parseUuid(value: string): string | null {
   return UUID_PATTERN.test(value)
     ? value
+    : null;
+}
+
+// -----------------------------------------------------------------------------
+// User Management pagination validation
+// -----------------------------------------------------------------------------
+
+const ADMIN_USER_PAGE_SIZES = [
+  10,
+  25,
+  50,
+  100,
+] as const;
+
+const ADMIN_USER_STATUSES = [
+  "all",
+  "active",
+  "muted",
+  "banned",
+  "deleted",
+] as const;
+
+/**
+ * Parses a positive integer from an Express query parameter.
+ *
+ * Rejects arrays, decimals, negative numbers, zero, and
+ * values outside JavaScript's safe integer range.
+ */
+function parsePositiveIntegerQuery(
+  value: unknown,
+): number | null {
+  if (
+    typeof value !== "string" ||
+    !/^[1-9]\d*$/.test(value)
+  ) {
+    return null;
+  }
+
+  const parsed = Number(value);
+
+  return Number.isSafeInteger(parsed)
+    ? parsed
+    : null;
+}
+
+/**
+ * Validates the selected page size.
+ */
+function isAdminUserPageSize(
+  value: number,
+): value is (typeof ADMIN_USER_PAGE_SIZES)[number] {
+  return (
+    ADMIN_USER_PAGE_SIZES as readonly number[]
+  ).includes(value);
+}
+
+/**
+ * Validates the status filter.
+ *
+ * Accepts the frontend's labels case-insensitively:
+ * All, Active, Muted, Banned, Deleted.
+ */
+function parseAdminUserStatus(
+  value: unknown,
+): AdminUserManagementStatus | null {
+  if (value === undefined) {
+    return "all";
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+
+  return (
+    ADMIN_USER_STATUSES as readonly string[]
+  ).includes(normalized)
+    ? normalized as AdminUserManagementStatus
     : null;
 }
 
@@ -428,17 +508,158 @@ router.delete(
 // User Management: account listing
 // -----------------------------------------------------------------------------
 
+// -----------------------------------------------------------------------------
+// User Management: paginated account listing
+// -----------------------------------------------------------------------------
+//
+// Supported query parameters:
+//
+// page       = 1
+// pageSize   = 25
+// search     = optional search text
+// status     = all | active | muted | banned | deleted
+//
+// The database RPC performs:
+//
+// - Administrator verification.
+// - Server-side search.
+// - Server-side status filtering.
+// - Exact matching account count.
+// - Database-side pagination.
+// - Effective ban and mute calculation.
+// - Uploaded profile-photo lookup.
+//
+// The backend resolves public profile-photo URLs using:
+//
+// profile-photos/{userId}/profile
+//
+// Google photo metadata is used as a fallback.
+//
+// The endpoint never exposes usernames as display fields.
+// Username is returned internally as searchUsername only.
+//
+
 router.get(
   "/users",
-  async (_req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
+    const context = getVerifiedAdminContext(res);
+
+    if (!context) return;
+
+    // --------------------------------------------------------
+    // Page
+    // --------------------------------------------------------
+
+    const rawPage = req.query.page;
+
+    const page =
+      rawPage === undefined
+        ? 1
+        : parsePositiveIntegerQuery(rawPage);
+
+    if (page === null) {
+      res.status(400).json({
+        success: false,
+        message: "Page must be a positive integer.",
+      });
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // Page size
+    // --------------------------------------------------------
+
+    const rawPageSize = req.query.pageSize;
+
+    const pageSize =
+      rawPageSize === undefined
+        ? 25
+        : parsePositiveIntegerQuery(rawPageSize);
+
+    if (
+      pageSize === null ||
+      !isAdminUserPageSize(pageSize)
+    ) {
+      res.status(400).json({
+        success: false,
+        message:
+          "Page size must be 10, 25, 50, or 100.",
+      });
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // Search
+    // --------------------------------------------------------
+
+    const rawSearch = req.query.search;
+
+    if (
+      rawSearch !== undefined &&
+      typeof rawSearch !== "string"
+    ) {
+      res.status(400).json({
+        success: false,
+        message: "Search must be a single text value.",
+      });
+
+      return;
+    }
+
+    const search =
+      typeof rawSearch === "string"
+        ? rawSearch.trim()
+        : "";
+
+    if (search.length > 100) {
+      res.status(400).json({
+        success: false,
+        message:
+          "Search text cannot exceed 100 characters.",
+      });
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // Status filter
+    // --------------------------------------------------------
+
+    const status = parseAdminUserStatus(
+      req.query.status,
+    );
+
+    if (status === null) {
+      res.status(400).json({
+        success: false,
+        message:
+          "Status must be all, active, muted, banned, or deleted.",
+      });
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // Retrieve the requested page
+    // --------------------------------------------------------
+
     try {
-      const users = await getAdminUsers(
+      const usersPage = await getAdminUsersPage(
         getSupabaseAdminClient(),
+        context.adminUserId,
+        {
+          page,
+          pageSize,
+          search,
+          status,
+        },
       );
 
       res.json({
         success: true,
-        users,
+        ...usersPage,
       });
     } catch (error: unknown) {
       sendAdminError(

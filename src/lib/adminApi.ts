@@ -143,11 +143,29 @@ export type AdminUserRestrictionAction =
   | "ban_permanent"
   | "unban";
 
+export type AdminUserManagementStatus =
+  | "all"
+  | "active"
+  | "muted"
+  | "banned"
+  | "deleted";
+
+export type AdminUserPageSize =
+  | 10
+  | 25
+  | 50
+  | 100;
+
 /**
  * The username is returned only for internal search matching.
  *
  * Do not render searchUsername in User Management.
- * The user-facing identity fields are displayName and email.
+ *
+ * profilePhotoUrl is resolved by the backend:
+ *
+ * 1. Uploaded photo from profile-photos/{userId}/profile.
+ * 2. Google profile photo metadata.
+ * 3. null, which allows the frontend to use its default avatar.
  */
 export interface AdminUserRecord {
   id: string;
@@ -158,6 +176,8 @@ export interface AdminUserRecord {
 
   role: AdminUserRole;
   isDeleted: boolean;
+
+  profilePhotoUrl: string | null;
 
   isBanned: boolean;
   isMuted: boolean;
@@ -180,7 +200,38 @@ export interface AdminUserRecord {
 }
 
 /**
- * Payload accepted by POST /api/admin/users/:id/restrictions.
+ * Parameters for the paginated User Management endpoint.
+ *
+ * Defaults:
+ * - page: 1
+ * - pageSize: 25
+ * - search: ""
+ * - status: "all"
+ */
+export interface AdminUsersPageRequest {
+  page?: number;
+  pageSize?: AdminUserPageSize;
+  search?: string;
+  status?: AdminUserManagementStatus;
+}
+
+/**
+ * Paginated result returned by:
+ *
+ * GET /api/admin/users
+ */
+export interface AdminUsersPage {
+  users: AdminUserRecord[];
+  totalCount: number;
+  page: number;
+  pageSize: AdminUserPageSize;
+  totalPages: number;
+}
+
+/**
+ * Payload accepted by:
+ *
+ * POST /api/admin/users/:id/restrictions
  *
  * For mute:
  * - durationSeconds: null or omitted means indefinite mute.
@@ -201,14 +252,21 @@ export interface AdminUserRestrictionPayload {
   reason?: string;
 }
 
+/**
+ * Matches the actual AdminUserModerationHistoryItem returned
+ * by server/admin.ts.
+ *
+ * The backend returns description and metadata,
+ * not category and detail.
+ */
 export interface AdminUserModerationHistoryItem {
   id: string;
   actionKey: string;
-  category: string;
   title: string;
-  detail: string;
+  description: string;
   adminDisplayName: string;
   occurredAt: string;
+  metadata: Record<string, unknown>;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -297,7 +355,7 @@ function isNonNegativeInteger(
 ): value is number {
   return (
     typeof value === "number" &&
-    Number.isInteger(value) &&
+    Number.isSafeInteger(value) &&
     value >= 0
   );
 }
@@ -348,6 +406,61 @@ function isNullableCount(
   return (
     value === null ||
     isNonNegativeInteger(value)
+  );
+}
+
+/**
+ * Profile photo URLs must be valid HTTPS URLs.
+ *
+ * This accepts both:
+ * - Supabase public Storage URLs.
+ * - Google profile photo URLs.
+ */
+function isNullableHttpsUrl(
+  value: unknown,
+): value is string | null {
+  if (value === null) {
+    return true;
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+
+    return (
+      url.protocol === "https:" &&
+      Boolean(url.hostname) &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isAdminUserPageSize(
+  value: unknown,
+): value is AdminUserPageSize {
+  return (
+    value === 10 ||
+    value === 25 ||
+    value === 50 ||
+    value === 100
+  );
+}
+
+function isAdminUserManagementStatus(
+  value: unknown,
+): value is AdminUserManagementStatus {
+  return (
+    value === "all" ||
+    value === "active" ||
+    value === "muted" ||
+    value === "banned" ||
+    value === "deleted"
   );
 }
 
@@ -523,15 +636,18 @@ function isAdminUserRecord(
   return (
     isRecord(value) &&
     typeof value.id === "string" &&
+    value.id.length > 0 &&
     isNullableString(value.email) &&
     typeof value.displayName === "string" &&
     isNullableString(value.searchUsername) &&
     typeof value.createdAt === "string" &&
+    Number.isFinite(new Date(value.createdAt).getTime()) &&
     (
       value.role === "registered_user" ||
       value.role === "admin"
     ) &&
     typeof value.isDeleted === "boolean" &&
+    isNullableHttpsUrl(value.profilePhotoUrl) &&
     typeof value.isBanned === "boolean" &&
     typeof value.isMuted === "boolean" &&
     typeof value.isPermanentBan === "boolean" &&
@@ -550,11 +666,14 @@ function isAdminUserModerationHistoryItem(
     isRecord(value) &&
     typeof value.id === "string" &&
     typeof value.actionKey === "string" &&
-    typeof value.category === "string" &&
     typeof value.title === "string" &&
-    typeof value.detail === "string" &&
+    typeof value.description === "string" &&
     typeof value.adminDisplayName === "string" &&
-    typeof value.occurredAt === "string"
+    typeof value.occurredAt === "string" &&
+    Number.isFinite(
+      new Date(value.occurredAt).getTime(),
+    ) &&
+    isRecord(value.metadata)
   );
 }
 
@@ -698,19 +817,71 @@ function parseAdminRoutes(
   return value as AdminRouteRecord[];
 }
 
-function parseAdminUsers(
+/**
+ * Validates the paginated user response returned by:
+ *
+ * GET /api/admin/users
+ */
+function parseAdminUsersPage(
   value: unknown,
-): AdminUserRecord[] {
-  if (
-    !Array.isArray(value) ||
-    !value.every(isAdminUserRecord)
-  ) {
+  requestedPageSize: AdminUserPageSize,
+): AdminUsersPage {
+  if (!isRecord(value)) {
     throw new Error(
-      "Admin service returned invalid user data.",
+      "Admin service returned invalid user pagination data.",
     );
   }
 
-  return value as AdminUserRecord[];
+  const rawUsers = value.users;
+  const totalCount = value.totalCount;
+  const page = value.page;
+  const pageSize = value.pageSize;
+  const totalPages = value.totalPages;
+
+  if (
+    !Array.isArray(rawUsers) ||
+    !rawUsers.every(isAdminUserRecord) ||
+    !isNonNegativeInteger(totalCount) ||
+    !isPositiveInteger(page) ||
+    !isAdminUserPageSize(pageSize) ||
+    pageSize !== requestedPageSize ||
+    !isNonNegativeInteger(totalPages)
+  ) {
+    throw new Error(
+      "Admin service returned invalid user pagination data.",
+    );
+  }
+
+  const expectedTotalPages =
+    totalCount === 0
+      ? 0
+      : Math.ceil(totalCount / pageSize);
+
+  if (
+    totalPages !== expectedTotalPages ||
+    (
+      totalPages === 0
+        ? page !== 1
+        : page > totalPages
+    ) ||
+    rawUsers.length > pageSize ||
+    (
+      totalCount === 0 &&
+      rawUsers.length !== 0
+    )
+  ) {
+    throw new Error(
+      "Admin service returned inconsistent user pagination information.",
+    );
+  }
+
+  return {
+    users: rawUsers as AdminUserRecord[],
+    totalCount,
+    page,
+    pageSize,
+    totalPages,
+  };
 }
 
 function parseAdminUserModerationHistory(
@@ -1077,15 +1248,70 @@ export async function updateAdminTransportType(
 /*                              USER MANAGEMENT                              */
 /* -------------------------------------------------------------------------- */
 
-export async function getAdminUsers(
+/**
+ * Retrieves one page of administrator-managed accounts.
+ *
+ * The backend performs search, status filtering, photo resolution,
+ * and pagination inside the database.
+ *
+ * Defaults:
+ * - page: 1
+ * - pageSize: 25
+ * - search: ""
+ * - status: "all"
+ */
+export async function getAdminUsersPage(
   expectedUserId: string,
-): Promise<AdminUserRecord[]> {
+  options: AdminUsersPageRequest = {},
+): Promise<AdminUsersPage> {
+  const page = options.page ?? 1;
+  const pageSize = options.pageSize ?? 25;
+  const search = options.search?.trim() ?? "";
+  const status = options.status ?? "all";
+
+  if (
+    !Number.isSafeInteger(page) ||
+    page < 1
+  ) {
+    throw new Error(
+      "Page must be a positive integer.",
+    );
+  }
+
+  if (!isAdminUserPageSize(pageSize)) {
+    throw new Error(
+      "Page size must be 10, 25, 50, or 100.",
+    );
+  }
+
+  if (search.length > 100) {
+    throw new Error(
+      "Search text cannot exceed 100 characters.",
+    );
+  }
+
+  if (!isAdminUserManagementStatus(status)) {
+    throw new Error(
+      "Invalid user status filter.",
+    );
+  }
+
+  const query = new URLSearchParams({
+    page: String(page),
+    pageSize: String(pageSize),
+    search,
+    status,
+  });
+
   const payload = await requestAdmin(
-    "/users",
+    `/users?${query.toString()}`,
     expectedUserId,
   );
 
-  return parseAdminUsers(payload.users);
+  return parseAdminUsersPage(
+    payload,
+    pageSize,
+  );
 }
 
 /**
@@ -1126,8 +1352,7 @@ export async function setAdminUserRole(
  * - unban
  *
  * New restrictions require a reason.
- * Temporary bans require a duration between 60 seconds
- * and 365 days.
+ * Timed restrictions must be between 60 seconds and 365 days.
  *
  * The backend remains authoritative and repeats all validation.
  */
