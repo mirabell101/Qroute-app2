@@ -1,39 +1,76 @@
 
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ReactNode } from "react";
 
 import {
-  BrowserRouter,
   Routes,
   Route,
   Navigate,
 } from "react-router-dom";
 
-import { supabase } from "./lib/supabase";
 import {
   AUTH_ROLE_UPDATED_EVENT,
   getUserRole,
 } from "./lib/authSession";
-import { homeRedirectPath, type QRouteRole } from "./lib/roles";
+
+import {
+  getSessionSnapshot,
+  isCurrentAuthenticatedSession,
+  startSessionCoordinator,
+  subscribeSessionState,
+  type SessionIdentity,
+} from "./lib/sessionCoordinator";
+
+import { logoutCurrentDevice } from "./lib/authLogout";
+
+import {
+  homeRedirectPath,
+  roleLandingPath,
+  type QRouteRole,
+} from "./lib/roles";
+
 import { getStoredAccountDisplayName } from "./lib/accountApi";
 import { resolveVisitorMapRoute } from "./lib/visitorMapRoute";
 
+// ============================================================
+// CONTEXT PROVIDERS
+// ============================================================
+
+import { AccountProfileProvider } from "./components/account/AccountProfileProvider";
+
 import { SavedItemsProvider } from "./components/saved/SavedItemsContext";
 import { RecentSearchesProvider } from "./components/recent-searches/RecentSearchesContext";
-import { AccountProfileProvider } from "./components/account/AccountProfileContext";
+
+// ============================================================
+// VISITOR PAGES
+// ============================================================
 
 import Landing from "./pages/visitor/Landing/Landing";
-import Home from "./pages/registered-user/Home/Home";
 import Login from "./pages/visitor/login/login";
-import AuthCallback from "./pages/auth/callback";
 import SignUp from "./pages/visitor/signup/signup";
 import OTP from "./pages/visitor/OTP/OTP";
 import Forgotpassword from "./pages/visitor/Forgotpassword/Forgotpassword";
 import Resetpassword from "./pages/visitor/Resetpassword/Resetpassword";
 import ResetOTP from "./pages/visitor/ResetOTP/ResetOTP";
+
 import TermsAndConditions from "./pages/visitor/Legal/TermsAndCondition";
 import PrivacyPolicy from "./pages/visitor/Legal/PrivacyPolicy";
 
+// ============================================================
+// AUTHENTICATION PAGES
+// ============================================================
+
+import AuthCallback from "./pages/auth/callback";
+
+// ============================================================
+// REGISTERED-USER PAGES
+// ============================================================
+
+import Home from "./pages/registered-user/Home/Home";
 import Profile from "./pages/registered-user/Profile/Profile";
 import Contribution from "./pages/registered-user/contribution/contribution";
 import Community from "./pages/registered-user/community/community";
@@ -42,6 +79,10 @@ import Saved from "./pages/registered-user/saved/saved";
 import RecentSearches from "./pages/registered-user/recent-searches/recent-searches";
 
 import DisplayNameGAuth from "./pages/registered-user/display-name-gauth";
+
+// ============================================================
+// ADMIN PAGES
+// ============================================================
 
 import AdminBase from "./pages/admin/base/base";
 import Dashboard from "./pages/admin/dashboard/dashboard";
@@ -53,11 +94,35 @@ import UserManagement from "./pages/admin/user-management/user-management";
 import Notifications from "./pages/admin/notifications/notifications";
 import Settings from "./pages/admin/settings/settings";
 
+// ============================================================
+// IMPORTANT ROUTER OWNERSHIP
+// ============================================================
+
+/**
+ * BrowserRouter is mounted once in main.tsx.
+ *
+ * App must NOT create another BrowserRouter.
+ *
+ * This component consumes the existing Router context
+ * through Routes, Route and Navigate.
+ */
+
+// ============================================================
+// ACCESS HELPERS
+// ============================================================
+
 function hasRegisteredUserAccess(
   role: QRouteRole | null,
 ): boolean {
-  return role === "registered_user" || role === "admin";
+  return (
+    role === "registered_user" ||
+    role === "admin"
+  );
 }
+
+// ============================================================
+// TYPES
+// ============================================================
 
 type DisplayNameStatus =
   | "not_required"
@@ -66,13 +131,39 @@ type DisplayNameStatus =
   | "missing"
   | "error";
 
+interface RoleState {
+  userId: string | null;
+  generation: number | null;
+  loaded: boolean;
+  role: QRouteRole | null;
+}
+
+interface DisplayNameState {
+  userId: string | null;
+  generation: number | null;
+  status: DisplayNameStatus;
+}
+
+interface GoogleProviderState {
+  userId: string;
+  generation: number;
+  sessionId: string;
+  isGoogleUser: boolean;
+}
+
+// ============================================================
+// GOOGLE PROVIDER DETECTION
+// ============================================================
+
 function isGoogleAuthenticatedUser(
   user: {
     app_metadata?: Record<string, unknown>;
     identities?: Array<{ provider?: string }> | null;
   } | null,
 ): boolean {
-  if (!user) return false;
+  if (!user) {
+    return false;
+  }
 
   const appProvider = user.app_metadata?.provider;
 
@@ -96,306 +187,479 @@ function isGoogleAuthenticatedUser(
   );
 }
 
+// ============================================================
+// SESSION IDENTITY COMPARISON
+// ============================================================
+
+function sameSessionIdentity(
+  first: SessionIdentity | null | undefined,
+  second: SessionIdentity | null | undefined,
+): boolean {
+  return Boolean(
+    first &&
+      second &&
+      first.userId === second.userId &&
+      first.sessionId === second.sessionId &&
+      first.generation === second.generation,
+  );
+}
+
+/**
+ * Allows a profile-verification result to remain associated
+ * with the same identity while its access token is refreshing.
+ *
+ * This is NOT an authentication or route authorization check.
+ *
+ * Protected routes still require a fully authenticated session.
+ */
+function isCurrentTrackedSession(
+  expectedIdentity: SessionIdentity,
+): boolean {
+  const current = getSessionSnapshot();
+
+  return (
+    sameSessionIdentity(
+      current.identity,
+      expectedIdentity,
+    ) &&
+    current.purpose === "authenticated" &&
+    (
+      current.status === "authenticated" ||
+      current.status === "validating"
+    )
+  );
+}
+
+// ============================================================
+// DEDUPLICATED DISPLAY NAME REQUESTS
+// ============================================================
+
+/**
+ * Only pending Display Name requests are cached.
+ *
+ * This prevents duplicate requests during React StrictMode
+ * effect setup/cleanup cycles.
+ *
+ * Completed requests are removed. Their results are retained
+ * separately in the component's session-generation state.
+ */
+const pendingDisplayNameChecks =
+  new Map<string, Promise<string | null>>();
+
+function getStoredAccountDisplayNameOnce(
+  userId: string,
+  generation: number,
+  refreshVersion: number,
+): Promise<string | null> {
+  const requestKey = JSON.stringify([
+    userId,
+    generation,
+    refreshVersion,
+  ]);
+
+  const existingRequest =
+    pendingDisplayNameChecks.get(requestKey);
+
+  if (existingRequest) {
+    return existingRequest;
+  }
+
+  const request = getStoredAccountDisplayName(userId);
+
+  pendingDisplayNameChecks.set(
+    requestKey,
+    request,
+  );
+
+  const clearPendingRequest = (): void => {
+    if (
+      pendingDisplayNameChecks.get(requestKey) ===
+      request
+    ) {
+      pendingDisplayNameChecks.delete(requestKey);
+    }
+  };
+
+  void request.then(
+    clearPendingRequest,
+    clearPendingRequest,
+  );
+
+  return request;
+}
+
+// ============================================================
+// OAUTH CALLBACK DETECTION
+// ============================================================
+
+/**
+ * Detects OAuth callback parameters in either the query
+ * string or URL fragment.
+ */
+function hasOAuthCallbackPayload(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const queryParams = new URLSearchParams(
+    window.location.search,
+  );
+
+  const hashParams = new URLSearchParams(
+    window.location.hash.replace(/^#/, ""),
+  );
+
+  const callbackParameters = [
+    "code",
+    "access_token",
+    "refresh_token",
+    "error",
+    "error_description",
+  ];
+
+  return callbackParameters.some(
+    (parameter) =>
+      queryParams.has(parameter) ||
+      hashParams.has(parameter),
+  );
+}
+
+
+// ============================================================
+// SHARED UI
+// ============================================================
+
 function LoadingScreen() {
   return (
-    <div className="min-h-screen grid place-items-center">
-      <p className="text-sm text-gray-500">
+    <div className="grid min-h-screen place-items-center">
+      <p
+        role="status"
+        className="text-sm text-gray-500"
+      >
         Loading...
       </p>
     </div>
   );
 }
 
-function DisplayNameVerificationError() {
+function DisplayNameVerificationError({
+  onRetry,
+}: {
+  onRetry: () => void;
+}) {
   return (
-    <main className="min-h-screen grid place-items-center px-4">
+    <main className="grid min-h-screen place-items-center px-4">
       <div className="max-w-md text-center">
         <h1 className="text-xl font-semibold">
           Unable to verify your profile
         </h1>
 
         <p className="mt-3 text-sm text-gray-600">
-          QRoute could not verify your stored Display Name.
-          Please refresh the page or sign in again.
+          QRoute temporarily could not verify your stored
+          Display Name. Your authentication session has not
+          necessarily expired. Please try the verification again.
+        </p>
+
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-5 rounded-md bg-[#6355F5] px-5 py-2.5 text-sm font-medium text-white transition hover:bg-[#5547E8]"
+        >
+          Retry verification
+        </button>
+      </div>
+    </main>
+  );
+}
+
+function RoleVerificationError() {
+  return (
+    <main className="grid min-h-screen place-items-center px-4">
+      <div className="max-w-md text-center">
+        <h1 className="text-xl font-semibold">
+          Unable to verify your account permissions
+        </h1>
+
+        <p className="mt-3 text-sm text-gray-600">
+          Your authentication succeeded, but QRoute could not
+          retrieve a valid account role. Please refresh the page
+          or contact an administrator.
         </p>
       </div>
     </main>
   );
 }
 
+// ============================================================
+// APP
+// ============================================================
+
 function App() {
-  const [currentUserId, setCurrentUserId] =
-    useState<string | null>(null);
+  // ==========================================================
+  // 1. CENTRAL SESSION COORDINATOR
+  // ==========================================================
 
-  const [authLoading, setAuthLoading] = useState(true);
+  
+  const sessionSnapshot = useSyncExternalStore(
+    subscribeSessionState,
+    getSessionSnapshot,
+    getSessionSnapshot,
+  );
 
-  const [isGoogleUser, setIsGoogleUser] = useState(false);
+  /**
+   * The coordinator owns the only central Supabase
+   * authentication-state subscription.
+   */
+  useEffect(() => {
+    return startSessionCoordinator();
+  }, []);
 
-  const [displayNameStatus, setDisplayNameStatus] =
-    useState<DisplayNameStatus>("not_required");
+  const authLoading =
+    sessionSnapshot.status === "initializing" ||
+    sessionSnapshot.status === "validating";
 
-  // Allows the stored Display Name verification to be
-  // explicitly refreshed without changing the user ID.
-  const [displayNameRefreshVersion, setDisplayNameRefreshVersion] =
-    useState(0);
+  /**
+   * Preserve the identity during a normal token refresh.
+   *
+   * The coordinator keeps the same identity generation while
+   * it validates a refreshed token for the existing session.
+   *
+   * This identity is used for state correlation only.
+   * Protected routes still require status === authenticated.
+   */
+  const coordinatorSessionIdentity =
+    sessionSnapshot.purpose === "authenticated" &&
+    (
+      sessionSnapshot.status === "authenticated" ||
+      sessionSnapshot.status === "validating"
+    )
+      ? sessionSnapshot.identity
+      : null;
 
-  const [roleState, setRoleState] = useState<{
-    userId: string | null;
-    loaded: boolean;
-    role: QRouteRole | null;
-  }>({
-    userId: null,
-    loaded: false,
-    role: null,
-  });
+  /**
+   * Only a fully validated normal authenticated session
+   * may enter protected application routes.
+   */
+  const authenticatedIdentity =
+    sessionSnapshot.status === "authenticated" &&
+    sessionSnapshot.purpose === "authenticated"
+      ? sessionSnapshot.identity
+      : null;
+
+  const currentUserId =
+    coordinatorSessionIdentity?.userId ?? null;
+
+  const currentSessionGeneration =
+    coordinatorSessionIdentity?.generation ?? null;
+
+  /**
+   * This key remains useful for the individual RecentSearches
+   * page, but must NOT be used to remount the global providers.
+   */
+  const sessionProviderKey =
+    currentUserId &&
+    currentSessionGeneration !== null
+      ? `${currentUserId}:${currentSessionGeneration}`
+      : "anonymous";
+
+  // ==========================================================
+  // 2. GOOGLE PROVIDER STATE
+  // ==========================================================
+
+  const [googleProviderState, setGoogleProviderState] =
+    useState<GoogleProviderState | null>(null);
+
+  /**
+   * Save the provider classification only after the coordinator
+   * has validated the authenticated session.
+   *
+   * During TOKEN_REFRESHED, the coordinator temporarily sets
+   * snapshot.user to null. We deliberately do not erase the
+   * previously established Google-provider classification.
+   */
+  useEffect(() => {
+    const identity = authenticatedIdentity;
+    const user = sessionSnapshot.user;
+
+    if (!identity || !user) {
+      return;
+    }
+
+    const detectedGoogleUser =
+      isGoogleAuthenticatedUser(user);
+
+    setGoogleProviderState((previous) => {
+      if (
+        previous?.userId === identity.userId &&
+        previous.generation === identity.generation &&
+        previous.sessionId === identity.sessionId &&
+        previous.isGoogleUser === detectedGoogleUser
+      ) {
+        return previous;
+      }
+
+      return {
+        userId: identity.userId,
+        generation: identity.generation,
+        sessionId: identity.sessionId,
+        isGoogleUser: detectedGoogleUser,
+      };
+    });
+  }, [
+    authenticatedIdentity?.userId,
+    authenticatedIdentity?.generation,
+    authenticatedIdentity?.sessionId,
+    sessionSnapshot.user,
+  ]);
+
+  const googleProviderStateMatchesCurrentSession =
+    coordinatorSessionIdentity !== null &&
+    googleProviderState !== null &&
+    googleProviderState.userId ===
+      coordinatorSessionIdentity.userId &&
+    googleProviderState.generation ===
+      coordinatorSessionIdentity.generation &&
+    googleProviderState.sessionId ===
+      coordinatorSessionIdentity.sessionId;
+
+  /**
+   * Use the cached provider classification while the same
+   * identity is temporarily validating.
+   *
+   * Never carry the classification across generations.
+   */
+  const isGoogleUser =
+    googleProviderStateMatchesCurrentSession
+      ? googleProviderState.isGoogleUser
+      : authenticatedIdentity !== null &&
+        isGoogleAuthenticatedUser(sessionSnapshot.user);
+
+  // ==========================================================
+  // 3. ROLE STATE
+  // ==========================================================
+
+  const [roleState, setRoleState] =
+    useState<RoleState>({
+      userId: null,
+      generation: null,
+      loaded: false,
+      role: null,
+    });
+
+  const roleStateMatchesCurrentSession =
+    authenticatedIdentity !== null &&
+    roleState.userId === authenticatedIdentity.userId &&
+    roleState.generation ===
+      authenticatedIdentity.generation;
 
   const roleLoading =
-    currentUserId !== null &&
-    (!roleState.loaded ||
-      roleState.userId !== currentUserId);
+    authenticatedIdentity !== null &&
+    (
+      !roleStateMatchesCurrentSession ||
+      !roleState.loaded
+    );
 
   const currentUserRole =
-    roleState.loaded &&
-    roleState.userId === currentUserId
+    roleStateMatchesCurrentSession &&
+    roleState.loaded
       ? roleState.role
       : null;
 
-  const currentUserHomeRedirectPath = homeRedirectPath(currentUserRole);
+  /**
+   * Do not calculate a landing path without a verified role.
+   */
+  const currentUserHomeRedirectPath =
+    currentUserRole
+      ? homeRedirectPath(currentUserRole)
+      : null;
 
   const authenticatedRootPath: string | null =
-    authLoading || roleLoading
+    !authenticatedIdentity ||
+    roleLoading ||
+    !currentUserRole
       ? null
-      : currentUserId === null
-        ? null
-        : currentUserRole === "admin"
-          ? "/admin/dashboard"
-          : "/home";
+      : roleLandingPath(currentUserRole);
 
-  /**
-   * Restore and verify the existing Supabase session.
-   */
+  // ==========================================================
+  // 4. ROLE LOADING
+  // ==========================================================
+
   useEffect(() => {
-    let active = true;
-    let validationInProgress = false;
+    const identity = authenticatedIdentity;
 
-    const validateSession = async () => {
-      if (validationInProgress) return;
-
-      validationInProgress = true;
-
-      try {
-        const {
-          data: { session },
-          error: sessionError,
-        } = await supabase.auth.getSession();
-
-        if (!active) return;
-
-        if (sessionError) {
-          console.error(
-            "Could not restore Supabase session:",
-            sessionError.message,
-          );
-        }
-
-        if (sessionError || !session) {
-          setCurrentUserId(null);
-          setIsGoogleUser(false);
-          setDisplayNameStatus("not_required");
-          setAuthLoading(false);
-          return;
-        }
-
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser(
-          session.access_token,
-        );
-
-        if (!active) return;
-
-        if (userError || !user) {
-          console.warn(
-            "Session is invalid or the account no longer exists.",
-            userError?.message,
-          );
-
-          await supabase.auth.signOut({
-            scope: "local",
-          });
-
-          if (!active) return;
-
-          setCurrentUserId(null);
-          setIsGoogleUser(false);
-          setDisplayNameStatus("not_required");
-        } else {
-          const verifiedGoogleUser =
-            isGoogleAuthenticatedUser(user);
-
-          setCurrentUserId(user.id);
-          setIsGoogleUser(verifiedGoogleUser);
-
-          // Recheck the stored name on session validation,
-          // even when the user ID has not changed.
-          if (verifiedGoogleUser) {
-            setDisplayNameStatus("loading");
-
-            setDisplayNameRefreshVersion(
-              (previous) => previous + 1,
-            );
-          } else {
-            setDisplayNameStatus("not_required");
-          }
-        }
-
-        setAuthLoading(false);
-      } catch (error: unknown) {
-        if (!active) return;
-
-        console.error("Session validation failed:", error);
-
-        setCurrentUserId(null);
-        setIsGoogleUser(false);
-        setDisplayNameStatus("not_required");
-        setAuthLoading(false);
-      } finally {
-        validationInProgress = false;
-      }
-    };
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        if (!active) return;
-
-        if (event === "SIGNED_OUT") {
-          setCurrentUserId(null);
-          setIsGoogleUser(false);
-          setDisplayNameStatus("not_required");
-          setAuthLoading(false);
-
-          setRoleState({
-            userId: null,
-            loaded: true,
-            role: null,
-          });
-
-          return;
-        }
-
-        // INITIAL_SESSION is verified by validateSession().
-        if (event === "INITIAL_SESSION") return;
-
-        const authenticatedGoogleUser =
-          isGoogleAuthenticatedUser(
-            session?.user ?? null,
-          );
-
-        setCurrentUserId(
-          session?.user.id ?? null,
-        );
-
-        setIsGoogleUser(authenticatedGoogleUser);
-
-        setDisplayNameStatus(
-          session
-            ? authenticatedGoogleUser
-              ? "loading"
-              : "not_required"
-            : "not_required",
-        );
-
-        if (session && authenticatedGoogleUser) {
-          setDisplayNameRefreshVersion(
-            (previous) => previous + 1,
-          );
-        }
-
-        setAuthLoading(false);
-      },
-    );
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        void validateSession();
-      }
-    };
-
-    void validateSession();
-
-    document.addEventListener(
-      "visibilitychange",
-      handleVisibilityChange,
-    );
-
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibilityChange,
-      );
-    };
-  }, []);
-
-  /**
-   * Load the role from the database.
-   */
-  useEffect(() => {
-    let active = true;
-
-    if (!currentUserId) {
-      return () => {
-        active = false;
-      };
+    if (!identity) {
+      return;
     }
 
-    const loadRole = async () => {
-      try {
-        const role = await getUserRole(currentUserId);
+    let active = true;
+    let requestVersion = 0;
 
-        if (active) {
-          setRoleState({
-            userId: currentUserId,
-            loaded: true,
-            role,
-          });
+    const loadRole = async (): Promise<void> => {
+      const requestId = ++requestVersion;
+
+      try {
+        const role = await getUserRole(
+          identity.userId,
+          identity,
+        );
+
+        if (
+          !active ||
+          requestId !== requestVersion ||
+          !isCurrentAuthenticatedSession(identity)
+        ) {
+          return;
         }
+
+        setRoleState({
+          userId: identity.userId,
+          generation: identity.generation,
+          loaded: true,
+          role,
+        });
       } catch (error: unknown) {
+        if (
+          !active ||
+          requestId !== requestVersion ||
+          !isCurrentAuthenticatedSession(identity)
+        ) {
+          return;
+        }
+
         console.error(
           "Could not load the user's role:",
           error,
         );
 
-        if (active) {
-          setRoleState({
-            userId: currentUserId,
-            loaded: true,
-            role: null,
-          });
-        }
+        setRoleState({
+          userId: identity.userId,
+          generation: identity.generation,
+          loaded: true,
+          role: null,
+        });
       }
     };
 
-    void loadRole();
+    const handleRoleUpdated = (): void => {
+      setRoleState((previous) => {
+        if (
+          previous.userId !== identity.userId ||
+          previous.generation !== identity.generation
+        ) {
+          return previous;
+        }
 
-    const handleRoleUpdated = () => {
-      setRoleState((previous) =>
-        previous.userId === currentUserId
-          ? {
-              ...previous,
-              loaded: false,
-              role: null,
-            }
-          : previous,
-      );
+        return {
+          ...previous,
+          loaded: false,
+          role: null,
+        };
+      });
 
       void loadRole();
     };
+
+    void loadRole();
 
     window.addEventListener(
       AUTH_ROLE_UPDATED_EVENT,
@@ -404,63 +668,146 @@ function App() {
 
     return () => {
       active = false;
+      requestVersion += 1;
 
       window.removeEventListener(
         AUTH_ROLE_UPDATED_EVENT,
         handleRoleUpdated,
       );
     };
-  }, [currentUserId]);
+  }, [
+    authenticatedIdentity?.userId,
+    authenticatedIdentity?.generation,
+  ]);
+
+  // ==========================================================
+  // 5. GOOGLE DISPLAY NAME STATE
+  // ==========================================================
+
+  const [displayNameState, setDisplayNameState] =
+    useState<DisplayNameState>({
+      userId: null,
+      generation: null,
+      status: "not_required",
+    });
+
+  /**
+   * This version changes only when the user explicitly
+   * requests another verification attempt.
+   *
+   * Tab switching and token refreshes do not increment it.
+   */
+  const [
+    displayNameRefreshVersion,
+    setDisplayNameRefreshVersion,
+  ] = useState(0);
+
+  const displayNameStateMatchesCurrentSession =
+    coordinatorSessionIdentity !== null &&
+    displayNameState.userId ===
+      coordinatorSessionIdentity.userId &&
+    displayNameState.generation ===
+      coordinatorSessionIdentity.generation;
+
+  const displayNameStatus: DisplayNameStatus =
+    !isGoogleUser
+      ? "not_required"
+      : displayNameStateMatchesCurrentSession
+        ? displayNameState.status
+        : "loading";
 
   /**
    * Verify the actual stored Display Name for Google users.
    *
-   * This never uses Google metadata as a substitute.
+   * Important behavior:
+   *
+   * - The effect uses the stable coordinator identity.
+   * - A token refresh does not change its dependencies.
+   * - Existing verification state is not cleared during
+   *   temporary validation.
+   * - Successful and missing results are retained for the
+   *   exact session generation.
+   * - Errors remain recoverable through an explicit retry.
    */
   useEffect(() => {
+    const identity = coordinatorSessionIdentity;
+
+    if (!identity || !isGoogleUser) {
+      return;
+    }
+
+    /**
+     * Start a new lookup only after the coordinator has
+     * published a fully authenticated session.
+     */
+    const initialSnapshot = getSessionSnapshot();
+
+    if (
+      initialSnapshot.status !== "authenticated" ||
+      initialSnapshot.purpose !== "authenticated" ||
+      !sameSessionIdentity(
+        initialSnapshot.identity,
+        identity,
+      )
+    ) {
+      return;
+    }
+
     let active = true;
 
-    if (!currentUserId) {
-      setDisplayNameStatus("not_required");
+    const belongsToSameTrackedSession = (): boolean =>
+      active && isCurrentTrackedSession(identity);
 
-      return () => {
-        active = false;
-      };
-    }
+    setDisplayNameState({
+      userId: identity.userId,
+      generation: identity.generation,
+      status: "loading",
+    });
 
-    if (!isGoogleUser) {
-      setDisplayNameStatus("not_required");
-
-      return () => {
-        active = false;
-      };
-    }
-
-    setDisplayNameStatus("loading");
-
-    const checkDisplayName = async () => {
+    const checkDisplayName = async (): Promise<void> => {
       try {
         const storedDisplayName =
-          await getStoredAccountDisplayName(
-            currentUserId,
+          await getStoredAccountDisplayNameOnce(
+            identity.userId,
+            identity.generation,
+            displayNameRefreshVersion,
           );
 
-        if (!active) return;
+        /**
+         * Accept the result during a same-generation token
+         * refresh. Do not confuse temporary validation with
+         * an account or session change.
+         */
+        if (!belongsToSameTrackedSession()) {
+          return;
+        }
 
-        setDisplayNameStatus(
-          storedDisplayName
+        const hasDisplayName =
+          typeof storedDisplayName === "string" &&
+          storedDisplayName.trim().length > 0;
+
+        setDisplayNameState({
+          userId: identity.userId,
+          generation: identity.generation,
+          status: hasDisplayName
             ? "complete"
             : "missing",
-        );
+        });
       } catch (error: unknown) {
+        if (!belongsToSameTrackedSession()) {
+          return;
+        }
+
         console.error(
           "Could not verify stored Display Name:",
           error,
         );
 
-        if (active) {
-          setDisplayNameStatus("error");
-        }
+        setDisplayNameState({
+          userId: identity.userId,
+          generation: identity.generation,
+          status: "error",
+        });
       }
     };
 
@@ -470,74 +817,101 @@ function App() {
       active = false;
     };
   }, [
-    currentUserId,
+    coordinatorSessionIdentity?.userId,
+    coordinatorSessionIdentity?.generation,
+    coordinatorSessionIdentity?.sessionId,
     isGoogleUser,
     displayNameRefreshVersion,
   ]);
 
+  // ==========================================================
+  // 6. RETRY DISPLAY NAME VERIFICATION
+  // ==========================================================
+
   /**
-   * Explicitly refresh the stored Display Name status.
-   *
-   * This can be called after the completion page successfully
-   * saves the Display Name.
+   * Only an explicitly authenticated Google session can
+   * initiate a new Display Name verification request.
    */
   const refreshDisplayNameStatus = (): void => {
-    if (!currentUserId || !isGoogleUser) {
+    const identity = authenticatedIdentity;
+
+    if (
+      !identity ||
+      !isGoogleUser ||
+      !isCurrentAuthenticatedSession(identity)
+    ) {
       return;
     }
 
-    setDisplayNameStatus("loading");
+    setDisplayNameState({
+      userId: identity.userId,
+      generation: identity.generation,
+      status: "loading",
+    });
 
     setDisplayNameRefreshVersion(
       (previous) => previous + 1,
     );
   };
 
-  /**
-   * Sign out locally.
-   */
-  const handleLogout = async (): Promise<void> => {
-    const { error } = await supabase.auth.signOut({
-      scope: "local",
-    });
+  // ==========================================================
+  // 7. LOCAL LOGOUT
+  // ==========================================================
 
-    if (error) {
-      console.error("Logout failed:", error.message);
+  const handleLogout = async (): Promise<void> => {
+    try {
+      await logoutCurrentDevice();
+    } catch (error: unknown) {
+      console.error(
+        "Logout failed:",
+        error instanceof Error
+          ? error.message
+          : error,
+      );
+
       throw error;
     }
-
-    localStorage.removeItem("qroute_current_user");
-    sessionStorage.removeItem("qroute_current_user");
-
-    setCurrentUserId(null);
-    setIsGoogleUser(false);
-    setDisplayNameStatus("not_required");
   };
 
-  /**
-   * Central registered-user page guard.
-   */
+  // ==========================================================
+  // 8. REGISTERED-USER PAGE GUARD
+  // ==========================================================
+
   const protectedPage = (
     renderPage: (userId: string) => ReactNode,
   ): ReactNode => {
     if (authLoading || roleLoading) {
-      return null;
+      return <LoadingScreen />;
     }
 
-    if (
-      !currentUserId ||
-      !hasRegisteredUserAccess(currentUserRole)
-    ) {
+    if (!authenticatedIdentity || !currentUserId) {
       return <Navigate to="/login" replace />;
+    }
+
+    if (!currentUserRole) {
+      return <RoleVerificationError />;
+    }
+
+    if (!hasRegisteredUserAccess(currentUserRole)) {
+      return (
+        <Navigate
+          to={roleLandingPath(currentUserRole)}
+          replace
+        />
+      );
     }
 
     if (isGoogleUser) {
       if (displayNameStatus === "loading") {
-        return null;
+        return <LoadingScreen />;
       }
 
       if (displayNameStatus === "error") {
-        return <DisplayNameVerificationError />;
+        return (
+          <DisplayNameVerificationError
+            onRetry={refreshDisplayNameStatus}
+          />
+        );
       }
 
       if (displayNameStatus === "missing") {
@@ -553,44 +927,63 @@ function App() {
     return renderPage(currentUserId);
   };
 
-  /**
-   * Display Name completion route.
-   *
-   * This route is exempt from the normal Display Name guard.
-   */
+  // ==========================================================
+  // 9. GOOGLE DISPLAY NAME COMPLETION GUARD
+  // ==========================================================
+
   const displayNamePage = (): ReactNode => {
     if (authLoading || roleLoading) {
-      return null;
+      return <LoadingScreen />;
     }
 
-    if (
-      !currentUserId ||
-      !hasRegisteredUserAccess(currentUserRole)
-    ) {
+    if (!authenticatedIdentity || !currentUserId) {
       return <Navigate to="/login" replace />;
+    }
+
+    if (!currentUserRole) {
+      return <RoleVerificationError />;
+    }
+
+    if (!hasRegisteredUserAccess(currentUserRole)) {
+      return (
+        <Navigate
+          to={roleLandingPath(currentUserRole)}
+          replace
+        />
+      );
     }
 
     if (!isGoogleUser) {
       return (
         <Navigate
-          to={authenticatedRootPath ?? "/home"}
+          to={
+            authenticatedRootPath ??
+            roleLandingPath(currentUserRole)
+          }
           replace
         />
       );
     }
 
     if (displayNameStatus === "loading") {
-      return null;
+      return <LoadingScreen />;
     }
 
     if (displayNameStatus === "error") {
-      return <DisplayNameVerificationError />;
+      return (
+        <DisplayNameVerificationError
+          onRetry={refreshDisplayNameStatus}
+        />
+      );
     }
 
     if (displayNameStatus === "complete") {
       return (
         <Navigate
-          to={authenticatedRootPath ?? "/home"}
+          to={
+            authenticatedRootPath ??
+            roleLandingPath(currentUserRole)
+          }
           replace
         />
       );
@@ -604,9 +997,11 @@ function App() {
     );
   };
 
+  // ==========================================================
+  // 10. ADMIN PAGE GUARD
+  // ==========================================================
+
   /**
-   * Administrative page guard.
-   *
    * Admins who authenticated through Google must also have
    * a verified stored Display Name before entering admin pages.
    */
@@ -615,24 +1010,37 @@ function App() {
     allowedRoles: readonly QRouteRole[] = ["admin"],
   ): ReactNode => {
     if (authLoading || roleLoading) {
-      return null;
+      return <LoadingScreen />;
     }
 
-    if (!currentUserId) {
+    if (!authenticatedIdentity || !currentUserId) {
       return <Navigate to="/login" replace />;
     }
 
-    if (!currentUserRole || !allowedRoles.includes(currentUserRole)) {
-      return <Navigate to="/home" replace />;
+    if (!currentUserRole) {
+      return <RoleVerificationError />;
+    }
+
+    if (!allowedRoles.includes(currentUserRole)) {
+      return (
+        <Navigate
+          to={roleLandingPath(currentUserRole)}
+          replace
+        />
+      );
     }
 
     if (isGoogleUser) {
       if (displayNameStatus === "loading") {
-        return null;
+        return <LoadingScreen />;
       }
 
       if (displayNameStatus === "error") {
-        return <DisplayNameVerificationError />;
+        return (
+          <DisplayNameVerificationError
+            onRetry={refreshDisplayNameStatus}
+          />
+        );
       }
 
       if (displayNameStatus === "missing") {
@@ -648,315 +1056,360 @@ function App() {
     return renderPage(currentUserId);
   };
 
+  // ==========================================================
+  // 11. VISITOR MAP ROUTE STATE
+  // ==========================================================
+
+  const homeRouteMode = resolveVisitorMapRoute({
+    authLoading,
+    roleLoading,
+    currentUserId,
+  });
+
+  // ==========================================================
+  // 12. OAUTH CALLBACK URL STATE
+  // ==========================================================
+
+  const oauthCallbackPending =
+    hasOAuthCallbackPayload();
+
+  // ==========================================================
+  // 13. ROUTES AND PROVIDERS
+  // ==========================================================
+
+  /**
+   * BrowserRouter is provided by main.tsx.
+   *
+   * Global providers remain mounted across authentication
+   * changes. Identity-specific state is managed internally
+   * by each provider.
+   */
+
   return (
-    <BrowserRouter>
+    <AccountProfileProvider
+      userId={currentUserId}
+      sessionGeneration={currentSessionGeneration}
+    >
       <RecentSearchesProvider
-        key={currentUserId ?? "anonymous"}
         userId={currentUserId}
       >
         <SavedItemsProvider
-          key={currentUserId ?? "anonymous"}
           userId={currentUserId}
+          sessionGeneration={currentSessionGeneration}
         >
-          <AccountProfileProvider
-            key={currentUserId ?? "anonymous"}
-            userId={currentUserId}
-          >
-            <Routes>
-              {/* Public routes */}
+          <Routes>
+            {/* =================================================
+                PUBLIC ROUTES
+            ================================================== */}
 
-              <Route
-                path="/"
-                element={
-                  window.location.hash.includes(
-                    "access_token",
-                  ) ||
-                  window.location.search.includes("code=") ||
-                  window.location.search.includes("error=") ? (
+            <Route
+              path="/"
+              element={
+                oauthCallbackPending ? (
+                  <Navigate
+                    to={`/auth/callback${window.location.search}${window.location.hash}`}
+                    replace
+                  />
+                ) : authLoading || roleLoading ? (
+                  <LoadingScreen />
+                ) : authenticatedIdentity ? (
+                  currentUserRole ? (
                     <Navigate
-                      to={`/auth/callback${window.location.search}${window.location.hash}`}
+                      to={roleLandingPath(currentUserRole)}
                       replace
                     />
-                  ) : authenticatedRootPath ? (
-                    <Navigate
-                      to={authenticatedRootPath}
-                      replace
-                    />
-                  ) : authLoading || roleLoading ? (
-                    null
                   ) : (
-                    <Landing
-                      currentUserId={currentUserId}
-                      onLogout={handleLogout}
-                    />
+                    <RoleVerificationError />
                   )
-                }
-              />
-
-              <Route
-                path="/base"
-                element={
+                ) : (
                   <Landing
                     currentUserId={currentUserId}
                     onLogout={handleLogout}
                   />
-                }
-              />
+                )
+              }
+            />
 
-              {/* Registered-user routes */}
+            <Route
+              path="/base"
+              element={
+                <Landing
+                  currentUserId={currentUserId}
+                  onLogout={handleLogout}
+                />
+              }
+            />
 
-              <Route
-                path="/home"
-                element={
-                  resolveVisitorMapRoute({
-                    authLoading,
-                    roleLoading,
-                    currentUserId,
-                  }) === "loading"
-                    ? null
-                    : resolveVisitorMapRoute({
-                        authLoading,
-                        roleLoading,
-                        currentUserId,
-                      }) === "visitor"
-                      ? (
-                          <Landing
-                            currentUserId={currentUserId}
-                            onLogout={handleLogout}
-                          />
-                        )
-                      : currentUserHomeRedirectPath ? (
-                          <Navigate
-                            to={currentUserHomeRedirectPath}
-                            replace
-                          />
-                        )
-                      : protectedPage((userId) => (
-                          <Home
-                            currentUserId={userId}
-                            onLogout={handleLogout}
-                          />
-                        ))
-                }
-              />
+            {/* =================================================
+                REGISTERED-USER ROUTES
+            ================================================== */}
 
-              <Route
-                path="/saved"
-                element={protectedPage((userId) => (
-                  <Saved
-                    currentUserId={userId}
+            <Route
+              path="/home"
+              element={
+                homeRouteMode === "loading" ? (
+                  <LoadingScreen />
+                ) : homeRouteMode === "visitor" ? (
+                  <Landing
+                    currentUserId={currentUserId}
                     onLogout={handleLogout}
                   />
-                ))}
-              />
-
-              <Route
-                path="/recents"
-                element={
-                  authLoading ? (
+                ) : !authenticatedIdentity ? (
+                  <Navigate to="/login" replace />
+                ) : !currentUserRole ? (
+                  roleLoading ? (
                     <LoadingScreen />
                   ) : (
-                    <RecentSearches
-                      key={currentUserId ?? "anonymous"}
-                      currentUserId={currentUserId}
-                      onLogout={handleLogout}
-                    />
+                    <RoleVerificationError />
                   )
-                }
-              />
-
-              <Route
-                path="/contribution"
-                element={protectedPage((userId) => (
-                  <Contribution
-                    currentUserId={userId}
-                    onLogout={handleLogout}
-                  />
-                ))}
-              />
-
-              <Route
-                path="/profile"
-                element={protectedPage((userId) => (
-                  <Profile
-                    currentUserId={userId}
-                    onLogout={handleLogout}
-                  />
-                ))}
-              />
-
-              <Route
-                path="/points-badges"
-                element={protectedPage(() => (
-                  <PointsBadges />
-                ))}
-              />
-
-              {/* Display Name completion */}
-
-              <Route
-                path="/register-user/display-name-gauth"
-                element={displayNamePage()}
-              />
-
-              {/* Community intentionally supports visitors */}
-
-              <Route
-                path="/community"
-                element={
-                  <Community
-                    currentUserId={currentUserId}
-                    onLogout={handleLogout}
-                  />
-                }
-              />
-
-              {/* Authentication callback */}
-
-              <Route
-                path="/auth/callback"
-                element={
-                  <AuthCallback
-                    authLoading={authLoading}
-                    currentUserId={currentUserId}
-                  />
-                }
-              />
-
-              {/* Visitor routes */}
-
-              <Route
-                path="/login"
-                element={<Login />}
-              />
-
-              <Route
-                path="/signup"
-                element={<SignUp />}
-              />
-
-              <Route
-                path="/otp"
-                element={<OTP />}
-              />
-
-              <Route
-                path="/forgot-password"
-                element={<Forgotpassword />}
-              />
-
-              <Route
-                path="/resetpassword"
-                element={<Resetpassword />}
-              />
-
-              <Route
-                path="/reset-password"
-                element={<Resetpassword />}
-              />
-
-              <Route
-                path="/reset-otp"
-                element={<ResetOTP />}
-              />
-
-              <Route
-                path="/terms-and-condition"
-                element={<TermsAndConditions />}
-              />
-
-              <Route
-                path="/privacy-policy"
-                element={<PrivacyPolicy />}
-              />
-
-              {/* Admin routes */}
-
-              <Route
-                path="/admin"
-                element={adminPage(() => (
+                ) : currentUserHomeRedirectPath ? (
                   <Navigate
-                    to="/admin/dashboard"
+                    to={currentUserHomeRedirectPath}
                     replace
                   />
-                ))}
-              />
+                ) : (
+                  protectedPage((userId) => (
+                    <Home
+                      currentUserId={userId}
+                      onLogout={handleLogout}
+                    />
+                  ))
+                )
+              }
+            />
 
-              <Route
-                path="/admin/fare-management"
-                element={adminPage(() => (
-                  <FareManagement />
-                ))}
-              />
+            <Route
+              path="/saved"
+              element={protectedPage((userId) => (
+                <Saved
+                  currentUserId={userId}
+                  onLogout={handleLogout}
+                />
+              ))}
+            />
 
-              <Route
-                path="/admin/base"
-                element={adminPage((userId) => (
-                  <AdminBase
-                    currentUserId={userId}
+            <Route
+              path="/recents"
+              element={
+                authLoading ? (
+                  <LoadingScreen />
+                ) : (
+                  <RecentSearches
+                    key={sessionProviderKey}
+                    currentUserId={currentUserId}
                     onLogout={handleLogout}
                   />
-                ))}
-              />
+                )
+              }
+            />
 
-              <Route
-                path="/admin/dashboard"
-                element={adminPage(() => (
-                  <Dashboard />
-                ))}
-              />
+            <Route
+              path="/contribution"
+              element={protectedPage((userId) => (
+                <Contribution
+                  currentUserId={userId}
+                  onLogout={handleLogout}
+                />
+              ))}
+            />
 
-              <Route
-                path="/admin/routes"
-                element={adminPage(() => (
-                  <RouteManagement />
-                ), ["admin", "moderator"])}
-              />
+            <Route
+              path="/profile"
+              element={protectedPage((userId) => (
+                <Profile
+                  currentUserId={userId}
+                  onLogout={handleLogout}
+                />
+              ))}
+            />
 
-              <Route
-                path="/admin/post-management"
-                element={adminPage(() => (
-                  <PostManagement />
-                ))}
-              />
+            <Route
+              path="/points-badges"
+              element={protectedPage(() => (
+                <PointsBadges />
+              ))}
+            />
 
-              <Route
-                path="/admin/reports"
-                element={adminPage(() => (
-                  <Reports />
-                ))}
-              />
+            {/* =================================================
+                GOOGLE DISPLAY NAME COMPLETION
+            ================================================== */}
 
-              <Route
-                path="/admin/notifications"
-                element={adminPage(() => <Notifications />)}
-              />
+            <Route
+              path="/register-user/display-name-gauth"
+              element={displayNamePage()}
+            />
 
-              <Route
-                path="/admin/users"
-                element={adminPage(() => (
-                  <UserManagement />
-                ))}
-              />
+            {/* =================================================
+                COMMUNITY
+                Visitors may view the community.
+            ================================================== */}
 
-              <Route
-                path="/admin/settings"
-                element={adminPage(() => (
-                  <Settings />
-                ))}
-              />
+            <Route
+              path="/community"
+              element={
+                <Community
+                  currentUserId={currentUserId}
+                  onLogout={handleLogout}
+                />
+              }
+            />
 
-              {/* Unknown routes */}
+            {/* =================================================
+                AUTHENTICATION CALLBACK
+            ================================================== */}
 
-              <Route
-                path="*"
-                element={<Navigate to="/" replace />}
-              />
-            </Routes>
-          </AccountProfileProvider>
+            <Route
+              path="/auth/callback"
+              element={
+                <AuthCallback
+                  authLoading={authLoading}
+                  currentUserId={currentUserId}
+                />
+              }
+            />
+
+            {/* =================================================
+                VISITOR AUTHENTICATION ROUTES
+            ================================================== */}
+
+            <Route
+              path="/login"
+              element={<Login />}
+            />
+
+            <Route
+              path="/signup"
+              element={<SignUp />}
+            />
+
+            <Route
+              path="/otp"
+              element={<OTP />}
+            />
+
+            <Route
+              path="/forgot-password"
+              element={<Forgotpassword />}
+            />
+
+            <Route
+              path="/resetpassword"
+              element={<Resetpassword />}
+            />
+
+            <Route
+              path="/reset-password"
+              element={<Resetpassword />}
+            />
+
+            <Route
+              path="/reset-otp"
+              element={<ResetOTP />}
+            />
+
+            <Route
+              path="/terms-and-condition"
+              element={<TermsAndConditions />}
+            />
+
+            <Route
+              path="/privacy-policy"
+              element={<PrivacyPolicy />}
+            />
+
+            {/* =================================================
+                ADMIN ROUTES
+            ================================================== */}
+
+            <Route
+              path="/admin"
+              element={adminPage(() => (
+                <Navigate
+                  to="/admin/dashboard"
+                  replace
+                />
+              ))}
+            />
+
+            <Route
+              path="/admin/fare-management"
+              element={adminPage(() => (
+                <FareManagement />
+              ))}
+            />
+
+            <Route
+              path="/admin/base"
+              element={adminPage((userId) => (
+                <AdminBase
+                  currentUserId={userId}
+                  onLogout={handleLogout}
+                />
+              ))}
+            />
+
+            <Route
+              path="/admin/dashboard"
+              element={adminPage(() => (
+                <Dashboard />
+              ))}
+            />
+
+            <Route
+              path="/admin/routes"
+              element={adminPage(
+                () => <RouteManagement />,
+                ["admin", "moderator"],
+              )}
+            />
+
+            <Route
+              path="/admin/post-management"
+              element={adminPage(() => (
+                <PostManagement />
+              ))}
+            />
+
+            <Route
+              path="/admin/reports"
+              element={adminPage(() => (
+                <Reports />
+              ))}
+            />
+
+            <Route
+              path="/admin/notifications"
+              element={adminPage(() => (
+                <Notifications />
+              ))}
+            />
+
+            <Route
+              path="/admin/users"
+              element={adminPage(() => (
+                <UserManagement />
+              ))}
+            />
+
+            <Route
+              path="/admin/settings"
+              element={adminPage(() => (
+                <Settings />
+              ))}
+            />
+
+            {/* =================================================
+                UNKNOWN ROUTES
+            ================================================== */}
+
+            <Route
+              path="*"
+              element={<Navigate to="/" replace />}
+            />
+          </Routes>
         </SavedItemsProvider>
       </RecentSearchesProvider>
-    </BrowserRouter>
+    </AccountProfileProvider>
   );
 }
 

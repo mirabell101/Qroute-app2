@@ -28,7 +28,7 @@ import {
 } from "@/lib/adminFareApi";
 
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
-import { supabase } from "@/lib/supabase";
+import { logoutCurrentDevice } from "@/lib/authLogout";
 
 import {
   LayoutDashboard,
@@ -430,6 +430,9 @@ export default function FareManagement() {
   const [isSaving, setIsSaving] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
 
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+
   const [roadVariantId, setRoadVariantId] = useState("");
   const [roadEditor, setRoadEditor] = useState<RoadRuleForm | null>(null);
   const [roadEditorError, setRoadEditorError] = useState<string | null>(
@@ -609,13 +612,30 @@ export default function FareManagement() {
   // LOGOUT
   // ---------------------------------------------------
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut({ scope: "local" });
+  const handleLogout = async (): Promise<void> => {
+    if (isLoggingOut) return;
 
-    localStorage.removeItem("qroute_current_user");
-    sessionStorage.removeItem("qroute_current_user");
+    setIsLoggingOut(true);
+    setLogoutError(null);
 
-    navigate("/login", { replace: true });
+    try {
+      await logoutCurrentDevice();
+
+      navigate("/login", {
+        replace: true,
+      });
+    } catch (error: unknown) {
+      console.error(
+        "Fare Management logout failed:",
+        error,
+      );
+
+      setLogoutError(
+        "Unable to sign out. Please try again.",
+      );
+    } finally {
+      setIsLoggingOut(false);
+    }
   };
 
   // ---------------------------------------------------
@@ -1338,12 +1358,22 @@ export default function FareManagement() {
 
           <button
             type="button"
+            disabled={isLoggingOut}
             onClick={() => void handleLogout()}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <LogOut size={17} />
-            Sign Out
+            {isLoggingOut ? "Signing Out..." : "Sign Out"}
           </button>
+
+          {logoutError && (
+            <p
+              role="alert"
+              className="mt-2 text-center text-xs text-red-300"
+            >
+              {logoutError}
+            </p>
+          )}
         </div>
       </aside>
 

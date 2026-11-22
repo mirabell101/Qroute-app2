@@ -25,6 +25,7 @@ describe("admin header controls", () => {
         source,
         `${file} should import the existing QRoute logo asset`,
       ).toContain('qrouteWhiteLogo from "@/assets/White Qroute Logo.png"');
+
       expect(
         source,
         `${file} should render the QRoute logo image`,
@@ -34,11 +35,10 @@ describe("admin header controls", () => {
 
   it("renders Sign Out in every admin sidebar", () => {
     for (const [file, source] of adminPageSources) {
-      expect(source, `${file} should render Sign Out`).toContain("Sign Out");
       expect(
         source,
-        `${file} should use the existing Supabase sign-out flow`,
-      ).toContain('supabase.auth.signOut({ scope: "local" })');
+        `${file} should render Sign Out`,
+      ).toContain("Sign Out");
     }
   });
 });

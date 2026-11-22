@@ -6,7 +6,7 @@ import AccountAvatar from "@/components/account/AccountAvatar";
 import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
-import { supabase } from "@/lib/supabase";
+import { logoutCurrentDevice } from "@/lib/authLogout";
 import {
   LayoutDashboard,
   Route,
@@ -70,6 +70,8 @@ export default function Settings() {
   const { userId, account } = useAccountProfile();
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+const [logoutError, setLogoutError] = useState<string | null>(null);
 
   const adminDisplayName =
     account?.displayName?.trim() ||
@@ -78,13 +80,26 @@ export default function Settings() {
     "Admin";
   const adminEmail = account?.email || "Administrator";
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut({ scope: "local" });
-    localStorage.removeItem("qroute_current_user");
-    sessionStorage.removeItem("qroute_current_user");
-    navigate("/login", { replace: true });
-  };
+const handleLogout = async () => {
+  if (isLoggingOut) return;
 
+  setIsLoggingOut(true);
+  setLogoutError(null);
+
+  try {
+    await logoutCurrentDevice();
+
+    navigate("/login", { replace: true });
+  } catch (error: unknown) {
+    setLogoutError(
+      error instanceof Error
+        ? error.message
+        : "Unable to sign out. Please try again.",
+    );
+  } finally {
+    setIsLoggingOut(false);
+  }
+};
   // Password modal
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -284,7 +299,14 @@ export default function Settings() {
             <MapPinned size={17} />
             Preview of the System
           </button>
-
+{logoutError && (
+  <p
+    role="alert"
+    className="mt-3 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-200"
+  >
+    {logoutError}
+  </p>
+)}
           <button
             type="button"
             onClick={() => void handleLogout()}

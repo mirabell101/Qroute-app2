@@ -11,7 +11,7 @@ import {
 } from "@/lib/adminApi";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
 import { parseReportIdParam } from "@/pages/admin/notifications/notificationsModel";
-import { supabase } from "@/lib/supabase";
+import { logoutCurrentDevice } from "@/lib/authLogout";
 import {
   LayoutDashboard,
   Route as RouteIcon,
@@ -70,13 +70,28 @@ export default function Reports() {
   const [retryCount, setRetryCount] = useState(0);
   const [deepLinkNotice, setDeepLinkNotice] = useState("");
   const deepLinkHandledRef = useRef(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+const [logoutError, setLogoutError] = useState<string | null>(null);
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut({ scope: "local" });
-    localStorage.removeItem("qroute_current_user");
-    sessionStorage.removeItem("qroute_current_user");
+const handleLogout = async () => {
+  if (isLoggingOut) return;
+
+  setIsLoggingOut(true);
+  setLogoutError(null);
+
+  try {
+    await logoutCurrentDevice();
     navigate("/login", { replace: true });
-  };
+  } catch (error: unknown) {
+    setLogoutError(
+      error instanceof Error
+        ? error.message
+        : "Unable to sign out. Please try again.",
+    );
+  } finally {
+    setIsLoggingOut(false);
+  }
+};
 
   useEffect(() => {
     let active = true;
@@ -319,14 +334,23 @@ export default function Reports() {
             <MapPinned size={17} />
             Preview of the System
           </button>
+              {logoutError && (
+                <p
+                  role="alert"
+                  className="mt-3 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-200"
+                >
+                  {logoutError}
+                </p>
+              )}
 
           <button
             type="button"
+            disabled={isLoggingOut}
             onClick={() => void handleLogout()}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <LogOut size={17} />
-            Sign Out
+            {isLoggingOut ? "Signing Out..." : "Sign Out"}
           </button>
         </div>
       </aside>

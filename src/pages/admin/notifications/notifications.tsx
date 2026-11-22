@@ -1,16 +1,21 @@
+
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 import AccountAvatar from "@/components/account/AccountAvatar";
 import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
+
 import {
   getAdminNotifications,
   markAdminNotificationRead,
   type AdminNotificationRecord,
 } from "@/lib/adminApi";
-import { supabase } from "@/lib/supabase";
+
+import { logoutCurrentDevice } from "@/lib/authLogout";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
+
 import {
   AlertTriangle,
   Bell,
@@ -26,6 +31,7 @@ import {
   Settings,
   Users,
 } from "lucide-react";
+
 import {
   buildReportDeepLink,
   countUnreadNotifications,
@@ -44,7 +50,9 @@ const navigationItems = [
 
 const formatDate = (value: string) => {
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) return value;
+
   return date.toLocaleString("en-PH", {
     dateStyle: "medium",
     timeStyle: "short",
@@ -53,50 +61,87 @@ const formatDate = (value: string) => {
 
 export default function Notifications() {
   const navigate = useNavigate();
+
   const { userId, account } = useAccountProfile();
-  const [notifications, setNotifications] = useState<AdminNotificationRecord[]>([]);
+
+  const [notifications, setNotifications] =
+    useState<AdminNotificationRecord[]>([]);
+
   const [unreadCount, setUnreadCount] = useState(0);
+
   const [loading, setLoading] = useState(true);
+
   const [errorMessage, setErrorMessage] = useState("");
+
   const [retryCount, setRetryCount] = useState(0);
+
   const [markingId, setMarkingId] = useState<string | null>(null);
+
   const [markError, setMarkError] = useState("");
+
   const [markSuccess, setMarkSuccess] = useState("");
+
   const [bellRefreshKey, setBellRefreshKey] = useState(0);
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Centralized logout state.
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  const [logoutError, setLogoutError] = useState("");
 
   const adminDisplayName =
     account?.displayName?.trim() ||
     account?.username?.trim() ||
-    (account?.email ? account.email.split("@")[0] : null) ||
+    (account?.email
+      ? account.email.split("@")[0]
+      : null) ||
     "Admin";
+
   const adminEmail = account?.email || "Administrator";
+
   const effectiveErrorMessage = userId
     ? errorMessage
     : "Please sign in to continue.";
+
   const viewState = getNotificationsViewState(
     notifications,
     Boolean(userId) && loading,
     effectiveErrorMessage,
   );
 
+  // ----------------------------------------------------------
+  // LOAD NOTIFICATIONS
+  // ----------------------------------------------------------
+
   useEffect(() => {
-    if (!userId) return;
+    if (!userId) {
+      setNotifications([]);
+      setUnreadCount(0);
+      setLoading(false);
+      return;
+    }
 
     let active = true;
+
     void (async () => {
       setLoading(true);
       setErrorMessage("");
+
       try {
         const result = await getAdminNotifications(userId);
+
         if (!active) return;
+
         setNotifications(result.notifications);
         setUnreadCount(result.unreadCount);
         setErrorMessage("");
       } catch (error: unknown) {
         if (!active) return;
+
         setNotifications([]);
         setUnreadCount(0);
+
         setErrorMessage(
           error instanceof Error
             ? error.message
@@ -112,27 +157,69 @@ export default function Notifications() {
     };
   }, [userId, retryCount]);
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut({ scope: "local" });
-    localStorage.removeItem("qroute_current_user");
-    sessionStorage.removeItem("qroute_current_user");
-    navigate("/login", { replace: true });
+  // ----------------------------------------------------------
+  // CENTRALIZED LOGOUT
+  // ----------------------------------------------------------
+
+  const handleLogout = async (): Promise<void> => {
+    if (isLoggingOut) return;
+
+    setIsLoggingOut(true);
+    setLogoutError("");
+
+    try {
+      await logoutCurrentDevice();
+
+      navigate("/login", {
+        replace: true,
+      });
+    } catch (error: unknown) {
+      console.error(
+        "Notifications logout failed:",
+        error,
+      );
+
+      setLogoutError(
+        "Unable to sign out. Please try again.",
+      );
+    } finally {
+      setIsLoggingOut(false);
+    }
   };
 
-  const handleMarkRead = async (notification: AdminNotificationRecord) => {
+  // ----------------------------------------------------------
+  // MARK NOTIFICATION AS READ
+  // ----------------------------------------------------------
+
+  const handleMarkRead = async (
+    notification: AdminNotificationRecord,
+  ) => {
     if (!userId || markingId) return;
+
     setMarkingId(notification.id);
     setMarkError("");
     setMarkSuccess("");
+
     try {
-      await markAdminNotificationRead(userId, notification.id);
-      const updatedNotifications = markNotificationReadLocally(
-        notifications,
+      await markAdminNotificationRead(
+        userId,
         notification.id,
       );
+
+      const updatedNotifications =
+        markNotificationReadLocally(
+          notifications,
+          notification.id,
+        );
+
       setNotifications(updatedNotifications);
-      setUnreadCount(countUnreadNotifications(updatedNotifications));
+
+      setUnreadCount(
+        countUnreadNotifications(updatedNotifications),
+      );
+
       setMarkSuccess("Notification marked as read.");
+
       setBellRefreshKey((current) => current + 1);
     } catch (error: unknown) {
       setMarkError(
@@ -145,10 +232,25 @@ export default function Notifications() {
     }
   };
 
-  const handleViewReport = (notification: AdminNotificationRecord) => {
-    const destination = buildReportDeepLink(notification.reportId);
-    if (destination) navigate(destination);
+  // ----------------------------------------------------------
+  // VIEW REPORT
+  // ----------------------------------------------------------
+
+  const handleViewReport = (
+    notification: AdminNotificationRecord,
+  ) => {
+    const destination = buildReportDeepLink(
+      notification.reportId,
+    );
+
+    if (destination) {
+      navigate(destination);
+    }
   };
+
+  // ----------------------------------------------------------
+  // RENDER
+  // ----------------------------------------------------------
 
   return (
     <div className="min-h-screen bg-[#F4F8FC] text-slate-800">
@@ -161,9 +263,13 @@ export default function Notifications() {
         />
       )}
 
+      {/* SIDEBAR */}
+
       <aside
         className={`fixed inset-y-0 left-0 z-40 flex w-[250px] flex-col bg-[#102E4D] text-white transition-transform duration-200 md:translate-x-0 ${
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+          sidebarOpen
+            ? "translate-x-0"
+            : "-translate-x-full"
         }`}
       >
         <div className="flex h-[105px] items-center border-b border-white/10 px-7">
@@ -173,6 +279,7 @@ export default function Notifications() {
               alt="QRoute Logo"
               className="h-auto w-[150px] object-contain"
             />
+
             <p className="mt-0.5 text-xs tracking-wide text-blue-200">
               ADMINISTRATION
             </p>
@@ -183,10 +290,14 @@ export default function Notifications() {
           <p className="mb-3 px-3 text-[11px] font-semibold uppercase tracking-[2px] text-slate-400">
             Main Menu
           </p>
+
           <nav className="space-y-1.5">
             {navigationItems.map((item) => {
               const Icon = item.icon;
-              const destination = getAdminNavigationDestination(item.label);
+
+              const destination =
+                getAdminNavigationDestination(item.label);
+
               return (
                 <button
                   key={item.label}
@@ -194,7 +305,10 @@ export default function Notifications() {
                   disabled={!destination}
                   onClick={() => {
                     setSidebarOpen(false);
-                    if (destination) navigate(destination);
+
+                    if (destination) {
+                      navigate(destination);
+                    }
                   }}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${
                     destination
@@ -210,6 +324,8 @@ export default function Notifications() {
           </nav>
         </div>
 
+        {/* SIDEBAR BOTTOM */}
+
         <div className="mt-auto p-5">
           <button
             type="button"
@@ -219,16 +335,29 @@ export default function Notifications() {
             <MapPinned size={17} />
             Preview of the System
           </button>
+
           <button
             type="button"
+            disabled={isLoggingOut}
             onClick={() => void handleLogout()}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <LogOut size={17} />
-            Sign Out
+            {isLoggingOut ? "Signing Out..." : "Sign Out"}
           </button>
+
+          {logoutError && (
+            <p
+              role="alert"
+              className="mt-2 text-center text-xs text-red-300"
+            >
+              {logoutError}
+            </p>
+          )}
         </div>
       </aside>
+
+      {/* MAIN CONTENT */}
 
       <main className="min-h-screen md:ml-[250px]">
         <header className="sticky top-0 z-20 flex min-h-[86px] items-center justify-between border-b border-slate-200 bg-white/95 px-5 backdrop-blur sm:px-8 lg:px-10">
@@ -241,10 +370,12 @@ export default function Notifications() {
             >
               <Menu size={21} />
             </button>
+
             <div>
               <h2 className="text-xl font-bold tracking-tight text-[#102E4D] sm:text-2xl">
                 Notifications
               </h2>
+
               <p className="mt-1 text-xs text-slate-500 sm:text-sm">
                 Moderation events for reported community posts
               </p>
@@ -256,17 +387,21 @@ export default function Notifications() {
               adminUserId={userId ?? ""}
               refreshKey={bellRefreshKey}
             />
+
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
+
             <div className="flex items-center gap-2.5">
               <AccountAvatar
                 account={account}
                 className="h-10 w-10 bg-[#DCE9F7] font-bold text-[#102E4D]"
                 iconSize={20}
               />
+
               <div className="hidden text-left sm:block">
                 <p className="text-sm font-semibold text-slate-800">
                   {adminDisplayName}
                 </p>
+
                 <p
                   className="max-w-[180px] truncate text-xs text-slate-500"
                   title={adminEmail}
@@ -284,18 +419,26 @@ export default function Notifications() {
               <h3 className="text-2xl font-bold text-slate-900 sm:text-3xl">
                 Admin Notifications
               </h3>
+
               <p className="mt-2 text-sm text-slate-500">
                 Review moderation events created when a post reaches the report
                 threshold.
               </p>
             </div>
+
             <div className="flex w-fit items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 text-orange-600">
                 <Bell size={20} />
               </div>
+
               <div>
-                <p className="text-xs text-slate-500">Unread notifications</p>
-                <p className="text-xl font-bold text-[#102E4D]">{unreadCount}</p>
+                <p className="text-xs text-slate-500">
+                  Unread notifications
+                </p>
+
+                <p className="text-xl font-bold text-[#102E4D]">
+                  {unreadCount}
+                </p>
               </div>
             </div>
           </section>
@@ -308,6 +451,7 @@ export default function Notifications() {
               {markError}
             </p>
           )}
+
           {markSuccess && (
             <p
               role="status"
@@ -322,6 +466,7 @@ export default function Notifications() {
               <p className="font-semibold text-slate-700">
                 Loading notifications…
               </p>
+
               <p className="mt-1 text-sm text-slate-500">
                 Reading moderation events from the server.
               </p>
@@ -334,12 +479,15 @@ export default function Notifications() {
                 size={28}
                 className="mx-auto text-red-500"
               />
+
               <p className="mt-3 font-semibold text-slate-700">
                 Notifications could not be loaded
               </p>
+
               <p className="mt-1 text-sm text-slate-500">
                 {effectiveErrorMessage}
               </p>
+
               <button
                 type="button"
                 onClick={() => {
@@ -354,10 +502,15 @@ export default function Notifications() {
 
           {viewState === "empty" && (
             <div className="rounded-2xl border border-slate-200 bg-white px-6 py-16 text-center">
-              <Bell size={28} className="mx-auto text-slate-400" />
+              <Bell
+                size={28}
+                className="mx-auto text-slate-400"
+              />
+
               <p className="mt-3 font-semibold text-slate-700">
                 No notifications yet
               </p>
+
               <p className="mt-1 text-sm text-slate-500">
                 You will be notified here when community posts need moderation.
               </p>
@@ -367,7 +520,10 @@ export default function Notifications() {
           {viewState === "ready" && (
             <div className="space-y-3">
               {notifications.map((notification) => {
-                const reportLink = buildReportDeepLink(notification.reportId);
+                const reportLink = buildReportDeepLink(
+                  notification.reportId,
+                );
+
                 return (
                   <article
                     key={notification.id}
@@ -377,11 +533,13 @@ export default function Notifications() {
                       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#DFEAF4] text-[#102E4D]">
                         <Bell size={19} />
                       </div>
+
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <h4 className="font-bold text-slate-900">
                             {notification.title}
                           </h4>
+
                           <span
                             className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
                               notification.isRead
@@ -394,12 +552,15 @@ export default function Notifications() {
                             ) : (
                               <Clock size={12} />
                             )}
+
                             {notification.isRead ? "Read" : "Unread"}
                           </span>
                         </div>
+
                         <p className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-600">
                           {notification.message}
                         </p>
+
                         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
                           <span>
                             Report:{" "}
@@ -407,12 +568,14 @@ export default function Notifications() {
                               {notification.reportId ?? "Not linked"}
                             </strong>
                           </span>
+
                           <time dateTime={notification.createdAt}>
                             {formatDate(notification.createdAt)}
                           </time>
                         </div>
                       </div>
                     </div>
+
                     <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
                       <button
                         type="button"
@@ -422,6 +585,7 @@ export default function Notifications() {
                       >
                         View Report
                       </button>
+
                       {!notification.isRead && (
                         <button
                           type="button"

@@ -1,48 +1,121 @@
 
 import type { AccountData } from "@/lib/accountApi";
 
+// ============================================================
+// TYPES
+// ============================================================
+
 export interface AccountProfileSnapshot {
   userId: string | null;
+  sessionGeneration: number | null;
   account: AccountData | null;
   loading: boolean;
   error: string | null;
 }
 
+export type AccountAvatarView =
+  | {
+      type: "photo";
+      url: string;
+      label: string;
+    }
+  | {
+      type: "initials";
+      initials: string;
+      label: string;
+    }
+  | {
+      type: "icon";
+      label: string;
+    };
+
+// ============================================================
+// PENDING LOAD CACHE
+// ============================================================
+
+/**
+ * Pending profile requests are unique to a session generation.
+ *
+ * Two sessions belonging to the same user must never share
+ * a pending profile request.
+ */
 const pendingAccountProfileLoads = new Map<
   string,
   Promise<AccountProfileSnapshot>
 >();
 
+function createProfileLoadKey(
+  userId: string,
+  sessionGeneration: number,
+): string {
+  return JSON.stringify([
+    userId,
+    sessionGeneration,
+  ]);
+}
+
+// ============================================================
+// STATE SELECTION
+// ============================================================
+
 export function selectAccountProfileState(
   state: AccountProfileSnapshot,
   activeUserId: string | null,
+  activeSessionGeneration: number | null,
 ): AccountProfileSnapshot {
-  if (state.userId === activeUserId) return state;
-
-  return {
-    userId: activeUserId,
-    account: null,
-    loading: Boolean(activeUserId),
-    error: null,
-  };
-}
-
-export function updateAccountProfileState(
-  state: AccountProfileSnapshot,
-  activeUserId: string | null,
-  account: AccountData,
-): AccountProfileSnapshot {
-  if (!activeUserId || state.userId !== activeUserId) {
-    return selectAccountProfileState(state, activeUserId);
+  if (
+    state.userId === activeUserId &&
+    state.sessionGeneration === activeSessionGeneration
+  ) {
+    return state;
   }
 
   return {
     userId: activeUserId,
+    sessionGeneration: activeSessionGeneration,
+    account: null,
+    loading:
+      Boolean(activeUserId) &&
+      activeSessionGeneration !== null,
+    error: null,
+  };
+}
+
+// ============================================================
+// STATE UPDATE
+// ============================================================
+
+export function updateAccountProfileState(
+  state: AccountProfileSnapshot,
+  activeUserId: string | null,
+  activeSessionGeneration: number | null,
+  account: AccountData,
+): AccountProfileSnapshot {
+  if (
+    !activeUserId ||
+    activeSessionGeneration === null ||
+    state.userId !== activeUserId ||
+    state.sessionGeneration !== activeSessionGeneration
+  ) {
+    return selectAccountProfileState(
+      state,
+      activeUserId,
+      activeSessionGeneration,
+    );
+  }
+
+  return {
+    userId: activeUserId,
+    sessionGeneration: activeSessionGeneration,
     account,
     loading: false,
     error: null,
   };
 }
+
+// ============================================================
+// DISPLAY LABEL
+// ============================================================
 
 export function getAccountDisplayLabel(
   account: AccountData | null,
@@ -54,6 +127,10 @@ export function getAccountDisplayLabel(
     null
   );
 }
+
+// ============================================================
+// ACCOUNT INITIALS
+// ============================================================
 
 export function getAccountInitials(
   account: AccountData | null,
@@ -77,20 +154,29 @@ export function getAccountInitials(
   return initials.toUpperCase();
 }
 
+// ============================================================
+// ACCOUNT PROFILE LOADING
+// ============================================================
+
 export async function loadAccountProfile(
   userId: string,
-  loadAccount: (userId: string) => Promise<AccountData>,
+  sessionGeneration: number,
+  loadAccount: (
+    userId: string,
+  ) => Promise<AccountData>,
 ): Promise<AccountProfileSnapshot> {
   try {
     return {
       userId,
+      sessionGeneration,
       account: await loadAccount(userId),
       loading: false,
       error: null,
     };
-  } catch (cause) {
+  } catch (cause: unknown) {
     return {
       userId,
+      sessionGeneration,
       account: null,
       loading: false,
       error:
@@ -101,34 +187,63 @@ export async function loadAccountProfile(
   }
 }
 
+// ============================================================
+// DEDUPLICATED PROFILE LOADING
+// ============================================================
+
 export function loadAccountProfileOnce(
   userId: string,
-  loadAccount: (userId: string) => Promise<AccountData>,
+  sessionGeneration: number,
+  loadAccount: (
+    userId: string,
+  ) => Promise<AccountData>,
 ): Promise<AccountProfileSnapshot> {
-  const pending = pendingAccountProfileLoads.get(userId);
+  const cacheKey = createProfileLoadKey(
+    userId,
+    sessionGeneration,
+  );
 
-  if (pending) return pending;
+  const pending = pendingAccountProfileLoads.get(cacheKey);
 
-  const request = loadAccountProfile(userId, loadAccount);
+  if (pending) {
+    return pending;
+  }
 
-  pendingAccountProfileLoads.set(userId, request);
+  const request = loadAccountProfile(
+    userId,
+    sessionGeneration,
+    loadAccount,
+  );
+
+  pendingAccountProfileLoads.set(
+    cacheKey,
+    request,
+  );
 
   void request.then(() => {
-    if (pendingAccountProfileLoads.get(userId) === request) {
-      pendingAccountProfileLoads.delete(userId);
+    if (
+      pendingAccountProfileLoads.get(cacheKey) === request
+    ) {
+      pendingAccountProfileLoads.delete(cacheKey);
     }
   });
 
   return request;
 }
 
+// ============================================================
+// ACCOUNT AVATAR
+// ============================================================
+
 export function selectAccountAvatar(
   account: AccountData | null,
   failedPhotoUrls: readonly string[] = [],
 ): AccountAvatarView {
-  const label = getAccountDisplayLabel(account) ?? "Profile";
+  const label =
+    getAccountDisplayLabel(account) ?? "Profile";
 
-  const uploadedPhotoUrl = account?.profilePhotoUrl?.trim() || null;
+  const uploadedPhotoUrl =
+    account?.profilePhotoUrl?.trim() || null;
 
   if (
     uploadedPhotoUrl &&
@@ -170,8 +285,3 @@ export function selectAccountAvatar(
     label,
   };
 }
-
-export type AccountAvatarView =
-  | { type: "photo"; url: string; label: string }
-  | { type: "initials"; initials: string; label: string }
-  | { type: "icon"; label: string };

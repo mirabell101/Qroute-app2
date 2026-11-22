@@ -1,17 +1,22 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
 import AccountAvatar from "@/components/account/AccountAvatar";
 import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
+
 import {
   getAdminReports,
   getAdminSummary,
   type AdminSummary,
 } from "@/lib/adminApi";
+
+import { logoutCurrentDevice } from "@/lib/authLogout";
+
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
-import { supabase } from "@/lib/supabase";
+
 import {
   LayoutDashboard,
   Route,
@@ -31,7 +36,12 @@ import {
   Eye,
   Activity,
 } from "lucide-react";
+
 import type { LucideIcon } from "lucide-react";
+
+// ============================================================
+// DASHBOARD SUMMARY CARDS
+// ============================================================
 
 const summaryCards: Array<{
   title: string;
@@ -75,6 +85,10 @@ const summaryCards: Array<{
   },
 ];
 
+// ============================================================
+// NAVIGATION
+// ============================================================
+
 const navigationItems = [
   { label: "Dashboard", icon: LayoutDashboard, active: true },
   { label: "Route Management", icon: Route, active: false },
@@ -85,14 +99,22 @@ const navigationItems = [
   { label: "Settings", icon: Settings, active: false },
 ];
 
+// ============================================================
+// DISPLAY HELPERS
+// ============================================================
+
 function formatActivityTime(value: string): string {
   const date = new Date(value);
+
   return Number.isNaN(date.getTime())
     ? "Time unavailable"
     : date.toLocaleString();
 }
 
-function getActivityIcon(category: string, actionKey: string): LucideIcon {
+function getActivityIcon(
+  category: string,
+  actionKey: string,
+): LucideIcon {
   const normalizedCategory = category.toLowerCase();
   const normalizedAction = actionKey.toLowerCase();
 
@@ -142,45 +164,108 @@ function formatCategory(category: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+// ============================================================
+// DASHBOARD
+// ============================================================
+
 export default function Dashboard() {
   const navigate = useNavigate();
+
   const { userId, account } = useAccountProfile();
 
-  const [summary, setSummary] = useState<AdminSummary | null>(null);
-  const [pendingReportsCount, setPendingReportsCount] = useState<number | null>(
-    null,
-  );
+  const [summary, setSummary] =
+    useState<AdminSummary | null>(null);
+
+  const [pendingReportsCount, setPendingReportsCount] =
+    useState<number | null>(null);
+
   const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const [errorMessage, setErrorMessage] =
+    useState<string | null>(null);
+
   const [retryCount, setRetryCount] = useState(0);
+
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  const [logoutError, setLogoutError] =
+    useState<string | null>(null);
+
+  // ----------------------------------------------------------
+  // ADMIN PROFILE DISPLAY
+  // ----------------------------------------------------------
 
   const adminDisplayName =
     account?.displayName?.trim() ||
     account?.username?.trim() ||
-    (account?.email ? account.email.split("@")[0] : null) ||
+    (account?.email
+      ? account.email.split("@")[0]
+      : null) ||
     "Admin";
 
-  const adminEmail = account?.email || "Administrator";
+  const adminEmail =
+    account?.email || "Administrator";
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut({ scope: "local" });
-    localStorage.removeItem("qroute_current_user");
-    sessionStorage.removeItem("qroute_current_user");
-    navigate("/login", { replace: true });
+  // ----------------------------------------------------------
+  // CENTRALIZED LOGOUT
+  // ----------------------------------------------------------
+
+  /**
+   * Ordinary current-device logout.
+   *
+   * Delegates authentication cleanup to the shared logout
+   * handler rather than directly signing out or manually
+   * manipulating Supabase session storage.
+   *
+   * Navigation occurs only after logout succeeds.
+   */
+  const handleLogout = async (): Promise<void> => {
+    if (isLoggingOut) {
+      return;
+    }
+
+    setIsLoggingOut(true);
+    setLogoutError(null);
+
+    try {
+      await logoutCurrentDevice();
+
+      navigate("/login", {
+        replace: true,
+      });
+    } catch (error: unknown) {
+      console.error(
+        "Dashboard logout failed:",
+        error,
+      );
+
+      setLogoutError(
+        "Unable to sign out. Please try again.",
+      );
+    } finally {
+      setIsLoggingOut(false);
+    }
   };
+
+  // ----------------------------------------------------------
+  // LOAD DASHBOARD DATA
+  // ----------------------------------------------------------
 
   useEffect(() => {
     let active = true;
 
-    const loadSummary = async () => {
+    const loadSummary = async (): Promise<void> => {
       if (!userId) {
-        throw new Error("Please sign in to continue.");
+        throw new Error(
+          "Please sign in to continue.",
+        );
       }
 
-      const [nextSummary, reports] = await Promise.all([
-        getAdminSummary(userId),
-        getAdminReports(userId).catch(() => null),
-      ]);
+      const [nextSummary, reports] =
+        await Promise.all([
+          getAdminSummary(userId),
+          getAdminReports(userId).catch(() => null),
+        ]);
 
       if (active) {
         setSummary(nextSummary);
@@ -189,6 +274,7 @@ export default function Dashboard() {
           const pending = reports.filter(
             (report) => report.status === "Pending",
           ).length;
+
           setPendingReportsCount(pending);
         }
 
@@ -200,6 +286,7 @@ export default function Dashboard() {
       .catch((error: unknown) => {
         if (active) {
           setSummary(null);
+
           setErrorMessage(
             error instanceof Error
               ? error.message
@@ -208,7 +295,9 @@ export default function Dashboard() {
         }
       })
       .finally(() => {
-        if (active) setIsLoading(false);
+        if (active) {
+          setIsLoading(false);
+        }
       });
 
     return () => {
@@ -216,16 +305,25 @@ export default function Dashboard() {
     };
   }, [userId, retryCount]);
 
-  const retryLoadingSummary = () => {
+  // ----------------------------------------------------------
+  // RETRY DASHBOARD DATA
+  // ----------------------------------------------------------
+
+  const retryLoadingSummary = (): void => {
     setSummary(null);
     setErrorMessage(null);
     setIsLoading(true);
     setRetryCount((count) => count + 1);
   };
 
+  // ----------------------------------------------------------
+  // RENDER
+  // ----------------------------------------------------------
+
   return (
     <div className="min-h-screen bg-[#F4F8FC] text-slate-800">
-      {/* Sidebar */}
+      {/* SIDEBAR */}
+
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[250px] flex-col bg-[#102E4D] text-white md:flex">
         <div className="flex h-[105px] items-center border-b border-white/10 px-7">
           <div>
@@ -234,6 +332,7 @@ export default function Dashboard() {
               alt="QRoute Logo"
               className="h-auto w-[150px] object-contain"
             />
+
             <p className="mt-0.5 text-xs tracking-wide text-blue-200">
               ADMINISTRATION
             </p>
@@ -248,7 +347,9 @@ export default function Dashboard() {
           <nav className="space-y-1.5">
             {navigationItems.map((item) => {
               const Icon = item.icon;
-              const destination = getAdminNavigationDestination(item.label);
+
+              const destination =
+                getAdminNavigationDestination(item.label);
 
               return (
                 <button
@@ -260,7 +361,9 @@ export default function Dashboard() {
                       ? undefined
                       : `${item.label} is unavailable in the current system.`
                   }
-                  onClick={() => destination && navigate(destination)}
+                  onClick={() =>
+                    destination && navigate(destination)
+                  }
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition ${
                     item.active
                       ? "bg-[#CFD5DB] font-semibold text-[#102E4D]"
@@ -270,9 +373,13 @@ export default function Dashboard() {
                   }`}
                 >
                   <Icon size={19} strokeWidth={1.8} />
+
                   <span>{item.label}</span>
+
                   {!destination && (
-                    <span className="ml-auto text-[10px]">Unavailable</span>
+                    <span className="ml-auto text-[10px]">
+                      Unavailable
+                    </span>
                   )}
                 </button>
               );
@@ -280,15 +387,20 @@ export default function Dashboard() {
           </nav>
         </div>
 
-        {/* Sidebar bottom */}
+        {/* SIDEBAR BOTTOM */}
+
         <div className="mt-auto p-5">
           <div className="mb-4 rounded-xl border border-white/10 bg-white/5 p-4">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-200 text-[#102E4D]">
                 <Users size={20} />
               </div>
+
               <div>
-                <p className="text-sm font-semibold">Admin Panel</p>
+                <p className="text-sm font-semibold">
+                  Admin Panel
+                </p>
+
                 <p className="text-xs text-slate-300">
                   System management
                 </p>
@@ -307,18 +419,31 @@ export default function Dashboard() {
 
           <button
             type="button"
+            disabled={isLoggingOut}
             onClick={() => void handleLogout()}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <LogOut size={17} />
-            Sign Out
+
+            {isLoggingOut ? "Signing Out..." : "Sign Out"}
           </button>
+
+          {logoutError && (
+            <p
+              role="alert"
+              className="mt-2 text-center text-xs text-red-300"
+            >
+              {logoutError}
+            </p>
+          )}
         </div>
       </aside>
 
-      {/* Main Content */}
+      {/* MAIN CONTENT */}
+
       <main className="min-h-screen md:ml-[250px]">
-        {/* Header */}
+        {/* HEADER */}
+
         <header className="sticky top-0 z-20 flex min-h-[86px] items-center justify-between border-b border-slate-200 bg-white/95 px-5 backdrop-blur sm:px-8 lg:px-10">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#102E4D] text-white md:hidden">
@@ -329,6 +454,7 @@ export default function Dashboard() {
               <h2 className="text-xl font-bold tracking-tight text-[#102E4D] sm:text-2xl">
                 Dashboard
               </h2>
+
               <p className="mt-1 text-xs text-slate-500 sm:text-sm">
                 Preview of the System
               </p>
@@ -336,7 +462,9 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-3 sm:gap-5">
-            <AdminNotificationBell adminUserId={userId ?? ""} />
+            <AdminNotificationBell
+              adminUserId={userId ?? ""}
+            />
 
             <div className="hidden h-9 w-px bg-slate-200 sm:block" />
 
@@ -347,12 +475,13 @@ export default function Dashboard() {
                 iconSize={20}
               />
 
-              <div className="hidden sm:block text-left">
+              <div className="hidden text-left sm:block">
                 <p className="text-sm font-semibold text-slate-800">
                   {adminDisplayName}
                 </p>
+
                 <p
-                  className="text-xs text-slate-500 max-w-[180px] truncate"
+                  className="max-w-[180px] truncate text-xs text-slate-500"
                   title={adminEmail}
                 >
                   {adminEmail}
@@ -362,9 +491,11 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* Dashboard Body */}
+        {/* DASHBOARD BODY */}
+
         <div className="mx-auto max-w-[1500px] p-5 sm:p-8 lg:p-10">
-          {/* Welcome Section */}
+          {/* WELCOME SECTION */}
+
           <section className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
               <h3 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">
@@ -377,11 +508,18 @@ export default function Dashboard() {
             </div>
           </section>
 
+          {/* LOADING */}
+
           {isLoading && (
-            <p className="mt-5 text-sm text-slate-600" role="status">
+            <p
+              className="mt-5 text-sm text-slate-600"
+              role="status"
+            >
               Loading dashboard data...
             </p>
           )}
+
+          {/* DASHBOARD ERROR */}
 
           {errorMessage && (
             <div
@@ -389,6 +527,7 @@ export default function Dashboard() {
               role="alert"
             >
               <span>{errorMessage}</span>
+
               <button
                 type="button"
                 onClick={retryLoadingSummary}
@@ -399,12 +538,16 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Summary Cards */}
+          {/* SUMMARY CARDS */}
+
           <section className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
             {summaryCards.map((card) => {
               const Icon = card.icon;
+
               const metricValue =
-                card.metric && summary ? summary[card.metric] : null;
+                card.metric && summary
+                  ? summary[card.metric]
+                  : null;
 
               const value = isLoading
                 ? "Loading…"
@@ -422,6 +565,7 @@ export default function Dashboard() {
                       <p className="text-sm font-medium text-slate-500">
                         {card.title}
                       </p>
+
                       <p className="mt-4 text-3xl font-bold tracking-tight text-[#102E4D]">
                         {value}
                       </p>
@@ -448,7 +592,8 @@ export default function Dashboard() {
             })}
           </section>
 
-          {/* Recent Activity - Admin Audit Logs */}
+          {/* RECENT ACTIVITY */}
+
           <section className="mt-8 grid grid-cols-1 gap-6">
             <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_3px_14px_rgba(15,23,42,0.035)]">
               <div className="flex items-center justify-between border-b border-slate-100 px-5 py-5 sm:px-6">
@@ -456,20 +601,28 @@ export default function Dashboard() {
                   <h4 className="font-bold text-slate-900">
                     Recent activity
                   </h4>
+
                   <p className="mt-1 text-xs text-slate-500">
                     Recent administrative actions
                   </p>
                 </div>
 
-                <Clock size={19} className="text-slate-400" />
+                <Clock
+                  size={19}
+                  className="text-slate-400"
+                />
               </div>
 
               <div className="px-5 py-5 sm:px-6">
                 {isLoading ? (
-                  <p role="status" className="text-sm text-slate-500">
+                  <p
+                    role="status"
+                    className="text-sm text-slate-500"
+                  >
                     Loading recent activity...
                   </p>
-                ) : !summary || summary.recentActivity === null ? (
+                ) : !summary ||
+                  summary.recentActivity === null ? (
                   <p className="text-sm text-slate-500">
                     Recent activity is unavailable right now.
                   </p>
@@ -485,7 +638,8 @@ export default function Dashboard() {
                         item.actionKey,
                       );
 
-                      const iconStyle = getActivityIconStyle(item.category);
+                      const iconStyle =
+                        getActivityIconStyle(item.category);
 
                       const adminName =
                         item.adminDisplayName.trim() ||
@@ -546,7 +700,9 @@ export default function Dashboard() {
                             )}
 
                             <p className="mt-1 text-xs text-slate-400">
-                              {formatActivityTime(item.occurredAt)}
+                              {formatActivityTime(
+                                item.occurredAt,
+                              )}
                             </p>
                           </div>
                         </li>

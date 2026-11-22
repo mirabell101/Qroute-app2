@@ -1,5 +1,5 @@
+
 import { useEffect, useRef, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
 import { useLocation } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 
@@ -7,198 +7,589 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
 import qrouteLogo from "@/assets/logoboi.png";
+
 import { API_BASE_URL } from "@/lib/api";
-import { supabase } from "@/lib/supabase";
+
 import {
-  isPasswordRecoveryCallback,
+  getPasswordRecoveryClient,
+  clearPasswordRecoverySession,
+} from "@/lib/passwordRecoveryClient";
+
+import {
   validateRecoveryPassword,
   validateRecoveryPasswordConfirmation,
 } from "@/lib/passwordRecovery";
 
-type RecoveryStatus = "checking" | "ready" | "invalid" | "success";
+// ============================================================
+// TYPES
+// ============================================================
+
+type RecoveryStatus =
+  | "checking"
+  | "ready"
+  | "invalid"
+  | "success";
+
+interface RecoveryContext {
+  userId: string;
+  accessToken: string;
+}
+
+interface ResetPasswordResponse {
+  success?: boolean;
+  message?: string;
+}
 
 const INVALID_RECOVERY_MESSAGE =
   "This password reset link is invalid, expired, or already used. Request a new link to try again.";
 
+const GENERIC_RESET_ERROR =
+  "Unable to update your password. Please try again.";
+
+// ============================================================
+// RESPONSE VALIDATION
+// ============================================================
+
+function isResetPasswordResponse(
+  value: unknown,
+): value is ResetPasswordResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
+
+// ============================================================
+// COMPONENT
+// ============================================================
+
 function Resetpassword() {
   const location = useLocation();
 
+  // ----------------------------------------------------------
+  // FORM STATE
+  // ----------------------------------------------------------
+
   const [recoveryStatus, setRecoveryStatus] =
     useState<RecoveryStatus>("checking");
-  const [recoveryMessage, setRecoveryMessage] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [passwordError, setPasswordError] = useState("");
-  const [confirmPasswordError, setConfirmPasswordError] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+
+  const [recoveryMessage, setRecoveryMessage] =
+    useState("");
+
+  const [recoveryContext, setRecoveryContext] =
+    useState<RecoveryContext | null>(null);
+
+  const [showPassword, setShowPassword] =
+    useState(false);
+
+  const [showConfirmPassword, setShowConfirmPassword] =
+    useState(false);
+
+  const [password, setPassword] =
+    useState("");
+
+  const [confirmPassword, setConfirmPassword] =
+    useState("");
+
+  const [passwordError, setPasswordError] =
+    useState("");
+
+  const [confirmPasswordError, setConfirmPasswordError] =
+    useState("");
+
+  const [isLoading, setIsLoading] =
+    useState(false);
+
+  // ----------------------------------------------------------
+  // LIFECYCLE AND CONCURRENCY CONTROL
+  // ----------------------------------------------------------
+
+  const mounted = useRef(false);
+
   const isSubmitting = useRef(false);
+
   const passwordUpdated = useRef(false);
+
+  const verificationGeneration = useRef(0);
+
+  // ----------------------------------------------------------
+  // 1. COMPONENT LIFECYCLE
+  // ----------------------------------------------------------
+
+  useEffect(() => {
+    mounted.current = true;
+
+    return () => {
+      mounted.current = false;
+
+      // Invalidate pending recovery verification.
+      verificationGeneration.current += 1;
+    };
+  }, []);
+
+  // ----------------------------------------------------------
+  // 2. VERIFY THE DEDICATED RECOVERY SESSION
+  // ----------------------------------------------------------
 
   useEffect(() => {
     let active = true;
-    let recoveryDetected = isPasswordRecoveryCallback(
-      location.search,
-      location.hash,
-    );
 
-    const markInvalid = () => {
-      if (!active) return;
-      setRecoveryStatus("invalid");
-      setRecoveryMessage(INVALID_RECOVERY_MESSAGE);
+    const generation =
+      ++verificationGeneration.current;
+
+    const isCurrentVerification = (): boolean => {
+      return (
+        active &&
+        mounted.current &&
+        generation === verificationGeneration.current &&
+        !passwordUpdated.current
+      );
     };
 
-    const verifySession = async (session: Session | null) => {
-      if (!active) return;
-      if (!recoveryDetected || !session?.access_token) {
-        markInvalid();
+    const markInvalid = (): void => {
+      if (!isCurrentVerification()) {
         return;
       }
 
-      try {
-        const {
-          data: { user },
-          error,
-        } = await supabase.auth.getUser(session.access_token);
-
-        if (!active) return;
-        if (error || !user) {
-          markInvalid();
-          return;
-        }
-
-        setRecoveryStatus("ready");
-        setRecoveryMessage("");
-      } catch {
-        markInvalid();
-      }
+      setRecoveryStatus("invalid");
+      setRecoveryContext(null);
+      setRecoveryMessage(
+        INVALID_RECOVERY_MESSAGE,
+      );
     };
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "PASSWORD_RECOVERY") {
-        recoveryDetected = true;
-        window.setTimeout(() => {
-          void verifySession(session);
-        }, 0);
-      } else if (event === "SIGNED_OUT" && !passwordUpdated.current) {
-        markInvalid();
-      }
-    });
+    const verifyRecoverySession =
+      async (): Promise<void> => {
+        if (!isCurrentVerification()) {
+          return;
+        }
 
-    void supabase.auth
-      .getSession()
-      .then(({ data: { session }, error }) => {
-        if (!active) return;
-        if (error || !session) {
+        try {
+          const recoveryClient =
+            getPasswordRecoveryClient();
+
+          /**
+           * getSession retrieves the isolated recovery session.
+           * The dedicated recovery client handles recovery
+           * URL detection and initialization.
+           */
+          const {
+            data: { session },
+            error: sessionError,
+          } = await recoveryClient.auth.getSession();
+
+          if (!isCurrentVerification()) {
+            return;
+          }
+
+          if (
+            sessionError ||
+            !session?.access_token ||
+            !session.user?.id
+          ) {
+            markInvalid();
+            return;
+          }
+
+          // --------------------------------------------------
+          // VERIFY THE USER THROUGH SUPABASE AUTH
+          // --------------------------------------------------
+
+          const {
+            data: { user },
+            error: userError,
+          } = await recoveryClient.auth.getUser(
+            session.access_token,
+          );
+
+          if (!isCurrentVerification()) {
+            return;
+          }
+
+          if (
+            userError ||
+            !user ||
+            user.id !== session.user.id
+          ) {
+            markInvalid();
+            return;
+          }
+
+          // --------------------------------------------------
+          // CONFIRM THE SESSION DID NOT CHANGE DURING VERIFY
+          // --------------------------------------------------
+
+          const {
+            data: { session: latestSession },
+            error: latestSessionError,
+          } = await recoveryClient.auth.getSession();
+
+          if (!isCurrentVerification()) {
+            return;
+          }
+
+          const sameRecoverySession =
+            !latestSessionError &&
+            latestSession !== null &&
+            latestSession.user.id === user.id &&
+            latestSession.access_token ===
+              session.access_token;
+
+          if (!sameRecoverySession) {
+            markInvalid();
+            return;
+          }
+
+          // --------------------------------------------------
+          // RECOVERY SESSION IS READY
+          // --------------------------------------------------
+
+          setRecoveryContext({
+            userId: user.id,
+            accessToken: session.access_token,
+          });
+
+          setRecoveryStatus("ready");
+          setRecoveryMessage("");
+        } catch (error: unknown) {
+          console.error(
+            "Password-recovery session verification failed:",
+            error,
+          );
+
           markInvalid();
-          return;
         }
-        if (!recoveryDetected) {
-          markInvalid();
-          return;
-        }
-        void verifySession(session);
-      })
-      .catch(markInvalid);
+      };
+
+    void verifyRecoverySession();
 
     return () => {
       active = false;
-      subscription.unsubscribe();
+
+      // Invalidate this verification if it is still current.
+      if (
+        generation === verificationGeneration.current
+      ) {
+        verificationGeneration.current += 1;
+      }
     };
-  }, [location.hash, location.search]);
+  }, [
+    location.pathname,
+    location.search,
+    location.hash,
+  ]);
 
-  const handleResetPassword = async () => {
-    if (isSubmitting.current || recoveryStatus !== "ready") return;
+  // ----------------------------------------------------------
+  // 3. RESET PASSWORD
+  // ----------------------------------------------------------
 
-    const passwordValidation = validateRecoveryPassword(password);
-    const confirmPasswordValidation =
-      validateRecoveryPasswordConfirmation(password, confirmPassword);
-
-    setPasswordError(passwordValidation);
-    setConfirmPasswordError(confirmPasswordValidation);
-
-    if (passwordValidation || confirmPasswordValidation || isLoading) {
-      return;
-    }
-
-    isSubmitting.current = true;
-    setIsLoading(true);
-
-    try {
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError || !session?.access_token) {
-        setRecoveryStatus("invalid");
-        setRecoveryMessage(INVALID_RECOVERY_MESSAGE);
+  const handleResetPassword =
+    async (): Promise<void> => {
+      if (
+        isSubmitting.current ||
+        recoveryStatus !== "ready" ||
+        !recoveryContext ||
+        !mounted.current
+      ) {
         return;
       }
 
-      const response = await fetch(
-        `${API_BASE_URL}/api/auth/reset-password`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ password }),
-        },
+      // ------------------------------------------------------
+      // VALIDATE THE FORM
+      // ------------------------------------------------------
+
+      const passwordValidation =
+        validateRecoveryPassword(password);
+
+      const confirmPasswordValidation =
+        validateRecoveryPasswordConfirmation(
+          password,
+          confirmPassword,
+        );
+
+      setPasswordError(passwordValidation);
+
+      setConfirmPasswordError(
+        confirmPasswordValidation,
       );
-      const result: unknown = await response.json().catch(() => null);
-
-      if (response.status === 401) {
-        setRecoveryStatus("invalid");
-        setRecoveryMessage(INVALID_RECOVERY_MESSAGE);
-        return;
-      }
 
       if (
-        !response.ok ||
-        typeof result !== "object" ||
-        result === null ||
-        !("success" in result) ||
-        result.success !== true
+        passwordValidation ||
+        confirmPasswordValidation ||
+        isLoading
       ) {
-        setPasswordError("Unable to update your password. Please try again.");
         return;
       }
 
-      passwordUpdated.current = true;
-      setPassword("");
-      setConfirmPassword("");
-      setPasswordError("");
-      setConfirmPasswordError("");
+      // Capture the exact recovery identity and submitted value.
+      const capturedUserId =
+        recoveryContext.userId;
 
-      let successMessage =
-        "Your password was updated. Sign in with your new password.";
+      const capturedAccessToken =
+        recoveryContext.accessToken;
+
+      const capturedPassword = password;
+
+      isSubmitting.current = true;
+
+      setIsLoading(true);
+
       try {
-        const { error: signOutError } = await supabase.auth.signOut({
-          scope: "local",
-        });
-        if (signOutError) {
-          successMessage =
-            "Your password was updated, but this session could not be cleared. Sign out before signing in again.";
-        }
-      } catch {
-        successMessage =
-          "Your password was updated, but this session could not be cleared. Sign out before signing in again.";
-      }
+        const recoveryClient =
+          getPasswordRecoveryClient();
 
-      setRecoveryMessage(successMessage);
-      setRecoveryStatus("success");
-    } catch {
-      setPasswordError("Unable to update your password. Please try again.");
-    } finally {
-      isSubmitting.current = false;
-      setIsLoading(false);
-    }
-  };
+        // ----------------------------------------------------
+        // A. CONFIRM THE EXACT RECOVERY SESSION
+        // ----------------------------------------------------
+
+        const {
+          data: { session },
+          error: sessionError,
+        } = await recoveryClient.auth.getSession();
+
+        const sameInitialRecoverySession =
+          !sessionError &&
+          session !== null &&
+          session.user.id === capturedUserId &&
+          session.access_token === capturedAccessToken;
+
+        if (!sameInitialRecoverySession) {
+          if (mounted.current) {
+            setRecoveryStatus("invalid");
+            setRecoveryContext(null);
+            setRecoveryMessage(
+              INVALID_RECOVERY_MESSAGE,
+            );
+          }
+
+          return;
+        }
+
+        // ----------------------------------------------------
+        // B. SEND THE PASSWORD UPDATE TO THE BACKEND
+        // ----------------------------------------------------
+
+        const response = await fetch(
+          `${API_BASE_URL}/api/auth/reset-password`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${capturedAccessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              password: capturedPassword,
+            }),
+          },
+        );
+
+        const result: unknown = await response
+          .json()
+          .catch(() => null);
+
+        const parsedResult =
+          isResetPasswordResponse(result)
+            ? result
+            : null;
+
+        const successfulResponse =
+          response.ok &&
+          parsedResult?.success === true;
+
+        // ----------------------------------------------------
+        // C. RECHECK THE RECOVERY SESSION
+        // ----------------------------------------------------
+
+        const {
+          data: { session: latestSession },
+          error: latestSessionError,
+        } = await recoveryClient.auth.getSession();
+
+        const sameRecoverySession =
+          !latestSessionError &&
+          latestSession !== null &&
+          latestSession.user.id === capturedUserId &&
+          latestSession.access_token ===
+            capturedAccessToken;
+
+        // ----------------------------------------------------
+        // D. HANDLE A SESSION CHANGE AFTER SUBMISSION
+        // ----------------------------------------------------
+
+        if (!sameRecoverySession) {
+          if (!mounted.current) {
+            return;
+          }
+
+          setRecoveryContext(null);
+
+          /**
+           * If the backend confirmed the password update,
+           * the password has already been changed.
+           *
+           * Do not report that operation as a failure.
+           * Do not sign out a replacement recovery session.
+           */
+          if (successfulResponse) {
+            passwordUpdated.current = true;
+
+            setPassword("");
+            setConfirmPassword("");
+            setPasswordError("");
+            setConfirmPasswordError("");
+
+            setRecoveryMessage(
+              "Your password was updated successfully. The recovery session changed during the operation, so the replacement session was left untouched. Return to Sign In and use your new password.",
+            );
+
+            setRecoveryStatus("success");
+
+            return;
+          }
+
+          setRecoveryStatus("invalid");
+
+          setRecoveryMessage(
+            INVALID_RECOVERY_MESSAGE,
+          );
+
+          return;
+        }
+
+        // ----------------------------------------------------
+        // E. HANDLE INVALID RECOVERY AUTHORIZATION
+        // ----------------------------------------------------
+
+        if (
+          response.status === 401 ||
+          response.status === 403
+        ) {
+          if (mounted.current) {
+            setRecoveryStatus("invalid");
+            setRecoveryContext(null);
+            setRecoveryMessage(
+              INVALID_RECOVERY_MESSAGE,
+            );
+          }
+
+          return;
+        }
+
+        // ----------------------------------------------------
+        // F. HANDLE OTHER UNSUCCESSFUL RESPONSES
+        // ----------------------------------------------------
+
+        if (!successfulResponse) {
+          if (!mounted.current) {
+            return;
+          }
+
+          if (response.status === 429) {
+            setPasswordError(
+              "Too many password reset attempts. Please wait before trying again.",
+            );
+
+            return;
+          }
+
+          if (
+            response.status === 400 &&
+            typeof parsedResult?.message === "string" &&
+            parsedResult.message.trim()
+          ) {
+            setPasswordError(
+              parsedResult.message,
+            );
+
+            return;
+          }
+
+          setPasswordError(
+            GENERIC_RESET_ERROR,
+          );
+
+          return;
+        }
+
+        // ----------------------------------------------------
+        // G. PASSWORD UPDATE SUCCEEDED
+        // ----------------------------------------------------
+
+        passwordUpdated.current = true;
+
+        let successMessage =
+          "Your password was updated. Sign in with your new password.";
+
+        if (mounted.current) {
+          setPassword("");
+          setConfirmPassword("");
+          setPasswordError("");
+          setConfirmPasswordError("");
+        }
+
+        // ----------------------------------------------------
+        // H. CLEAR ONLY THE EXPECTED RECOVERY SESSION
+        // ----------------------------------------------------
+
+        try {
+          /**
+           * The helper independently checks that the
+           * recovery session still belongs to the same
+           * user and exact access token.
+           *
+           * It will not intentionally clear a replacement
+           * recovery session.
+           */
+          const recoverySessionCleared =
+            await clearPasswordRecoverySession({
+              userId: capturedUserId,
+              accessToken: capturedAccessToken,
+            });
+
+          if (!recoverySessionCleared) {
+            successMessage =
+              "Your password was updated, but a different recovery session became active before cleanup. That session was left untouched. Return to Sign In and use your new password.";
+          }
+        } catch (error: unknown) {
+          console.error(
+            "Could not clear the recovery session:",
+            error,
+          );
+
+          successMessage =
+            "Your password was updated, but the recovery session could not be cleared. Return to Sign In before using your new password.";
+        }
+
+        if (!mounted.current) {
+          return;
+        }
+
+        setRecoveryMessage(successMessage);
+        setRecoveryStatus("success");
+      } catch (error: unknown) {
+        console.error(
+          "Password recovery request failed:",
+          error,
+        );
+
+        if (mounted.current) {
+          setPasswordError(
+            GENERIC_RESET_ERROR,
+          );
+        }
+      } finally {
+        isSubmitting.current = false;
+
+        if (mounted.current) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+  // ----------------------------------------------------------
+  // UI
+  // ----------------------------------------------------------
 
   return (
     <main className="relative flex min-h-screen w-screen items-center justify-center overflow-x-hidden bg-white px-4 py-8">
@@ -216,6 +607,7 @@ function Resetpassword() {
                 ? "Password Updated"
                 : "Set a New Password"}
             </h1>
+
             <p className="mt-1 translate-x-10 text-[12px] leading-none text-black">
               {recoveryStatus === "checking"
                 ? "Verifying your reset link..."
@@ -226,20 +618,36 @@ function Resetpassword() {
           </div>
         </div>
 
+        {/* CHECKING */}
+
         {recoveryStatus === "checking" && (
-          <p role="status" className="mt-6 text-center text-[12px] text-gray-600">
+          <p
+            role="status"
+            className="mt-6 text-center text-[12px] text-gray-600"
+          >
             Please wait while we verify your password reset link.
           </p>
         )}
 
+        {/* INVALID LINK */}
+
         {recoveryStatus === "invalid" && (
           <div className="mt-6 text-center">
-            <p role="alert" className="text-[12px] leading-relaxed text-red-600">
-              {recoveryMessage || INVALID_RECOVERY_MESSAGE}
+            <p
+              role="alert"
+              className="text-[12px] leading-relaxed text-red-600"
+            >
+              {recoveryMessage ||
+                INVALID_RECOVERY_MESSAGE}
             </p>
+
             <Button
               type="button"
-              onClick={() => window.location.replace("/forgot-password")}
+              onClick={() =>
+                window.location.replace(
+                  "/forgot-password",
+                )
+              }
               className="mt-5 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8]"
             >
               Request a New Reset Link
@@ -247,20 +655,30 @@ function Resetpassword() {
           </div>
         )}
 
+        {/* SUCCESS */}
+
         {recoveryStatus === "success" && (
           <div className="mt-6 text-center">
-            <p role="status" className="text-[12px] leading-relaxed text-gray-700">
+            <p
+              role="status"
+              className="text-[12px] leading-relaxed text-gray-700"
+            >
               {recoveryMessage}
             </p>
+
             <Button
               type="button"
-              onClick={() => window.location.replace("/login")}
+              onClick={() =>
+                window.location.replace("/login")
+              }
               className="mt-5 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8]"
             >
               Return to Sign In
             </Button>
           </div>
         )}
+
+        {/* READY */}
 
         {recoveryStatus === "ready" && (
           <>
@@ -271,10 +689,15 @@ function Resetpassword() {
               >
                 Password
               </label>
+
               <div className="relative mt-1.5">
                 <Input
                   id="password"
-                  type={showPassword ? "text" : "password"}
+                  type={
+                    showPassword
+                      ? "text"
+                      : "password"
+                  }
                   autoComplete="new-password"
                   placeholder="Enter your password"
                   value={password}
@@ -282,7 +705,11 @@ function Resetpassword() {
                   onChange={(event) => {
                     setPassword(event.target.value);
                     setPasswordError("");
-                    if (confirmPassword === event.target.value) {
+
+                    if (
+                      confirmPassword ===
+                      event.target.value
+                    ) {
                       setConfirmPasswordError("");
                     }
                   }}
@@ -292,16 +719,28 @@ function Resetpassword() {
                       : "border-[#b8b8b8]"
                   }`}
                 />
+
                 <button
                   type="button"
                   disabled={isLoading}
-                  onClick={() => setShowPassword(!showPassword)}
+                  onClick={() =>
+                    setShowPassword(!showPassword)
+                  }
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-label={
+                    showPassword
+                      ? "Hide password"
+                      : "Show password"
+                  }
                 >
-                  {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                  {showPassword ? (
+                    <EyeOff size={15} />
+                  ) : (
+                    <Eye size={15} />
+                  )}
                 </button>
               </div>
+
               {passwordError && (
                 <p
                   role="alert"
@@ -319,16 +758,24 @@ function Resetpassword() {
               >
                 Confirm Password
               </label>
+
               <div className="relative mt-1.5">
                 <Input
                   id="confirmPassword"
-                  type={showConfirmPassword ? "text" : "password"}
+                  type={
+                    showConfirmPassword
+                      ? "text"
+                      : "password"
+                  }
                   autoComplete="new-password"
                   placeholder="Enter your password again"
                   value={confirmPassword}
                   disabled={isLoading}
                   onChange={(event) => {
-                    setConfirmPassword(event.target.value);
+                    setConfirmPassword(
+                      event.target.value,
+                    );
+
                     setConfirmPasswordError("");
                   }}
                   className={`h-9 rounded-[5px] border px-3 pr-10 text-[12px] shadow-none ${
@@ -337,13 +784,20 @@ function Resetpassword() {
                       : "border-[#b8b8b8]"
                   }`}
                 />
+
                 <button
                   type="button"
                   disabled={isLoading}
-                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  onClick={() =>
+                    setShowConfirmPassword(
+                      !showConfirmPassword,
+                    )
+                  }
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black"
                   aria-label={
-                    showConfirmPassword ? "Hide password" : "Show password"
+                    showConfirmPassword
+                      ? "Hide password"
+                      : "Show password"
                   }
                 >
                   {showConfirmPassword ? (
@@ -353,6 +807,7 @@ function Resetpassword() {
                   )}
                 </button>
               </div>
+
               {confirmPasswordError && (
                 <p
                   role="alert"
@@ -366,17 +821,26 @@ function Resetpassword() {
             <Button
               type="button"
               disabled={isLoading}
-              onClick={() => void handleResetPassword()}
+              onClick={() =>
+                void handleResetPassword()
+              }
               className="mt-5 h-9 w-full rounded-[6px] bg-[#6355F5] text-[11px] font-medium text-white shadow-none hover:bg-[#5547E8]"
             >
-              {isLoading ? "Resetting password..." : "Reset Password"}
+              {isLoading
+                ? "Resetting password..."
+                : "Reset Password"}
             </Button>
 
             <div className="mt-4 text-center text-[10px]">
-              <span className="text-gray-600">Remember your password? </span>
+              <span className="text-gray-600">
+                Remember your password?{" "}
+              </span>
+
               <button
                 type="button"
-                onClick={() => window.location.replace("/login")}
+                onClick={() =>
+                  window.location.replace("/login")
+                }
                 className="font-semibold text-[#6C3FF5] hover:underline"
               >
                 Sign In

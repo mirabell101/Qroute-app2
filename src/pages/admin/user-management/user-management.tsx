@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useNavigate } from "react-router-dom";
 
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
@@ -19,8 +25,15 @@ import {
   type AdminUserRole,
 } from "@/lib/adminApi";
 
+import { logoutCurrentDevice } from "@/lib/authLogout";
+
+import {
+  getSessionSnapshot,
+  isCurrentAuthenticatedSession,
+  subscribeSessionState,
+} from "@/lib/sessionCoordinator";
+
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
-import { supabase } from "@/lib/supabase";
 
 import {
   LayoutDashboard,
@@ -277,11 +290,45 @@ export default function UserManagement() {
   const { userId, account } = useAccountProfile();
 
   /* ------------------------------------------------------------------------ */
+  /*                        SESSION COORDINATOR                               */
+  /* ------------------------------------------------------------------------ */
+
+  const sessionSnapshot = useSyncExternalStore(
+    subscribeSessionState,
+    getSessionSnapshot,
+    getSessionSnapshot,
+  );
+
+  const sessionIdentity =
+    sessionSnapshot.status === "authenticated" &&
+    sessionSnapshot.purpose === "authenticated"
+      ? sessionSnapshot.identity
+      : null;
+
+  /**
+   * This verifies that an operation still belongs to the active
+   * authenticated session and that the session generation has not changed.
+   *
+   * User ID equality alone is not sufficient because the same account
+   * can sign out and establish a different session.
+   */
+  const isExpectedSessionCurrent = useCallback(
+    (identity: typeof sessionIdentity): boolean => {
+      return Boolean(
+        identity &&
+          identity.userId === userId &&
+          isCurrentAuthenticatedSession(identity),
+      );
+    },
+    [userId],
+  );
+
+  /* ------------------------------------------------------------------------ */
   /*                              ADMIN PROFILE                               */
   /* ------------------------------------------------------------------------ */
 
   // Do not use account.username as a fallback.
-  // Usernames must never be displayed in this page.
+  // Usernames must never be displayed on this page.
   const adminDisplayName =
     account?.displayName?.trim() || "Administrator";
 
@@ -332,6 +379,15 @@ export default function UserManagement() {
 
   const [actionNotice, setActionNotice] =
     useState<ActionNotice | null>(null);
+
+  /* ------------------------------------------------------------------------ */
+  /*                              LOGOUT STATE                                */
+  /* ------------------------------------------------------------------------ */
+
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  const [logoutError, setLogoutError] =
+    useState<string | null>(null);
 
   /* ------------------------------------------------------------------------ */
   /*                           SELECTED USER STATE                            */
@@ -486,6 +542,49 @@ export default function UserManagement() {
   ).length;
 
   /* ------------------------------------------------------------------------ */
+  /*                       SESSION CHANGE CLEANUP                             */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * A user-specific page must not retain the previous account's data,
+   * dialogs, selected records, or moderation history after a new session
+   * generation becomes active.
+   *
+   * Search and status filters are intentionally preserved.
+   */
+  useEffect(() => {
+    setUsers([]);
+    setTotalCount(0);
+    setTotalPages(0);
+    setPage(1);
+
+    setSelectedUserId(null);
+
+    setRoleChangeTargetId(null);
+    setUpdatingRoleUserId(null);
+    setRoleError(null);
+
+    setRestrictionUserId(null);
+    setIsApplyingRestriction(false);
+    setRestrictionError(null);
+
+    setHistoryVisible(false);
+    setHistoryItems([]);
+    setHistoryLoading(false);
+    setHistoryError(null);
+    setHistoryLoadedFor(null);
+
+    setActionError(null);
+    setActionNotice(null);
+
+    setLogoutError(null);
+    setIsLoggingOut(false);
+
+    setErrorMessage(null);
+    setIsLoading(true);
+  }, [userId, sessionIdentity?.generation]);
+
+  /* ------------------------------------------------------------------------ */
   /*                             SEARCH DEBOUNCE                              */
   /* ------------------------------------------------------------------------ */
 
@@ -503,72 +602,27 @@ export default function UserManagement() {
   /*                             DATA REFRESH                                 */
   /* ------------------------------------------------------------------------ */
 
-  const refreshUsers = useCallback(async () => {
-    if (!userId) {
-      throw new Error("Please sign in to continue.");
-    }
-
-    setIsLoading(true);
-
-    try {
-      const data = await getAdminUsersPage(userId, {
-        page,
-        pageSize,
-        search: debouncedSearch,
-        status: statusFilter,
-      });
-
-      setUsers(data.users);
-      setTotalCount(data.totalCount);
-      setTotalPages(data.totalPages);
-      setPage(data.page);
-      setPageSize(data.pageSize);
-
-      setSelectedUserId((currentId) => {
-        if (
-          currentId &&
-          !data.users.some((user) => user.id === currentId)
-        ) {
-          return null;
-        }
-
-        return currentId;
-      });
-
-      setErrorMessage(null);
-
-      return data;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [
-    userId,
-    page,
-    pageSize,
-    debouncedSearch,
-    statusFilter,
-  ]);
-
-  useEffect(() => {
-    let active = true;
-
-    const loadUsers = async () => {
-      setIsLoading(true);
-      setErrorMessage(null);
-
-      if (!userId) {
-        if (active) {
-          setUsers([]);
-          setTotalCount(0);
-          setTotalPages(0);
-          setErrorMessage(
-            "Please sign in to view user management.",
-          );
-          setIsLoading(false);
-        }
-
-        return;
+  /**
+   * Refreshes the current server-side page after an administrative action.
+   *
+   * The caller must provide the identity that initiated the action.
+   * This prevents a refresh started by an older session from replacing
+   * the current account's user list.
+   */
+  const refreshUsers = useCallback(
+    async (expectedIdentity: typeof sessionIdentity) => {
+      if (
+        !userId ||
+        !expectedIdentity ||
+        expectedIdentity.userId !== userId ||
+        !isCurrentAuthenticatedSession(expectedIdentity)
+      ) {
+        throw new Error(
+          "The active session changed. Please refresh the page.",
+        );
       }
+
+      setIsLoading(true);
 
       try {
         const data = await getAdminUsersPage(userId, {
@@ -578,7 +632,123 @@ export default function UserManagement() {
           status: statusFilter,
         });
 
-        if (!active) {
+        if (!isCurrentAuthenticatedSession(expectedIdentity)) {
+          return null;
+        }
+
+        setUsers(data.users);
+        setTotalCount(data.totalCount);
+        setTotalPages(data.totalPages);
+        setPage(data.page);
+        setPageSize(data.pageSize);
+
+        setSelectedUserId((currentId) => {
+          if (
+            currentId &&
+            !data.users.some((user) => user.id === currentId)
+          ) {
+            return null;
+          }
+
+          return currentId;
+        });
+
+        setErrorMessage(null);
+
+        return data;
+      } finally {
+        if (isCurrentAuthenticatedSession(expectedIdentity)) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [
+      userId,
+      page,
+      pageSize,
+      debouncedSearch,
+      statusFilter,
+    ],
+  );
+
+  /* ------------------------------------------------------------------------ */
+  /*                             INITIAL DATA LOAD                            */
+  /* ------------------------------------------------------------------------ */
+
+  useEffect(() => {
+    let active = true;
+
+    const loadUsers = async () => {
+      setErrorMessage(null);
+
+      const waitingForSession =
+        sessionSnapshot.status === "initializing" ||
+        sessionSnapshot.status === "validating";
+
+      /**
+       * Do not prematurely report an authentication failure while the
+       * coordinator is still initializing or validating the session.
+       */
+      if (waitingForSession && !sessionIdentity) {
+        setUsers([]);
+        setTotalCount(0);
+        setTotalPages(0);
+        setIsLoading(true);
+        return;
+      }
+
+      if (!userId) {
+        setUsers([]);
+        setTotalCount(0);
+        setTotalPages(0);
+        setIsLoading(false);
+
+        setErrorMessage(
+          "Please sign in to view user management.",
+        );
+
+        return;
+      }
+
+      const identity = sessionIdentity;
+
+      if (
+        !identity ||
+        identity.userId !== userId ||
+        !isCurrentAuthenticatedSession(identity)
+      ) {
+        setUsers([]);
+        setTotalCount(0);
+        setTotalPages(0);
+        setIsLoading(false);
+
+        setErrorMessage(
+          "The active authenticated session could not be verified.",
+        );
+
+        return;
+      }
+
+      setIsLoading(true);
+
+      try {
+        const data = await getAdminUsersPage(userId, {
+          page,
+          pageSize,
+          search: debouncedSearch,
+          status: statusFilter,
+        });
+
+        /**
+         * Both checks matter:
+         * - active ensures this specific effect has not been cleaned up.
+         * - isCurrentAuthenticatedSession ensures the request still belongs
+         *   to the active authenticated session generation.
+         */
+        if (
+          !active ||
+          !isCurrentAuthenticatedSession(identity)
+        ) {
           return;
         }
 
@@ -601,19 +771,27 @@ export default function UserManagement() {
 
         setErrorMessage(null);
       } catch (error: unknown) {
-        if (active) {
-          setUsers([]);
-          setTotalCount(0);
-          setTotalPages(0);
-
-          setErrorMessage(
-            error instanceof Error
-              ? error.message
-              : "Unable to load user accounts.",
-          );
+        if (
+          !active ||
+          !isCurrentAuthenticatedSession(identity)
+        ) {
+          return;
         }
+
+        setUsers([]);
+        setTotalCount(0);
+        setTotalPages(0);
+
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : "Unable to load user accounts.",
+        );
       } finally {
-        if (active) {
+        if (
+          active &&
+          isCurrentAuthenticatedSession(identity)
+        ) {
           setIsLoading(false);
         }
       }
@@ -626,6 +804,8 @@ export default function UserManagement() {
     };
   }, [
     userId,
+    sessionIdentity?.generation,
+    sessionSnapshot.status,
     page,
     pageSize,
     debouncedSearch,
@@ -679,16 +859,28 @@ export default function UserManagement() {
   /* ------------------------------------------------------------------------ */
 
   const handleLogout = async () => {
-    await supabase.auth.signOut({
-      scope: "local",
-    });
+    if (isLoggingOut) {
+      return;
+    }
 
-    localStorage.removeItem("qroute_current_user");
-    sessionStorage.removeItem("qroute_current_user");
+    setIsLoggingOut(true);
+    setLogoutError(null);
 
-    navigate("/login", {
-      replace: true,
-    });
+    try {
+      await logoutCurrentDevice();
+
+      navigate("/login", {
+        replace: true,
+      });
+    } catch (error: unknown) {
+      setLogoutError(
+        error instanceof Error
+          ? error.message
+          : "Unable to sign out. Please try again.",
+      );
+    } finally {
+      setIsLoggingOut(false);
+    }
   };
 
   /* ------------------------------------------------------------------------ */
@@ -712,6 +904,7 @@ export default function UserManagement() {
 
     setHistoryVisible(false);
     setHistoryItems([]);
+    setHistoryLoading(false);
     setHistoryError(null);
     setHistoryLoadedFor(null);
   };
@@ -721,6 +914,7 @@ export default function UserManagement() {
 
     setHistoryVisible(false);
     setHistoryItems([]);
+    setHistoryLoading(false);
     setHistoryError(null);
     setHistoryLoadedFor(null);
   };
@@ -756,11 +950,18 @@ export default function UserManagement() {
   };
 
   const handleConfirmRoleChange = async () => {
+    const identity = sessionIdentity;
+
     if (
       !userId ||
+      !identity ||
+      !isExpectedSessionCurrent(identity) ||
       !roleChangeTarget ||
       !nextRole
     ) {
+      setRoleError(
+        "The active session could not be verified. Please try again.",
+      );
       return;
     }
 
@@ -774,31 +975,45 @@ export default function UserManagement() {
       return;
     }
 
-    setUpdatingRoleUserId(roleChangeTarget.id);
+    const targetUserId = roleChangeTarget.id;
+    const targetDisplayName = getDisplayName(roleChangeTarget);
+    const requestedRole = nextRole;
+
+    setUpdatingRoleUserId(targetUserId);
     setRoleError(null);
 
     try {
       await setAdminUserRole(
         userId,
-        roleChangeTarget.id,
-        nextRole,
+        targetUserId,
+        requestedRole,
       );
 
-      const displayName = getDisplayName(roleChangeTarget);
+      if (!isCurrentAuthenticatedSession(identity)) {
+        return;
+      }
 
       setRoleChangeTargetId(null);
 
       setActionNotice({
         type: "success",
         message:
-          nextRole === "admin"
-            ? `${displayName} is now an administrator.`
-            : `${displayName} is now a registered user.`,
+          requestedRole === "admin"
+            ? `${targetDisplayName} is now an administrator.`
+            : `${targetDisplayName} is now a registered user.`,
       });
 
       try {
-        await refreshUsers();
+        await refreshUsers(identity);
+
+        if (!isCurrentAuthenticatedSession(identity)) {
+          return;
+        }
       } catch {
+        if (!isCurrentAuthenticatedSession(identity)) {
+          return;
+        }
+
         setActionNotice({
           type: "warning",
           message:
@@ -806,13 +1021,19 @@ export default function UserManagement() {
         });
       }
     } catch (error: unknown) {
+      if (!isCurrentAuthenticatedSession(identity)) {
+        return;
+      }
+
       setRoleError(
         error instanceof Error
           ? error.message
           : "Unable to update the user's role.",
       );
     } finally {
-      setUpdatingRoleUserId(null);
+      if (isCurrentAuthenticatedSession(identity)) {
+        setUpdatingRoleUserId(null);
+      }
     }
   };
 
@@ -895,10 +1116,17 @@ export default function UserManagement() {
   };
 
   const handleApplyRestriction = async () => {
+    const identity = sessionIdentity;
+
     if (
       !userId ||
+      !identity ||
+      !isExpectedSessionCurrent(identity) ||
       !restrictionTarget
     ) {
+      setRestrictionError(
+        "The active session could not be verified. Please try again.",
+      );
       return;
     }
 
@@ -912,12 +1140,16 @@ export default function UserManagement() {
       return;
     }
 
+    const targetUserId = restrictionTarget.id;
+    const targetDisplayName = getDisplayName(restrictionTarget);
+    const requestedAction = restrictionAction;
+
     const reason = restrictionReason.trim();
 
     const requiresReason =
-      restrictionAction === "mute" ||
-      restrictionAction === "ban_temporary" ||
-      restrictionAction === "ban_permanent";
+      requestedAction === "mute" ||
+      requestedAction === "ban_temporary" ||
+      requestedAction === "ban_permanent";
 
     if (requiresReason && !reason) {
       setRestrictionError(
@@ -928,7 +1160,7 @@ export default function UserManagement() {
 
     let durationSeconds: number | null = null;
 
-    if (restrictionAction === "mute") {
+    if (requestedAction === "mute") {
       if (!indefiniteMute) {
         durationSeconds = calculateDurationSeconds();
 
@@ -941,7 +1173,7 @@ export default function UserManagement() {
       }
     }
 
-    if (restrictionAction === "ban_temporary") {
+    if (requestedAction === "ban_temporary") {
       durationSeconds = calculateDurationSeconds();
 
       if (durationSeconds === null) {
@@ -953,9 +1185,9 @@ export default function UserManagement() {
     }
 
     if (
-      restrictionAction === "ban_permanent" ||
-      restrictionAction === "unmute" ||
-      restrictionAction === "unban"
+      requestedAction === "ban_permanent" ||
+      requestedAction === "unmute" ||
+      requestedAction === "unban"
     ) {
       durationSeconds = null;
     }
@@ -968,9 +1200,9 @@ export default function UserManagement() {
     try {
       await applyAdminUserRestriction(
         userId,
-        restrictionTarget.id,
+        targetUserId,
         {
-          action: restrictionAction,
+          action: requestedAction,
           durationSeconds,
           ...(reason
             ? {
@@ -980,10 +1212,14 @@ export default function UserManagement() {
         },
       );
 
+      if (!isCurrentAuthenticatedSession(identity)) {
+        return;
+      }
+
       const successMessage =
         getRestrictionSuccessMessage(
-          restrictionAction,
-          getDisplayName(restrictionTarget),
+          requestedAction,
+          targetDisplayName,
         );
 
       setRestrictionUserId(null);
@@ -994,8 +1230,16 @@ export default function UserManagement() {
       });
 
       try {
-        await refreshUsers();
+        await refreshUsers(identity);
+
+        if (!isCurrentAuthenticatedSession(identity)) {
+          return;
+        }
       } catch {
+        if (!isCurrentAuthenticatedSession(identity)) {
+          return;
+        }
+
         setActionNotice({
           type: "warning",
           message:
@@ -1003,6 +1247,10 @@ export default function UserManagement() {
         });
       }
     } catch (error: unknown) {
+      if (!isCurrentAuthenticatedSession(identity)) {
+        return;
+      }
+
       /*
        * A response with restrictionSaved=true means:
        * - The database restriction was saved.
@@ -1016,7 +1264,7 @@ export default function UserManagement() {
         error.restrictionSaved
       ) {
         const actionLabel =
-          getRestrictionActionLabel(restrictionAction);
+          getRestrictionActionLabel(requestedAction);
 
         setRestrictionUserId(null);
 
@@ -1027,8 +1275,16 @@ export default function UserManagement() {
         });
 
         try {
-          await refreshUsers();
+          await refreshUsers(identity);
+
+          if (!isCurrentAuthenticatedSession(identity)) {
+            return;
+          }
         } catch {
+          if (!isCurrentAuthenticatedSession(identity)) {
+            return;
+          }
+
           setActionNotice({
             type: "warning",
             message:
@@ -1043,7 +1299,9 @@ export default function UserManagement() {
         );
       }
     } finally {
-      setIsApplyingRestriction(false);
+      if (isCurrentAuthenticatedSession(identity)) {
+        setIsApplyingRestriction(false);
+      }
     }
   };
 
@@ -1052,14 +1310,23 @@ export default function UserManagement() {
   /* ------------------------------------------------------------------------ */
 
   const handleLoadModerationHistory = async () => {
-    if (!userId || !selectedUser) {
+    const identity = sessionIdentity;
+
+    if (
+      !userId ||
+      !identity ||
+      !isExpectedSessionCurrent(identity) ||
+      !selectedUser
+    ) {
       return;
     }
+
+    const targetUserId = selectedUser.id;
 
     setHistoryVisible(true);
     setHistoryError(null);
 
-    if (historyLoadedFor === selectedUser.id) {
+    if (historyLoadedFor === targetUserId) {
       return;
     }
 
@@ -1069,19 +1336,38 @@ export default function UserManagement() {
       const history =
         await getAdminUserModerationHistory(
           userId,
-          selectedUser.id,
+          targetUserId,
         );
 
+      if (
+        !isCurrentAuthenticatedSession(identity) ||
+        selectedUserId !== targetUserId
+      ) {
+        return;
+      }
+
       setHistoryItems(history);
-      setHistoryLoadedFor(selectedUser.id);
+      setHistoryLoadedFor(targetUserId);
     } catch (error: unknown) {
+      if (
+        !isCurrentAuthenticatedSession(identity) ||
+        selectedUserId !== targetUserId
+      ) {
+        return;
+      }
+
       setHistoryError(
         error instanceof Error
           ? error.message
           : "Unable to load moderation history.",
       );
     } finally {
-      setHistoryLoading(false);
+      if (
+        isCurrentAuthenticatedSession(identity) &&
+        selectedUserId === targetUserId
+      ) {
+        setHistoryLoading(false);
+      }
     }
   };
 
@@ -1227,13 +1513,23 @@ export default function UserManagement() {
             Preview of the System
           </button>
 
+          {logoutError && (
+            <p
+              role="alert"
+              className="mt-3 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-200"
+            >
+              {logoutError}
+            </p>
+          )}
+
           <button
             type="button"
+            disabled={isLoggingOut}
             onClick={() => void handleLogout()}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <LogOut size={17} />
-            Sign Out
+            {isLoggingOut ? "Signing Out..." : "Sign Out"}
           </button>
         </div>
       </aside>
@@ -1854,7 +2150,7 @@ export default function UserManagement() {
       </main>
 
       {/* ------------------------------------------------------------------ */}
-      {/*                           USER DETAILS                             */}
+      {/*                           USER DETAILS                              */}
       {/* ------------------------------------------------------------------ */}
 
       {selectedUser && (
