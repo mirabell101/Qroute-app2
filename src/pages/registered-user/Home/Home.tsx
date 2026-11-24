@@ -62,9 +62,11 @@ export default function Home({
 
   const savedSelection = parseSavedMapSelection(location.state);
 
-  const savedSelectionKey = savedSelection
-    ? `${savedSelection.kind}:${savedSelection.targetId}`
-    : null;
+const savedSelectionKey = savedSelection
+  ? savedSelection.bookmarkId !== null
+    ? `bookmark:${savedSelection.bookmarkId}`
+    : `${savedSelection.kind}:${savedSelection.targetId}`
+  : null;
 
   useEffect(() => {
     if (
@@ -79,10 +81,7 @@ export default function Home({
 
     handledSavedSelection.current = savedSelectionKey;
 
-    map.handleSavedItemSelect(
-      savedSelection.kind,
-      savedSelection.targetId
-    );
+map.handleSavedItemSelect(savedSelection);
 
     navigate("/home", { replace: true, state: null });
   }, [

@@ -23,9 +23,17 @@ import { useSavedItems } from "@/components/saved/savedItemsStore";
 import { mergeMapTerminals } from "@/lib/routeMap";
 import type { RouteMapIndex } from "@/lib/routeMap";
 import { getRouteMapIndex } from "@/lib/routes";
-import type { SavedKind } from "@/lib/savedItems";
+import type {
+  SavedJourneyEndpoint,
+  SavedKind,
+  SavedRouteBookmark,
+} from "@/lib/savedItems";
 import { getTerminals } from "@/lib/terminals";
 import type { Terminal } from "@/lib/terminals";
+
+// ============================================================
+// TYPES
+// ============================================================
 
 interface SavedProps {
   currentUserId: string | null;
@@ -33,10 +41,32 @@ interface SavedProps {
 }
 
 interface SavedCard {
+  /**
+   * Stable UI identity.
+   *
+   * Route bookmark cards use the saved_routes bookmark ID.
+   * Individual stops and terminals use their kind and target ID.
+   */
+  key: string;
+
   kind: SavedKind;
   targetId: number;
   name: string;
   details: string[];
+
+  /**
+   * Only route bookmark cards have a bookmarkId.
+   * This is the saved_routes.id, not the route ID.
+   */
+  bookmarkId?: number;
+
+  /**
+   * Present only when the card represents a saved journey.
+   */
+  journey?: {
+    origin: SavedJourneyEndpoint;
+    destination: SavedJourneyEndpoint;
+  };
 }
 
 interface SavedMapData {
@@ -44,8 +74,21 @@ interface SavedMapData {
   terminals: Terminal[];
 }
 
-const categories: { kind: SavedKind; label: string }[] = [
-  { kind: "route", label: "Saved Routes" },
+interface SavedMapDataResult {
+  key: string;
+  data: SavedMapData | null;
+  error: string | null;
+}
+
+// ============================================================
+// CONSTANTS
+// ============================================================
+
+const categories: {
+  kind: SavedKind;
+  label: string;
+}[] = [
+  { kind: "route", label: "Saved Routes & Journeys" },
   { kind: "stop", label: "Saved Stops" },
   { kind: "terminal", label: "Saved Terminals" },
 ];
@@ -57,98 +100,319 @@ const navItems = [
   { label: "Community", icon: MessageSquare },
 ];
 
+// ============================================================
+// HELPERS
+// ============================================================
+
+function createMapRequestKey(
+  userId: string | null,
+  attempt: number,
+): string {
+  return JSON.stringify([userId, attempt]);
+}
+
+/**
+ * Resolve a saved journey endpoint to its currently available
+ * public map point.
+ *
+ * A fallback label is used when a location is not currently
+ * included in the public map response. This prevents the saved
+ * bookmark from disappearing simply because its point cannot
+ * currently be resolved from public map data.
+ */
+function getJourneyEndpointName(
+  endpoint: SavedJourneyEndpoint,
+  mapPoints: ReturnType<typeof mergeMapTerminals>,
+): string {
+  const point = mapPoints.find(
+    (item) =>
+      item.kind === endpoint.kind &&
+      item.ref_id === endpoint.id,
+  );
+
+  if (point) {
+    return point.name;
+  }
+
+  const endpointLabel =
+    endpoint.kind === "stop" ? "Stop" : "Terminal";
+
+  return `${endpointLabel} #${endpoint.id}`;
+}
+
+/**
+ * Build a saved route card from a complete saved_routes record.
+ *
+ * Whole-route bookmarks and journey bookmarks are intentionally
+ * represented separately, even when they refer to the same route.
+ *
+ * Journey cards use the passenger-defined journey name as their
+ * primary title. Their endpoints and selected route are supporting
+ * details rather than being used to reconstruct the title.
+ */
+function createRouteCard(
+  bookmark: SavedRouteBookmark,
+  routeMapIndex: RouteMapIndex,
+  mapPoints: ReturnType<typeof mergeMapTerminals>,
+): SavedCard {
+  const route = routeMapIndex.routes.find(
+    (item) => item.id === bookmark.routeId,
+  );
+
+  const routePoints = route
+    ? mapPoints
+        .flatMap((point) => {
+          const routeStop = point.routes.find(
+            (item) => item.route.id === route.id,
+          );
+
+          return routeStop
+            ? [
+                {
+                  point,
+                  stopOrder: routeStop.stop_order,
+                },
+              ]
+            : [];
+        })
+        .sort(
+          (left, right) =>
+            left.stopOrder - right.stopOrder,
+        )
+    : [];
+
+  const transportName = route?.transport_types?.name;
+
+  // ----------------------------------------------------------
+  // WHOLE-ROUTE BOOKMARK
+  // ----------------------------------------------------------
+
+  if (bookmark.bookmarkType === "whole_route") {
+    const origin = routePoints[0]?.point.name;
+
+    const destination =
+      routePoints[routePoints.length - 1]?.point.name;
+
+    return {
+      key: `route-bookmark:${bookmark.id}`,
+      kind: "route",
+      targetId: bookmark.routeId,
+      bookmarkId: bookmark.id,
+      name: route?.name ?? `Route #${bookmark.routeId}`,
+      details: [
+        transportName ?? "Whole-route bookmark",
+        origin && destination
+          ? `${origin} to ${destination}`
+          : route
+            ? "Route path details unavailable"
+            : "Route is not currently available on the public map",
+      ],
+    };
+  }
+
+  // ----------------------------------------------------------
+  // JOURNEY BOOKMARK
+  // ----------------------------------------------------------
+
+  const originName = getJourneyEndpointName(
+    bookmark.origin,
+    mapPoints,
+  );
+
+  const destinationName = getJourneyEndpointName(
+    bookmark.destination,
+    mapPoints,
+  );
+
+  return {
+    key: `route-bookmark:${bookmark.id}`,
+    kind: "route",
+    targetId: bookmark.routeId,
+    bookmarkId: bookmark.id,
+
+    // Use the passenger-defined name.
+    name: bookmark.journeyName,
+
+    // Keep the actual journey endpoints and selected service
+    // visible independently of the passenger-defined title.
+    details: [
+      `${originName} → ${destinationName}`,
+      route?.name ?? `Route #${bookmark.routeId}`,
+      transportName ?? "Saved journey",
+      ...(
+        route
+          ? []
+          : [
+              "Route is not currently available on the public map",
+            ]
+      ),
+    ],
+
+    journey: {
+      origin: bookmark.origin,
+      destination: bookmark.destination,
+    },
+  };
+}
+
+// ============================================================
+// PAGE
+// ============================================================
+
 export default function Saved({
   currentUserId,
   onLogout,
 }: SavedProps) {
   const navigate = useNavigate();
 
-  const { account, userId: profileUserId } = useAccountProfile();
+  const { account, userId: profileUserId } =
+    useAccountProfile();
+
   const profileAccount =
     profileUserId === currentUserId ? account : null;
 
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [showSignInPrompt, setShowSignInPrompt] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [logoutError, setLogoutError] = useState<string | null>(null);
+  // ----------------------------------------------------------
+  // ACCOUNT MENU STATE
+  // ----------------------------------------------------------
+
+  const [showProfileMenu, setShowProfileMenu] =
+    useState(false);
+
+  const [showSignInPrompt, setShowSignInPrompt] =
+    useState(false);
+
+  const [loggingOut, setLoggingOut] =
+    useState(false);
+
+  const [logoutError, setLogoutError] =
+    useState<string | null>(null);
+
+  // ----------------------------------------------------------
+  // SAVED ITEMS CONTEXT
+  // ----------------------------------------------------------
 
   const {
     bookmarkIds,
+    routeBookmarks,
     loading: bookmarksLoading,
     error: bookmarksError,
     removeBookmark,
+    removeRouteBookmark,
   } = useSavedItems();
+
+  // ----------------------------------------------------------
+  // PAGE STATE
+  // ----------------------------------------------------------
 
   const [activeCategory, setActiveCategory] =
     useState<SavedKind>("route");
 
-  const [mapDataResult, setMapDataResult] = useState<{
-    attempt: number;
-    data: SavedMapData | null;
-    error: string | null;
-  }>({
-    attempt: -1,
-    data: null,
-    error: null,
-  });
+  const [mapDataResult, setMapDataResult] =
+    useState<SavedMapDataResult>({
+      key: "",
+      data: null,
+      error: null,
+    });
 
-  const [loadAttempt, setLoadAttempt] = useState(0);
-  const [removingKey, setRemovingKey] = useState<string | null>(null);
-  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] =
+    useState(0);
 
-  // Load the public route and terminal information used to display bookmarks.
+  const [removingKey, setRemovingKey] =
+    useState<string | null>(null);
+
+  const [removeError, setRemoveError] =
+    useState<string | null>(null);
+
+  // ==========================================================
+  // LOAD PUBLIC MAP INFORMATION
+  // ==========================================================
+
+  const mapRequestKey = createMapRequestKey(
+    currentUserId,
+    loadAttempt,
+  );
+
   useEffect(() => {
     let active = true;
 
-    void Promise.all([getRouteMapIndex(currentUserId), getTerminals(currentUserId)])
+    const requestKey = createMapRequestKey(
+      currentUserId,
+      loadAttempt,
+    );
+
+    void Promise.all([
+      getRouteMapIndex(currentUserId),
+      getTerminals(currentUserId),
+    ])
       .then(([routeMapIndex, terminals]) => {
-        if (active) {
-          setMapDataResult({
-            attempt: loadAttempt,
-            data: { routeMapIndex, terminals },
-            error: null,
-          });
+        if (!active) {
+          return;
         }
+
+        setMapDataResult({
+          key: requestKey,
+          data: {
+            routeMapIndex,
+            terminals,
+          },
+          error: null,
+        });
       })
       .catch((cause: unknown) => {
-        if (active) {
-          setMapDataResult({
-            attempt: loadAttempt,
-            data: null,
-            error:
-              cause instanceof Error
-                ? cause.message
-                : "Unable to load public map information.",
-          });
+        if (!active) {
+          return;
         }
+
+        setMapDataResult({
+          key: requestKey,
+          data: null,
+          error:
+            cause instanceof Error
+              ? cause.message
+              : "Unable to load public map information.",
+        });
       });
 
     return () => {
       active = false;
     };
-  }, [loadAttempt]);
+  }, [currentUserId, loadAttempt]);
 
-  const mapDataLoading = mapDataResult.attempt !== loadAttempt;
+  const mapDataLoading =
+    mapDataResult.key !== mapRequestKey;
 
   const mapData =
-    mapDataResult.attempt === loadAttempt
+    mapDataResult.key === mapRequestKey
       ? mapDataResult.data
       : null;
 
   const mapDataError =
-    mapDataResult.attempt === loadAttempt
+    mapDataResult.key === mapRequestKey
       ? mapDataResult.error
       : null;
+
+  // ==========================================================
+  // MAP POINTS
+  // ==========================================================
 
   const mapPoints = useMemo(
     () =>
       mapData
-        ? mergeMapTerminals(mapData.routeMapIndex, mapData.terminals)
+        ? mergeMapTerminals(
+            mapData.routeMapIndex,
+            mapData.terminals,
+          )
         : [],
-    [mapData]
+    [mapData],
   );
 
-  const visibleItems = useMemo<Record<SavedKind, SavedCard[]>>(() => {
+  // ==========================================================
+  // BUILD VISIBLE SAVED ITEMS
+  // ==========================================================
+
+  const visibleItems = useMemo<
+    Record<SavedKind, SavedCard[]>
+  >(() => {
     if (!mapData) {
       return {
         route: [],
@@ -157,58 +421,47 @@ export default function Saved({
       };
     }
 
-    const routeCards = bookmarkIds.routeIds.flatMap((targetId) => {
-      const route = mapData.routeMapIndex.routes.find(
-        (item) => item.id === targetId
-      );
+    // --------------------------------------------------------
+    // ROUTE AND JOURNEY CARDS
+    // --------------------------------------------------------
 
-      if (!route) return [];
+    const routeCards = routeBookmarks.map(
+      (bookmark) =>
+        createRouteCard(
+          bookmark,
+          mapData.routeMapIndex,
+          mapPoints,
+        ),
+    );
 
-      const routePoints = mapPoints
-        .flatMap((point) => {
-          const routeStop = point.routes.find(
-            (item) => item.route.id === route.id
-          );
+    // --------------------------------------------------------
+    // INDIVIDUAL STOP AND TERMINAL CARDS
+    // --------------------------------------------------------
 
-          return routeStop
-            ? [{ point, stopOrder: routeStop.stop_order }]
-            : [];
-        })
-        .sort((left, right) => left.stopOrder - right.stopOrder);
-
-      const origin = routePoints[0]?.point.name;
-      const destination = routePoints[routePoints.length - 1]?.point.name;
-
-      return [
-        {
-          kind: "route" as const,
-          targetId,
-          name: route.name,
-          details: [
-            route.transport_types.name,
-            origin && destination ? `${origin} to ${destination}` : "",
-          ].filter(Boolean),
-        },
-      ];
-    });
-
-    const pointCards = (kind: "stop" | "terminal") =>
+    const pointCards = (
+      kind: "stop" | "terminal",
+    ): SavedCard[] =>
       bookmarkIds[
         kind === "stop" ? "stopIds" : "terminalIds"
       ].flatMap((targetId) => {
         const point = mapPoints.find(
-          (item) => item.kind === kind && item.ref_id === targetId
+          (item) =>
+            item.kind === kind &&
+            item.ref_id === targetId,
         );
 
-        if (!point) return [];
+        if (!point) {
+          return [];
+        }
 
         const servingRoutes = point.routes.map(
           ({ route }) =>
-            `${route.transport_types.name}: ${route.name}`
+            `${route.transport_types.name}: ${route.name}`,
         );
 
         return [
           {
+            key: `${kind}:${targetId}`,
             kind,
             targetId,
             name: point.name,
@@ -230,78 +483,152 @@ export default function Saved({
       stop: pointCards("stop"),
       terminal: pointCards("terminal"),
     };
-  }, [bookmarkIds, mapData, mapPoints]);
+  }, [
+    routeBookmarks,
+    bookmarkIds,
+    mapData,
+    mapPoints,
+  ]);
 
   const items = visibleItems[activeCategory];
+
+  // ==========================================================
+  // NAVIGATION
+  // ==========================================================
 
   const handleNavigation = (label: string) => {
     switch (label) {
       case "Recents":
         navigate("/recents");
         break;
+
       case "Saved":
         navigate("/saved");
         break;
+
       case "Your Contribution":
         navigate("/contribution");
         break;
+
       case "Community":
         navigate("/community");
         break;
+
       default:
         break;
     }
   };
 
+  // ==========================================================
+  // LOGOUT
+  // ==========================================================
+
   const handleLogout = async () => {
-    if (loggingOut) return;
+    if (loggingOut) {
+      return;
+    }
 
     setLoggingOut(true);
     setLogoutError(null);
 
     try {
       await onLogout();
+
       setShowProfileMenu(false);
       navigate("/");
     } catch (cause: unknown) {
       setLogoutError(
         cause instanceof Error
           ? cause.message
-          : "Unable to log out. Please try again."
+          : "Unable to log out. Please try again.",
       );
+
       setLoggingOut(false);
     }
   };
 
-  const handleRemove = async (item: SavedCard) => {
-    const key = `${item.kind}:${item.targetId}`;
+  // ==========================================================
+  // REMOVE SAVED ITEM
+  // ==========================================================
 
-    setRemovingKey(key);
+  const handleRemove = async (item: SavedCard) => {
+    setRemovingKey(item.key);
     setRemoveError(null);
 
     try {
-      await removeBookmark(item.kind, item.targetId);
+      if (item.kind === "route") {
+        if (item.bookmarkId == null) {
+          throw new Error(
+            "The saved route bookmark ID is missing.",
+          );
+        }
+
+        const removed = await removeRouteBookmark(
+          item.bookmarkId,
+        );
+
+        if (!removed) {
+          throw new Error(
+            "This saved bookmark was not found or is no longer available.",
+          );
+        }
+      } else {
+        await removeBookmark(
+          item.kind,
+          item.targetId,
+        );
+      }
     } catch (cause: unknown) {
       setRemoveError(
         cause instanceof Error
           ? cause.message
-          : "Unable to remove this item."
+          : "Unable to remove this item.",
       );
     } finally {
       setRemovingKey(null);
     }
   };
 
+  // ==========================================================
+  // SELECT SAVED ITEM
+  // ==========================================================
+
   const selectItem = (item: SavedCard) => {
     navigate("/home", {
       state: {
         savedSelection: {
+          /**
+           * Preserve the existing selection contract.
+           *
+           * kind="route" and targetId still identify the route
+           * for existing map-selection behavior.
+           */
           kind: item.kind,
           targetId: item.targetId,
+
+          /**
+           * Additional route bookmark metadata.
+           *
+           * This distinguishes an individual journey from
+           * a whole-route bookmark.
+           */
+          bookmarkId: item.bookmarkId ?? null,
+
+          bookmarkType: item.journey
+            ? "journey"
+            : item.kind === "route"
+              ? "whole_route"
+              : null,
+
+          journey: item.journey ?? null,
         },
       },
     });
   };
+
+  // ==========================================================
+  // RENDER
+  // ==========================================================
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -325,8 +652,9 @@ export default function Saved({
             <h1 className="text-lg font-bold text-[#0f2a47]">
               Saved Items
             </h1>
+
             <p className="text-xs text-gray-500">
-              Your bookmarked routes, stops, and terminals
+              Your bookmarked routes, journeys, stops, and terminals
             </p>
           </div>
 
@@ -349,7 +677,10 @@ export default function Saved({
                 aria-label="Open account menu"
                 aria-expanded={showProfileMenu}
                 onClick={() => {
-                  setShowProfileMenu((previous) => !previous);
+                  setShowProfileMenu(
+                    (previous) => !previous,
+                  );
+
                   setLogoutError(null);
                 }}
                 className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-[#e8eef3] text-[#12395A] transition hover:ring-2 hover:ring-[#12395A]/20"
@@ -402,7 +733,9 @@ export default function Saved({
                     className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <LogOut size={16} />
-                    {loggingOut ? "Logging out..." : "Log Out"}
+                    {loggingOut
+                      ? "Logging out..."
+                      : "Log Out"}
                   </button>
 
                   {logoutError && (
@@ -461,14 +794,16 @@ export default function Saved({
         </div>
       )}
 
+      {/* Main content */}
       <main className="min-h-screen pl-[270px] pr-6 pt-[115px] pb-10 sm:pr-8">
         <div className="mx-auto max-w-5xl">
           <div className="mb-6">
             <h2 className="text-2xl font-bold text-gray-900">
               Your Saved Items
             </h2>
+
             <p className="mt-1 text-sm text-gray-500">
-              Manage the routes, stops, and terminals you have bookmarked.
+              Manage the routes, journeys, stops, and terminals you have bookmarked.
             </p>
           </div>
 
@@ -520,7 +855,9 @@ export default function Saved({
                 <button
                   type="button"
                   onClick={() =>
-                    setLoadAttempt((attempt) => attempt + 1)
+                    setLoadAttempt(
+                      (attempt) => attempt + 1,
+                    )
                   }
                   className="mt-3 font-semibold underline"
                 >
@@ -549,19 +886,19 @@ export default function Saved({
               <p className="rounded-lg bg-white p-6 text-sm text-gray-500 shadow-sm">
                 No saved{" "}
                 {activeCategory === "route"
-                  ? "routes"
+                  ? "routes or journeys"
                   : `${activeCategory}s`}{" "}
                 yet. Save items from their information panel on the map.
               </p>
             ) : (
               <ul className="space-y-3">
                 {items.map((item) => {
-                  const key = `${item.kind}:${item.targetId}`;
-                  const isRemoving = removingKey === key;
+                  const isRemoving =
+                    removingKey === item.key;
 
                   return (
                     <li
-                      key={key}
+                      key={item.key}
                       className="flex flex-col gap-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between"
                     >
                       <div className="min-w-0">
@@ -570,9 +907,15 @@ export default function Saved({
                         </p>
 
                         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-gray-500">
-                          {item.details.map((detail) => (
-                            <span key={detail}>{detail}</span>
-                          ))}
+                          {item.details.map(
+                            (detail, index) => (
+                              <span
+                                key={`${item.key}:detail:${index}`}
+                              >
+                                {detail}
+                              </span>
+                            ),
+                          )}
                         </div>
                       </div>
 
@@ -591,7 +934,9 @@ export default function Saved({
                           onClick={() => void handleRemove(item)}
                           className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {isRemoving ? "Removing..." : "Remove"}
+                          {isRemoving
+                            ? "Removing..."
+                            : "Remove"}
                         </button>
                       </div>
                     </li>

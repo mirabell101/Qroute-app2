@@ -17,6 +17,7 @@ export interface PublicMapStop {
   latitude: number;
   longitude: number;
   is_active: boolean;
+  transport_type_id: number;
 }
 
 export interface PublicMapRoute extends RouteMapRouteRecord {

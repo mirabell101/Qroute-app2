@@ -1,4 +1,5 @@
-import { useState } from "react";
+
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import {
@@ -13,16 +14,55 @@ import { useNavigate } from "react-router-dom";
 import { findRouteStopIndex } from "@/lib/routeMap";
 import type { RouteDetails } from "@/lib/routes";
 
-import { hasSavedBookmark } from "@/lib/savedItems";
-import type { SavedKind } from "@/lib/savedItems";
+import {
+  hasSavedBookmark,
+  normalizeSavedJourneyName,
+  SAVED_JOURNEY_NAME_MAX_LENGTH,
+} from "@/lib/savedItems";
+
+import type {
+  SavedJourneyEndpoint,
+} from "@/lib/savedItems";
 
 import { useSavedItems } from "@/components/saved/savedItemsStore";
 
 import { stopTypeLabel } from "./useTransitMap";
 import type { TransitMapController } from "./useTransitMap";
 
+// ============================================================
+// CONSTANTS
+// ============================================================
+
+const JOURNEY_BOOKMARKS_ENABLED = true;
+
+// ============================================================
+// HELPERS
+// ============================================================
+
 const peso = (value: number) => `₱${value.toFixed(2)}`;
 const wholePeso = (value: number) => `₱${value.toFixed(0)}`;
+
+/**
+ * Generates the suggested passenger-defined journey name.
+ *
+ * The generated name is kept within the same 80-character
+ * limit enforced by savedItems.ts and the database.
+ */
+function createSuggestedJourneyName(
+  originName: string,
+  destinationName: string,
+): string {
+  const suggestedName =
+    `${originName} → ${destinationName}`;
+
+  return Array.from(suggestedName)
+    .slice(0, SAVED_JOURNEY_NAME_MAX_LENGTH)
+    .join("");
+}
+
+// ============================================================
+// COMPONENT
+// ============================================================
 
 export function TransitMapPanel({
   map,
@@ -31,19 +71,30 @@ export function TransitMapPanel({
 }: {
   map: TransitMapController;
   className?: string;
+
   // Page-specific actions (e.g. Home's "Edit route") stay in the page shell.
   renderRouteActions?: (route: RouteDetails) => ReactNode;
 }) {
   const navigate = useNavigate();
 
+  // ==========================================================
+  // SAVED ITEMS CONTEXT
+  // ==========================================================
+
   const {
     userId,
     bookmarkIds,
+    routeBookmarks,
     loading: bookmarksLoading,
     error: bookmarksError,
     addBookmark,
     removeBookmark,
+    addJourneyBookmark,
   } = useSavedItems();
+
+  // ==========================================================
+  // BOOKMARK ACTION STATE
+  // ==========================================================
 
   const [bookmarkActionKey, setBookmarkActionKey] =
     useState<string | null>(null);
@@ -51,7 +102,29 @@ export function TransitMapPanel({
   const [bookmarkActionError, setBookmarkActionError] =
     useState<string | null>(null);
 
-  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  // ==========================================================
+  // JOURNEY ACTION STATE
+  // ==========================================================
+
+  const [journeyName, setJourneyName] =
+    useState("");
+
+  const [journeySaving, setJourneySaving] =
+    useState(false);
+
+  const [journeyActionError, setJourneyActionError] =
+    useState<string | null>(null);
+
+  // ==========================================================
+  // LOGIN PROMPT STATE
+  // ==========================================================
+
+  const [showLoginPrompt, setShowLoginPrompt] =
+    useState(false);
+
+  // ==========================================================
+  // MAP CONTROLLER
+  // ==========================================================
 
   const {
     selectedPlace,
@@ -65,35 +138,145 @@ export function TransitMapPanel({
     routeError,
     selectionError,
     routeMapIndex,
+
     routeDistanceMeters,
     routeDurationSeconds,
+
     routeColor,
     isRailRoute,
     originName,
     destinationName,
+
     boardingIndex,
     destinationIndex,
     boardingStop,
     destinationStop,
+
     fareOption,
     fareOptionLoading,
     fareOptionError,
+
     railFareLoading,
     railFareError,
+
     hasTripSegment,
     tripDistanceMeters,
+    tripDurationSeconds,
+    journeyGeometryError,
+
     fareCards,
+
     handleListPick,
     clearTrip,
     clearSelectedRoute,
     closePlace,
   } = map;
 
-  const toggleBookmark = async (
-    kind: SavedKind,
-    targetId: number,
-    isSaved: boolean,
-  ) => {
+  // ==========================================================
+  // JOURNEY ENDPOINTS
+  // ==========================================================
+
+  /**
+   * Only the actual selected boarding and destination stops
+   * are used to construct a saved journey.
+   *
+   * The selected public route is validated separately by the
+   * database before journey insertion is eventually enabled.
+   */
+  const boardingEndpoint: SavedJourneyEndpoint | null =
+    boardingStop &&
+    (
+      boardingStop.kind === "stop" ||
+      boardingStop.kind === "terminal"
+    )
+      ? {
+          kind: boardingStop.kind,
+          id: boardingStop.ref_id,
+        }
+      : null;
+
+  const destinationEndpoint: SavedJourneyEndpoint | null =
+    destinationStop &&
+    (
+      destinationStop.kind === "stop" ||
+      destinationStop.kind === "terminal"
+    )
+      ? {
+          kind: destinationStop.kind,
+          id: destinationStop.ref_id,
+        }
+      : null;
+
+  // ==========================================================
+  // SUGGESTED JOURNEY NAME
+  // ==========================================================
+
+  const suggestedJourneyName =
+    hasTripSegment &&
+    boardingStop &&
+    destinationStop
+      ? createSuggestedJourneyName(
+          boardingStop.name,
+          destinationStop.name,
+        )
+      : "";
+
+  /**
+   * Reset the suggested name whenever the selected journey
+   * endpoints change.
+   *
+   * Once the passenger manually edits the field, ordinary
+   * rerenders do not overwrite their text.
+   */
+  useEffect(() => {
+    setJourneyName(suggestedJourneyName);
+    setJourneyActionError(null);
+  }, [suggestedJourneyName]);
+
+  // ==========================================================
+  // EXISTING JOURNEY DETECTION
+  // ==========================================================
+
+  /**
+   * A journey is identified by:
+   * - User
+   * - Route
+   * - Origin kind and ID
+   * - Destination kind and ID
+   *
+   * The selected orientation matters. A reverse journey is
+   * a different saved journey.
+   */
+  const existingJourneyBookmark =
+    selectedRoute &&
+    boardingEndpoint &&
+    destinationEndpoint
+      ? routeBookmarks.find((bookmark) => {
+          if (
+            bookmark.bookmarkType !== "journey" ||
+            bookmark.routeId !== selectedRoute.id
+          ) {
+            return false;
+          }
+
+          return (
+            bookmark.origin.kind === boardingEndpoint.kind &&
+            bookmark.origin.id === boardingEndpoint.id &&
+            bookmark.destination.kind === destinationEndpoint.kind &&
+            bookmark.destination.id === destinationEndpoint.id
+          );
+        })
+      : undefined;
+
+  // ==========================================================
+  // WHOLE-ROUTE / STOP / TERMINAL BOOKMARKING
+  // ==========================================================
+
+const toggleBookmark = async (
+  kind: "stop" | "terminal",
+  targetId: number,
+  isSaved: boolean,
+) => {
     if (!userId) {
       setShowLoginPrompt(true);
       return;
@@ -121,10 +304,16 @@ export function TransitMapPanel({
     }
   };
 
-  const bookmarkButton = (
-    kind: SavedKind,
-    targetId: number,
-  ) => {
+  /**
+   * This remains the existing independent bookmark control.
+   *
+   * kind="route" refers only to a whole-route bookmark.
+   * It does not create or remove a passenger journey.
+   */
+const bookmarkButton = (
+  kind: "stop" | "terminal",
+  targetId: number,
+) => {
     const label =
       kind === "route"
         ? "Route"
@@ -160,6 +349,100 @@ export function TransitMapPanel({
     );
   };
 
+  // ==========================================================
+  // SAVE JOURNEY
+  // ==========================================================
+
+  const handleSaveJourney = async () => {
+    if (!userId) {
+      setShowLoginPrompt(true);
+      return;
+    }
+
+    /**
+     * Safety guard:
+     *
+     * The temporary database constraint still blocks journey
+     * insertion. This operation must not run until Phase 3B
+     * removes that restriction.
+     */
+    if (!JOURNEY_BOOKMARKS_ENABLED) {
+      return;
+    }
+
+    if (
+      !selectedRoute ||
+      !hasTripSegment ||
+      !boardingEndpoint ||
+      !destinationEndpoint
+    ) {
+      setJourneyActionError(
+        "Select a valid boarding point and destination first.",
+      );
+
+      return;
+    }
+
+    if (existingJourneyBookmark) {
+      setJourneyActionError(
+        "This journey is already saved.",
+      );
+
+      return;
+    }
+
+    let normalizedJourneyName: string;
+
+    try {
+      normalizedJourneyName =
+        normalizeSavedJourneyName(journeyName);
+    } catch (cause: unknown) {
+      setJourneyActionError(
+        cause instanceof Error
+          ? cause.message
+          : "Please enter a valid journey name.",
+      );
+
+      return;
+    }
+
+    setJourneySaving(true);
+    setJourneyActionError(null);
+
+    try {
+      await addJourneyBookmark(
+        selectedRoute.id,
+        boardingEndpoint,
+        destinationEndpoint,
+        normalizedJourneyName,
+      );
+    } catch (cause: unknown) {
+      setJourneyActionError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to save this journey.",
+      );
+    } finally {
+      setJourneySaving(false);
+    }
+  };
+
+  // ==========================================================
+  // JOURNEY NAME INPUT VALIDATION
+  // ==========================================================
+
+  const journeyNameCharacterCount =
+    Array.from(journeyName).length;
+
+  const journeyNameIsValid =
+    journeyName.trim().length > 0 &&
+    journeyNameCharacterCount <=
+      SAVED_JOURNEY_NAME_MAX_LENGTH;
+
+  // ==========================================================
+  // PANEL VISIBILITY
+  // ==========================================================
+
   const visible =
     selectedPlace ||
     selectedRoute ||
@@ -174,8 +457,16 @@ export function TransitMapPanel({
     return null;
   }
 
+  // ==========================================================
+  // RENDER
+  // ==========================================================
+
   return (
     <div className={className}>
+      {/* ================================================== */}
+      {/* SAVED ITEM STATUS */}
+      {/* ================================================== */}
+
       {bookmarksLoading && userId && (
         <p role="status" className="mb-2 text-xs text-gray-500">
           Checking saved status...
@@ -193,6 +484,10 @@ export function TransitMapPanel({
           {bookmarkActionError}
         </p>
       )}
+
+      {/* ================================================== */}
+      {/* MAP LOADING AND ERRORS */}
+      {/* ================================================== */}
 
       {routesLoading && (
         <p role="status" className="text-sm text-gray-500">
@@ -225,6 +520,10 @@ export function TransitMapPanel({
             No active routes found.
           </p>
         )}
+
+      {/* ================================================== */}
+      {/* SELECTED PLACE DETAILS */}
+      {/* ================================================== */}
 
       {selectedPlace && (
         <section
@@ -316,6 +615,10 @@ export function TransitMapPanel({
         </section>
       )}
 
+      {/* ================================================== */}
+      {/* ROUTE LOADING */}
+      {/* ================================================== */}
+
       {routeStopsLoading && (
         <p role="status" className="mt-2 text-sm text-gray-500">
           Loading route details...
@@ -328,7 +631,11 @@ export function TransitMapPanel({
         </p>
       )}
 
-      {selectedRoute &&
+      {/* ================================================== */}
+      {/* ROUTE / JOURNEY GEOMETRY MEASUREMENTS */}
+      {/* ================================================== */}
+
+      {selectedRoute && !hasTripSegment &&
         !roadRouteLoading &&
         routeDistanceMeters !== null &&
         routeDurationSeconds !== null && (
@@ -339,7 +646,42 @@ export function TransitMapPanel({
           </p>
         )}
 
-      {/* Active route details */}
+      {selectedRoute && hasTripSegment && (
+        <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2">
+          <p className="text-[11px] font-semibold text-[#0f2a47]">
+            Selected journey segment
+          </p>
+
+          {tripDistanceMeters !== null ? (
+            <p className="mt-1 text-xs text-gray-700">
+              {(tripDistanceMeters / 1000).toFixed(1)} km
+              {" · "}
+              {tripDurationSeconds !== null
+                ? `${Math.round(tripDurationSeconds / 60)} min estimated`
+                : isRailRoute
+                  ? "Travel time unavailable"
+                  : "Duration unavailable"}
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-gray-600">
+              {roadRouteLoading
+                ? "Calculating journey distance..."
+                : "Journey distance is unavailable."}
+            </p>
+          )}
+
+          {journeyGeometryError && (
+            <p role="alert" className="mt-2 text-xs text-amber-700">
+              {journeyGeometryError}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ================================================== */}
+      {/* ACTIVE ROUTE DETAILS */}
+      {/* ================================================== */}
+
       {selectedRoute && (
         <div
           className={`flex min-h-0 flex-col ${
@@ -375,11 +717,16 @@ export function TransitMapPanel({
             Destination: {destinationName}
           </p>
 
-          <div className="mt-3">
-            {bookmarkButton("route", selectedRoute.id)}
-          </div>
+          {/* ------------------------------------------------ */}
+          {/* WHOLE-ROUTE BOOKMARK */}
+          {/* ------------------------------------------------ */}
 
-          {/* Trip + fare */}
+
+
+          {/* ================================================= */}
+          {/* TRIP + FARE */}
+          {/* ================================================= */}
+
           <div className="mt-3 rounded-lg bg-gray-50 p-3 text-[11px] text-gray-700">
             <div className="flex justify-between gap-2">
               <span>Boarding</span>
@@ -396,6 +743,10 @@ export function TransitMapPanel({
                 {destinationStop?.name ?? "Tap a later stop"}
               </span>
             </div>
+
+            {/* ---------------------------------------------- */}
+            {/* FARE LOADING AND ERRORS */}
+            {/* ---------------------------------------------- */}
 
             {fareOptionLoading && (
               <p role="status" className="mt-2 text-gray-500">
@@ -448,6 +799,10 @@ export function TransitMapPanel({
                 </p>
               )}
 
+            {/* ---------------------------------------------- */}
+            {/* TRIP SELECTION INSTRUCTIONS */}
+            {/* ---------------------------------------------- */}
+
             {!hasTripSegment && (
               <p className="mt-2 text-gray-600">
                 Select any stop on this route to board, then any
@@ -472,6 +827,10 @@ export function TransitMapPanel({
                   Loading station fares...
                 </p>
               )}
+
+            {/* ---------------------------------------------- */}
+            {/* FARE CARDS */}
+            {/* ---------------------------------------------- */}
 
             {hasTripSegment &&
               !fareOptionLoading &&
@@ -568,17 +927,168 @@ export function TransitMapPanel({
                 </section>
               )}
 
+            {/* ================================================= */}
+            {/* SAVE PASSENGER JOURNEY */}
+            {/* ================================================= */}
+
+            {hasTripSegment &&
+              boardingStop &&
+              destinationStop &&
+              selectedRoute && (
+                <section
+                  aria-labelledby="save-journey-title"
+                  className="mt-4 rounded-lg border border-[#d7e3ef] bg-white p-3"
+                >
+                  <h3
+                    id="save-journey-title"
+                    className="text-xs font-semibold text-[#0f2a47]"
+                  >
+                    Save this journey
+                  </h3>
+
+                  <p className="mt-1 text-[10px] text-gray-500">
+                    Give this trip your own name so you can
+                    recognize it in your saved journeys.
+                  </p>
+
+                  {/* ------------------------------------------ */}
+                  {/* JOURNEY NAME INPUT */}
+                  {/* ------------------------------------------ */}
+
+                  <label
+                    htmlFor="saved-journey-name"
+                    className="mt-3 block text-[11px] font-medium text-gray-700"
+                  >
+                    Journey name
+                  </label>
+
+                  <input
+                    id="saved-journey-name"
+                    type="text"
+                    value={
+                      existingJourneyBookmark?.journeyName ??
+                      journeyName
+                    }
+                    disabled={Boolean(existingJourneyBookmark)}
+                    onChange={(event) => {
+                      const nextName = Array.from(
+                        event.currentTarget.value,
+                      )
+                        .slice(
+                          0,
+                          SAVED_JOURNEY_NAME_MAX_LENGTH,
+                        )
+                        .join("");
+
+                      setJourneyName(nextName);
+                      setJourneyActionError(null);
+                    }}
+                    placeholder="Enter a name for this journey"
+                    aria-describedby="saved-journey-name-help"
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs text-gray-800 outline-none transition placeholder:text-gray-400 focus:border-[#0f2a47] focus:ring-2 focus:ring-[#0f2a47]/10 disabled:bg-gray-100"
+                  />
+
+                  <div
+                    id="saved-journey-name-help"
+                    className="mt-1 flex justify-between text-[10px] text-gray-400"
+                  >
+                    <span>
+                      Suggested: {suggestedJourneyName}
+                    </span>
+
+                    <span className="shrink-0">
+                      {journeyNameCharacterCount}/
+                      {SAVED_JOURNEY_NAME_MAX_LENGTH}
+                    </span>
+                  </div>
+
+                  {/* ------------------------------------------ */}
+                  {/* EXISTING JOURNEY STATUS */}
+                  {/* ------------------------------------------ */}
+
+                  {existingJourneyBookmark && (
+                    <p className="mt-2 text-[10px] font-medium text-green-700">
+                      This journey is already saved under this name.
+                    </p>
+                  )}
+
+                  {/* ------------------------------------------ */}
+                  {/* DATABASE PHASE STATUS */}
+                  {/* ------------------------------------------ */}
+
+                  {!JOURNEY_BOOKMARKS_ENABLED &&
+                    !existingJourneyBookmark && (
+                      <p className="mt-2 text-[10px] text-amber-700">
+                        Journey saving will become available after
+                        the database journey restriction is removed
+                        in Phase 3B.
+                      </p>
+                    )}
+
+                  {/* ------------------------------------------ */}
+                  {/* SAVE ERROR */}
+                  {/* ------------------------------------------ */}
+
+                  {journeyActionError && (
+                    <p
+                      role="alert"
+                      className="mt-2 text-[10px] text-red-600"
+                    >
+                      {journeyActionError}
+                    </p>
+                  )}
+
+                  {/* ------------------------------------------ */}
+                  {/* SAVE BUTTON */}
+                  {/* ------------------------------------------ */}
+
+                  <button
+                    type="button"
+                    disabled={
+                      !JOURNEY_BOOKMARKS_ENABLED ||
+                      bookmarksLoading ||
+                      journeySaving ||
+                      Boolean(existingJourneyBookmark) ||
+                      !boardingEndpoint ||
+                      !destinationEndpoint ||
+                      !journeyNameIsValid
+                    }
+                    onClick={() => void handleSaveJourney()}
+                    title={
+                      !JOURNEY_BOOKMARKS_ENABLED
+                        ? "Journey saving is not enabled until Phase 3B."
+                        : undefined
+                    }
+                    className="mt-3 w-full rounded-lg bg-[#0f2a47] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#183b60] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {existingJourneyBookmark
+                      ? "Journey Already Saved"
+                      : journeySaving
+                        ? "Saving Journey..."
+                        : "Save Journey"}
+                  </button>
+                </section>
+              )}
+
+            {/* ================================================= */}
+            {/* CLEAR TRIP */}
+            {/* ================================================= */}
+
             {(boardingIndex !== null ||
               destinationIndex !== null) && (
               <button
                 type="button"
                 onClick={clearTrip}
-                className="mt-2 text-[11px] text-gray-500 underline"
+                className="mt-3 text-[11px] text-gray-500 underline"
               >
                 Clear trip
               </button>
             )}
           </div>
+
+          {/* ================================================= */}
+          {/* ROUTE STOP LIST */}
+          {/* ================================================= */}
 
           <hr className="my-3 border-gray-200" />
 
@@ -659,6 +1169,10 @@ export function TransitMapPanel({
             })}
           </ol>
 
+          {/* ================================================= */}
+          {/* PAGE-SPECIFIC ROUTE ACTIONS */}
+          {/* ================================================= */}
+
           <div className="mt-4 flex flex-col gap-2">
             {renderRouteActions?.(selectedRoute)}
 
@@ -672,6 +1186,10 @@ export function TransitMapPanel({
           </div>
         </div>
       )}
+
+      {/* ================================================== */}
+      {/* LOGIN PROMPT */}
+      {/* ================================================== */}
 
       {showLoginPrompt && (
         <div
@@ -689,8 +1207,8 @@ export function TransitMapPanel({
             </h2>
 
             <p className="mt-2 text-sm text-gray-600">
-              Sign in or create an account to save routes, stops,
-              and terminals.
+              Sign in or create an account to save routes, journeys,
+              stops, and terminals.
             </p>
 
             <div className="mt-5 flex justify-end gap-2">

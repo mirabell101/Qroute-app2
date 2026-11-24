@@ -1,12 +1,30 @@
-import type { PointKind, RouteStop, StopType } from "./routes";
+
+import type {
+  PointKind,
+  RouteStop,
+  StopType,
+} from "./routes";
+
+import type { Stop } from "./stops";
 import type { Terminal } from "./terminals";
-import type { SavedKind } from "./savedItems";
+
+import type {
+  SavedJourneyEndpoint,
+  SavedKind,
+} from "./savedItems";
+
+// ============================================================
+// TYPES
+// ============================================================
 
 export interface RouteMapRoute {
   id: number;
   name: string;
   transport_type_id: number;
-  transport_types: { name: string; color: string };
+  transport_types: {
+    name: string;
+    color: string;
+  };
 }
 
 export interface RouteMapRawPoint {
@@ -17,7 +35,7 @@ export interface RouteMapRawPoint {
   stop_type?: "road_stop" | "train_station";
   description?: string | null;
   is_active?: boolean;
-    is_approved?: boolean;
+  is_approved?: boolean;
 }
 
 export interface RouteMapRouteRecord extends RouteMapRoute {
@@ -29,6 +47,17 @@ export interface RouteMapRouteRecord extends RouteMapRoute {
   }[];
 }
 
+/**
+ * Unified map location.
+ *
+ * A point can exist independently of any public transit route.
+ *
+ * Independent locations have:
+ *   routes: []
+ *
+ * Route-associated locations retain their serving routes and
+ * their respective ordered stop positions.
+ */
 export interface RouteMapPoint {
   kind: PointKind;
   ref_id: number;
@@ -37,7 +66,11 @@ export interface RouteMapPoint {
   longitude: number;
   stop_type: StopType;
   description: string | null;
-  routes: { route: RouteMapRoute; stop_order: number }[];
+
+  routes: {
+    route: RouteMapRoute;
+    stop_order: number;
+  }[];
 }
 
 export interface RouteMapIndex {
@@ -46,56 +79,379 @@ export interface RouteMapIndex {
 }
 
 export type RouteMapSearchResult =
-  | { kind: "route"; route: RouteMapRoute }
-  | { kind: "point"; point: RouteMapPoint };
+  | {
+      kind: "route";
+      route: RouteMapRoute;
+    }
+  | {
+      kind: "point";
+      point: RouteMapPoint;
+    };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+// ============================================================
+// SAVED MAP SELECTION TYPES
+// ============================================================
+
+export interface SavedMapJourney {
+  origin: SavedJourneyEndpoint;
+  destination: SavedJourneyEndpoint;
 }
 
-export function parseSavedMapSelection(
-  state: unknown
-): { kind: SavedKind; targetId: number } | null {
-  if (!isRecord(state) || !isRecord(state.savedSelection)) return null;
+export interface ParsedSavedMapSelection {
+  kind: SavedKind;
+  targetId: number;
 
-  const { kind, targetId } = state.savedSelection;
-  if (
-    (kind === "route" || kind === "stop" || kind === "terminal") &&
-    typeof targetId === "number" &&
-    Number.isSafeInteger(targetId) &&
-    targetId > 0
-  ) {
-    return { kind, targetId };
+  /**
+   * Exact saved_routes.id.
+   *
+   * Null for individual stop/terminal selections and
+   * legacy navigation selections.
+   */
+  bookmarkId: number | null;
+
+  /**
+   * Distinguishes whole-route bookmarks from journey bookmarks.
+   *
+   * Null for individual stops/terminals and legacy selections.
+   */
+  bookmarkType: "whole_route" | "journey" | null;
+
+  /**
+   * Populated only for saved journey bookmarks.
+   */
+  journey: SavedMapJourney | null;
+}
+
+// ============================================================
+// GENERAL VALIDATION
+// ============================================================
+
+function isRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null
+  );
+}
+
+function isPositiveSafeInteger(
+  value: unknown,
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0
+  );
+}
+
+function isValidCoordinates(
+  latitude: number,
+  longitude: number,
+): boolean {
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
+
+// ============================================================
+// MAP POINT IDENTITY
+// ============================================================
+
+/**
+ * A stop and terminal can technically have the same numeric ID.
+ *
+ * Including the kind prevents those two different location
+ * records from colliding during merging.
+ */
+function getMapPointKey(
+  kind: PointKind,
+  id: number,
+): string {
+  return `${kind}-${id}`;
+}
+
+/**
+ * Creates a new map point with its own route-association array.
+ *
+ * This prevents map merging from mutating the original route
+ * index or its route association arrays.
+ */
+function cloneMapPoint(
+  point: RouteMapPoint,
+): RouteMapPoint {
+  return {
+    ...point,
+    routes: point.routes.map((association) => ({
+      route: association.route,
+      stop_order: association.stop_order,
+    })),
+  };
+}
+
+// ============================================================
+// SAVED JOURNEY ENDPOINT PARSER
+// ============================================================
+
+function parseSavedJourneyEndpoint(
+  value: unknown,
+): SavedJourneyEndpoint | null {
+  if (!isRecord(value)) {
+    return null;
   }
 
+  const { kind, id } = value;
+
+  if (
+    (kind !== "stop" && kind !== "terminal") ||
+    !isPositiveSafeInteger(id)
+  ) {
+    return null;
+  }
+
+  return {
+    kind,
+    id,
+  };
+}
+
+// ============================================================
+// SAVED MAP SELECTION PARSER
+// ============================================================
+
+/**
+ * Parses navigation state generated by saved.tsx.
+ *
+ * Supported selections:
+ *
+ * 1. Whole-route bookmark
+ *
+ * 2. Journey bookmark
+ *
+ * 3. Individual stop or terminal
+ *
+ * 4. Legacy route navigation
+ *
+ * Whole-route navigation remains supported for compatibility,
+ * even though the passenger-facing route-saving action has
+ * been removed.
+ */
+export function parseSavedMapSelection(
+  state: unknown,
+): ParsedSavedMapSelection | null {
+  if (
+    !isRecord(state) ||
+    !isRecord(state.savedSelection)
+  ) {
+    return null;
+  }
+
+  const selection = state.savedSelection;
+
+  const { kind, targetId } = selection;
+
+  if (
+    (
+      kind !== "route" &&
+      kind !== "stop" &&
+      kind !== "terminal"
+    ) ||
+    !isPositiveSafeInteger(targetId)
+  ) {
+    return null;
+  }
+
+  // ----------------------------------------------------------
+  // INDIVIDUAL STOP OR TERMINAL
+  // ----------------------------------------------------------
+
+  if (kind !== "route") {
+    return {
+      kind,
+      targetId,
+      bookmarkId: null,
+      bookmarkType: null,
+      journey: null,
+    };
+  }
+
+  // ----------------------------------------------------------
+  // LEGACY ROUTE SELECTION SUPPORT
+  // ----------------------------------------------------------
+
+  let bookmarkId: number | null = null;
+
+  const rawBookmarkId = selection.bookmarkId;
+
+  if (
+    rawBookmarkId !== undefined &&
+    rawBookmarkId !== null
+  ) {
+    if (!isPositiveSafeInteger(rawBookmarkId)) {
+      return null;
+    }
+
+    bookmarkId = rawBookmarkId;
+  }
+
+  const rawBookmarkType = selection.bookmarkType;
+
+  /**
+   * Older sources such as recent searches may only send
+   * kind and targetId.
+   *
+   * Continue accepting those navigation objects.
+   */
+  if (
+    rawBookmarkType === undefined ||
+    rawBookmarkType === null
+  ) {
+    if (
+      selection.journey !== undefined &&
+      selection.journey !== null
+    ) {
+      return null;
+    }
+
+    return {
+      kind: "route",
+      targetId,
+      bookmarkId,
+      bookmarkType: null,
+      journey: null,
+    };
+  }
+
+  // ----------------------------------------------------------
+  // WHOLE-ROUTE BOOKMARK
+  // ----------------------------------------------------------
+
+  if (rawBookmarkType === "whole_route") {
+    if (
+      bookmarkId === null ||
+      (
+        selection.journey !== undefined &&
+        selection.journey !== null
+      )
+    ) {
+      return null;
+    }
+
+    return {
+      kind: "route",
+      targetId,
+      bookmarkId,
+      bookmarkType: "whole_route",
+      journey: null,
+    };
+  }
+
+  // ----------------------------------------------------------
+  // JOURNEY BOOKMARK
+  // ----------------------------------------------------------
+
+  if (rawBookmarkType === "journey") {
+    if (
+      bookmarkId === null ||
+      !isRecord(selection.journey)
+    ) {
+      return null;
+    }
+
+    const origin = parseSavedJourneyEndpoint(
+      selection.journey.origin,
+    );
+
+    const destination = parseSavedJourneyEndpoint(
+      selection.journey.destination,
+    );
+
+    if (!origin || !destination) {
+      return null;
+    }
+
+    const sameEndpoint =
+      origin.kind === destination.kind &&
+      origin.id === destination.id;
+
+    if (sameEndpoint) {
+      return null;
+    }
+
+    return {
+      kind: "route",
+      targetId,
+      bookmarkId,
+      bookmarkType: "journey",
+      journey: {
+        origin,
+        destination,
+      },
+    };
+  }
+
+  // Unknown bookmark types are rejected.
   return null;
 }
+
+// ============================================================
+// RESOLVE SAVED MAP SELECTION
+// ============================================================
 
 export function resolveSavedMapSelection(
   routeMapIndex: RouteMapIndex,
   mapPoints: RouteMapPoint[],
   kind: SavedKind,
-  targetId: number
+  targetId: number,
 ): RouteMapSearchResult | null {
   if (kind === "route") {
-    const route = routeMapIndex.routes.find((item) => item.id === targetId);
-    return route ? { kind: "route", route } : null;
+    const route = routeMapIndex.routes.find(
+      (item) => item.id === targetId,
+    );
+
+    return route
+      ? {
+          kind: "route",
+          route,
+        }
+      : null;
   }
 
   const point = mapPoints.find(
-    (item) => item.kind === kind && item.ref_id === targetId
+    (item) =>
+      item.kind === kind &&
+      item.ref_id === targetId,
   );
-  return point ? { kind: "point", point } : null;
+
+  return point
+    ? {
+        kind: "point",
+        point,
+      }
+    : null;
 }
+
+// ============================================================
+// TRIP SELECTION TYPES
+// ============================================================
 
 export interface TripSelection {
   boardingIndex: number | null;
   destinationIndex: number | null;
 }
 
+// ============================================================
+// BOARDING POINT VALIDATION
+// ============================================================
+
 export function isRepeatedBoardingPoint(
   selection: TripSelection,
-  clickedIndex: number
+  clickedIndex: number,
 ): boolean {
   return (
     selection.boardingIndex !== null &&
@@ -103,63 +459,139 @@ export function isRepeatedBoardingPoint(
   );
 }
 
+// ============================================================
+// DISPLAYED ROUTE IDS
+// ============================================================
+
 export function getDisplayedRouteIds(
   visibleRouteIds: number[],
   selectedRouteId: string,
-  routeLinesVisible: boolean
+  routeLinesVisible: boolean,
 ): number[] {
-  if (!routeLinesVisible) return [];
+  if (!routeLinesVisible) {
+    return [];
+  }
 
   return [
     ...new Set([
       ...visibleRouteIds,
-      ...(selectedRouteId ? [Number(selectedRouteId)] : []),
+      ...(selectedRouteId
+        ? [Number(selectedRouteId)]
+        : []),
     ]),
   ];
 }
 
+// ============================================================
+// UNIQUE SERVING ROUTE
+// ============================================================
+
+/**
+ * Returns a route only when exactly one route serves the point.
+ *
+ * Independent locations with routes: [] correctly return null.
+ *
+ * Locations with multiple serving routes also return null,
+ * requiring the passenger to choose a route.
+ */
 export function getUniqueServingRoute(
-  point: RouteMapPoint
+  point: RouteMapPoint,
 ): RouteMapRoute | null {
-  return point.routes.length === 1 ? point.routes[0].route : null;
+  return point.routes.length === 1
+    ? point.routes[0].route
+    : null;
 }
+
+// ============================================================
+// OVERLAPPING ROUTE SELECTION
+// ============================================================
 
 export function getNextOverlappingRouteId(
   routeIds: number[],
   activeRouteId: number | null,
-  clickedRouteId: number
+  clickedRouteId: number,
 ): number {
-  const uniqueRouteIds = [...new Set(routeIds)];
-  const activeIndex = activeRouteId === null
-    ? -1
-    : uniqueRouteIds.indexOf(activeRouteId);
+  const uniqueRouteIds = [
+    ...new Set(routeIds),
+  ];
 
-  if (activeIndex < 0 || uniqueRouteIds.length < 2) return clickedRouteId;
-  return uniqueRouteIds[(activeIndex + 1) % uniqueRouteIds.length];
+  const activeIndex =
+    activeRouteId === null
+      ? -1
+      : uniqueRouteIds.indexOf(activeRouteId);
+
+  if (
+    activeIndex < 0 ||
+    uniqueRouteIds.length < 2
+  ) {
+    return clickedRouteId;
+  }
+
+  return uniqueRouteIds[
+    (activeIndex + 1) % uniqueRouteIds.length
+  ];
 }
 
+// ============================================================
+// BUILD ROUTE MAP INDEX
+// ============================================================
+
+/**
+ * Builds the route-oriented portion of the map index.
+ *
+ * This function intentionally includes only locations
+ * associated with the supplied public routes.
+ *
+ * Independent stops and terminals are added later through
+ * mergeMapLocations().
+ */
 export function buildRouteMapIndex(
-  records: RouteMapRouteRecord[]
+  records: RouteMapRouteRecord[],
 ): RouteMapIndex {
   const routes = records.map(
-    ({ id, name, transport_type_id, transport_types }) => ({
+    ({
       id,
       name,
       transport_type_id,
       transport_types,
-    })
+    }) => ({
+      id,
+      name,
+      transport_type_id,
+      transport_types,
+    }),
   );
-  const routesById = new Map(routes.map((route) => [route.id, route]));
-  const pointsByKey = new Map<string, RouteMapPoint>();
+
+  const routesById = new Map(
+    routes.map((route) => [
+      route.id,
+      route,
+    ]),
+  );
+
+  const pointsByKey = new Map<
+    string,
+    RouteMapPoint
+  >();
 
   records.forEach((record) => {
     const route = routesById.get(record.id);
-    if (!route) return;
+
+    if (!route) {
+      return;
+    }
 
     record.route_stops.forEach((row) => {
       let point: RouteMapPoint | null = null;
 
-      if (row.terminals && row.terminals.is_active !== false) {
+      // ------------------------------------------------------
+      // TERMINAL ASSOCIATION
+      // ------------------------------------------------------
+
+      if (
+        row.terminals &&
+        row.terminals.is_active !== false
+      ) {
         point = {
           kind: "terminal",
           ref_id: row.terminals.id,
@@ -170,131 +602,348 @@ export function buildRouteMapIndex(
           description: null,
           routes: [],
         };
-      } else if (row.stops) {
+      }
+
+      // ------------------------------------------------------
+      // STOP ASSOCIATION
+      // ------------------------------------------------------
+
+      else if (row.stops) {
         point = {
           kind: "stop",
           ref_id: row.stops.id,
           name: row.stops.name,
           latitude: row.stops.latitude,
           longitude: row.stops.longitude,
-          stop_type: row.stops.stop_type ?? "road_stop",
-          description: row.stops.description ?? null,
+          stop_type:
+            row.stops.stop_type ?? "road_stop",
+          description:
+            row.stops.description ?? null,
           routes: [],
         };
       }
 
-      if (!point) return;
+      if (!point) {
+        return;
+      }
 
-      const key = `${point.kind}-${point.ref_id}`;
+      const key = getMapPointKey(
+        point.kind,
+        point.ref_id,
+      );
+
       const existing = pointsByKey.get(key);
+
       if (!existing) {
         pointsByKey.set(key, point);
       }
 
       const target = existing ?? point;
+
+      // ------------------------------------------------------
+      // PRESERVE UNIQUE ROUTE ASSOCIATIONS
+      // ------------------------------------------------------
+
       const association = target.routes.find(
-        (item) => item.route.id === route.id
+        (item) => item.route.id === route.id,
       );
 
       if (!association) {
-        target.routes.push({ route, stop_order: row.stop_order });
-      } else if (row.stop_order < association.stop_order) {
+        target.routes.push({
+          route,
+          stop_order: row.stop_order,
+        });
+      } else if (
+        row.stop_order < association.stop_order
+      ) {
         association.stop_order = row.stop_order;
       }
     });
   });
 
-  return { routes, points: [...pointsByKey.values()] };
+  return {
+    routes,
+    points: [...pointsByKey.values()],
+  };
 }
 
+// ============================================================
+// MERGE INDEPENDENT MAP LOCATIONS
+// ============================================================
+
+/**
+ * Combines:
+ *
+ * 1. Locations already associated with public routes.
+ * 2. Independently loaded public stops.
+ * 3. Independently loaded public terminals.
+ *
+ * A location does not need a route association to appear
+ * in the returned collection.
+ *
+ * Duplicate locations are merged using their kind and ID.
+ *
+ * If an independent location already exists in the route
+ * index, its descriptive information is refreshed while
+ * its existing route associations are preserved.
+ */
+export function mergeMapLocations(
+  index: RouteMapIndex,
+  stops: Stop[],
+  terminals: Terminal[],
+): RouteMapPoint[] {
+  const pointsByKey = new Map<
+    string,
+    RouteMapPoint
+  >();
+
+  // ----------------------------------------------------------
+  // COPY EXISTING ROUTE-ASSOCIATED LOCATIONS
+  // ----------------------------------------------------------
+
+  index.points.forEach((point) => {
+    const key = getMapPointKey(
+      point.kind,
+      point.ref_id,
+    );
+
+    pointsByKey.set(
+      key,
+      cloneMapPoint(point),
+    );
+  });
+
+  // ----------------------------------------------------------
+  // MERGE INDEPENDENT STOPS
+  // ----------------------------------------------------------
+
+  stops.forEach((stop) => {
+    if (
+      !stop.is_active ||
+      !isPositiveSafeInteger(stop.id) ||
+      !isValidCoordinates(
+        stop.latitude,
+        stop.longitude,
+      )
+    ) {
+      return;
+    }
+
+    const key = getMapPointKey(
+      "stop",
+      stop.id,
+    );
+
+    const existing = pointsByKey.get(key);
+
+    if (existing) {
+      // Update descriptive information without discarding
+      // the location's existing route associations.
+
+      existing.name = stop.name;
+      existing.latitude = stop.latitude;
+      existing.longitude = stop.longitude;
+      existing.stop_type = stop.stop_type;
+      existing.description = stop.description;
+
+      return;
+    }
+
+    // A stop with no associated public route is still
+    // a valid independent map location.
+
+    pointsByKey.set(key, {
+      kind: "stop",
+      ref_id: stop.id,
+      name: stop.name,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      stop_type: stop.stop_type,
+      description: stop.description,
+      routes: [],
+    });
+  });
+
+  // ----------------------------------------------------------
+  // MERGE INDEPENDENT TERMINALS
+  // ----------------------------------------------------------
+
+  terminals.forEach((terminal) => {
+    if (
+      !terminal.is_active ||
+      !isPositiveSafeInteger(terminal.id) ||
+      !isValidCoordinates(
+        terminal.latitude,
+        terminal.longitude,
+      )
+    ) {
+      return;
+    }
+
+    const key = getMapPointKey(
+      "terminal",
+      terminal.id,
+    );
+
+    const existing = pointsByKey.get(key);
+
+    if (existing) {
+      // Update descriptive information but preserve
+      // all route associations already attached to it.
+
+      existing.name = terminal.name;
+      existing.latitude = terminal.latitude;
+      existing.longitude = terminal.longitude;
+      existing.stop_type = "terminal";
+
+      return;
+    }
+
+    // A terminal with no associated route is also
+    // a valid independent map location.
+
+    pointsByKey.set(key, {
+      kind: "terminal",
+      ref_id: terminal.id,
+      name: terminal.name,
+      latitude: terminal.latitude,
+      longitude: terminal.longitude,
+      stop_type: "terminal",
+      description: null,
+      routes: [],
+    });
+  });
+
+  return [...pointsByKey.values()];
+}
+
+// ============================================================
+// BACKWARD-COMPATIBLE TERMINAL MERGING
+// ============================================================
+
+/**
+ * Compatibility wrapper for existing callers.
+ *
+ * New map consumers should use mergeMapLocations() so
+ * independent stops and terminals are merged together.
+ */
 export function mergeMapTerminals(
   index: RouteMapIndex,
-  terminals: Terminal[]
+  terminals: Terminal[],
 ): RouteMapPoint[] {
-  const points = new Map(
-    index.points.map((point) => [
-      `${point.kind}-${point.ref_id}`,
-      { ...point, routes: [...point.routes] },
-    ])
+  return mergeMapLocations(
+    index,
+    [],
+    terminals,
   );
-
-  terminals
-    .filter((terminal) => terminal.is_active)
-    .forEach((terminal) => {
-      const key = `terminal-${terminal.id}`;
-      const existing = points.get(key);
-
-      if (existing) {
-        existing.name = terminal.name;
-        existing.latitude = terminal.latitude;
-        existing.longitude = terminal.longitude;
-        return;
-      }
-
-      points.set(key, {
-        kind: "terminal",
-        ref_id: terminal.id,
-        name: terminal.name,
-        latitude: terminal.latitude,
-        longitude: terminal.longitude,
-        stop_type: "terminal",
-        description: null,
-        routes: [],
-      });
-    });
-
-  return [...points.values()];
 }
+
+// ============================================================
+// SEARCH ROUTE MAP ITEMS
+// ============================================================
 
 export function searchRouteMapItems(
   routes: RouteMapRoute[],
   points: RouteMapPoint[],
-  query: string
+  query: string,
 ): RouteMapSearchResult[] {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) return [];
+  const normalizedQuery =
+    query.trim().toLowerCase();
+
+  if (!normalizedQuery) {
+    return [];
+  }
 
   return [
     ...routes
-      .filter((route) => route.name.toLowerCase().includes(normalizedQuery))
-      .map((route): RouteMapSearchResult => ({ kind: "route", route })),
+      .filter((route) =>
+        route.name.toLowerCase().includes(
+          normalizedQuery,
+        ),
+      )
+      .map(
+        (route): RouteMapSearchResult => ({
+          kind: "route",
+          route,
+        }),
+      ),
+
     ...points
-      .filter((point) => point.name.toLowerCase().includes(normalizedQuery))
-      .map((point): RouteMapSearchResult => ({ kind: "point", point })),
+      .filter((point) =>
+        point.name.toLowerCase().includes(
+          normalizedQuery,
+        ),
+      )
+      .map(
+        (point): RouteMapSearchResult => ({
+          kind: "point",
+          point,
+        }),
+      ),
   ];
 }
 
+// ============================================================
+// FIND ROUTE STOP INDEX
+// ============================================================
+
 export function findRouteStopIndex(
   stops: RouteStop[],
-  point: Pick<RouteMapPoint, "kind" | "ref_id">
+  point: Pick<
+    RouteMapPoint,
+    "kind" | "ref_id"
+  >,
 ): number | null {
   const index = stops.findIndex(
-    (stop) => stop.kind === point.kind && stop.ref_id === point.ref_id
+    (stop) =>
+      stop.kind === point.kind &&
+      stop.ref_id === point.ref_id,
   );
 
-  return index < 0 ? null : index;
+  return index < 0
+    ? null
+    : index;
 }
+
+// ============================================================
+// SELECT TRIP STOP
+// ============================================================
 
 export function selectTripStop(
   selection: TripSelection,
-  clickedIndex: number
+  clickedIndex: number,
 ): TripSelection {
-  if (!Number.isInteger(clickedIndex) || clickedIndex < 0) return selection;
+  if (
+    !Number.isInteger(clickedIndex) ||
+    clickedIndex < 0
+  ) {
+    return selection;
+  }
 
   if (
     selection.boardingIndex === null ||
     clickedIndex === selection.boardingIndex
   ) {
-    return { boardingIndex: clickedIndex, destinationIndex: null };
+    return {
+      boardingIndex: clickedIndex,
+      destinationIndex: null,
+    };
   }
 
-  return { ...selection, destinationIndex: clickedIndex };
+  return {
+    ...selection,
+    destinationIndex: clickedIndex,
+  };
 }
+
+// ============================================================
+// TRIP DISTANCE
+// ============================================================
 
 export function getTripDistanceMeters(
   stopDistances: number[],
   boardingIndex: number | null,
-  destinationIndex: number | null
+  destinationIndex: number | null,
 ): number | null {
   if (
     boardingIndex === null ||
@@ -310,8 +959,12 @@ export function getTripDistanceMeters(
     return null;
   }
 
-  const boardingDistance = stopDistances[boardingIndex];
-  const destinationDistance = stopDistances[destinationIndex];
+  const boardingDistance =
+    stopDistances[boardingIndex];
+
+  const destinationDistance =
+    stopDistances[destinationIndex];
+
   if (
     !Number.isFinite(boardingDistance) ||
     !Number.isFinite(destinationDistance)
@@ -319,5 +972,7 @@ export function getTripDistanceMeters(
     return null;
   }
 
-  return Math.abs(destinationDistance - boardingDistance);
+  return Math.abs(
+    destinationDistance - boardingDistance,
+  );
 }

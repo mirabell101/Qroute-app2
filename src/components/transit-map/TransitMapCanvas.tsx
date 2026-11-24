@@ -1,6 +1,10 @@
+
 import { Fragment, useEffect } from "react";
 
-import { LocateFixed, MapPin } from "lucide-react";
+import {
+  LocateFixed,
+  MapPin,
+} from "lucide-react";
 
 import {
   MapContainer,
@@ -19,17 +23,42 @@ import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
 import { getRouteGeometryKey } from "@/lib/routeGeometry";
-import { findRouteStopIndex, getNextOverlappingRouteId } from "@/lib/routeMap";
-import { getMapIcon, getMapVehicleType, getVehicleMapIcon } from "@/lib/mapIcons";
-import type { MapVehicleType } from "@/lib/mapIcons";
 
-import { moveToCurrentLocation } from "./currentLocationViewport";
+import {
+  findRouteStopIndex,
+  getNextOverlappingRouteId,
+} from "@/lib/routeMap";
+
+import {
+  getMapIcon,
+  getMapVehicleType,
+  getVehicleMapIcon,
+} from "@/lib/mapIcons";
+
+import type {
+  MapVehicleType,
+} from "@/lib/mapIcons";
+
+import {
+  moveToCurrentLocation,
+} from "./currentLocationViewport";
+
 import { defaultPosition } from "./useTransitMap";
-import type { Coordinates, TransitMapController } from "./useTransitMap";
 
-// Leaflet's default marker config (fallback for any marker without a custom icon).
+import type {
+  Coordinates,
+  TransitMapController,
+} from "./useTransitMap";
+
+// ============================================================
+// LEAFLET DEFAULT MARKER CONFIGURATION
+// ============================================================
+
 delete (
-  L.Icon.Default.prototype as L.Icon.Default & { _getIconUrl?: unknown }
+  L.Icon.Default.prototype as
+    L.Icon.Default & {
+      _getIconUrl?: unknown;
+    }
 )._getIconUrl;
 
 L.Icon.Default.mergeOptions({
@@ -38,31 +67,79 @@ L.Icon.Default.mergeOptions({
   shadowUrl: markerShadow,
 });
 
-// Move the map to the user's current location.
-function CurrentLocationMarker({ position }: { position: Coordinates | null }) {
+// ============================================================
+// ROUTE LINE STYLE
+// ============================================================
+
+function getRouteDashArray(
+  routeId: number,
+  transportName: string,
+): string {
+  const normalizedName =
+    transportName.toLowerCase();
+
+  if (normalizedName.includes("bus")) {
+    return "3 7";
+  }
+
+  if (normalizedName.includes("jeep")) {
+    return "12 7";
+  }
+
+  return routeId % 2 === 0
+    ? "8 5"
+    : "2 5";
+}
+
+// ============================================================
+// CURRENT LOCATION MARKER
+// ============================================================
+
+function CurrentLocationMarker({
+  position,
+}: {
+  position: Coordinates | null;
+}) {
   const map = useMap();
 
   useEffect(() => {
     if (position) {
-      moveToCurrentLocation(map, position);
+      moveToCurrentLocation(
+        map,
+        position,
+      );
     }
   }, [map, position]);
 
-  if (!position) return null;
+  if (!position) {
+    return null;
+  }
 
   return (
-    <Marker position={position} icon={getMapIcon("current_location")}>
+    <Marker
+      position={position}
+      icon={getMapIcon("current_location")}
+    >
       <Popup>Your current location</Popup>
     </Marker>
   );
 }
 
-// Automatically frame the selected road route.
-function RouteViewport({ positions }: { positions: Coordinates[] }) {
+// ============================================================
+// ROUTE VIEWPORT
+// ============================================================
+
+function RouteViewport({
+  positions,
+}: {
+  positions: Coordinates[];
+}) {
   const map = useMap();
 
   useEffect(() => {
-    if (positions.length === 0) return;
+    if (positions.length === 0) {
+      return;
+    }
 
     if (positions.length === 1) {
       map.flyTo(positions[0], 16);
@@ -70,9 +147,16 @@ function RouteViewport({ positions }: { positions: Coordinates[] }) {
     }
 
     const bounds = L.latLngBounds(positions);
+
     map.flyToBounds(bounds, {
       paddingTopLeft: [
-        Math.min(700, Math.max(260, map.getSize().x * 0.5)),
+        Math.min(
+          700,
+          Math.max(
+            260,
+            map.getSize().x * 0.5,
+          ),
+        ),
         140,
       ],
       paddingBottomRight: [50, 80],
@@ -84,50 +168,113 @@ function RouteViewport({ positions }: { positions: Coordinates[] }) {
   return null;
 }
 
-function PlaceViewport({ position }: { position: Coordinates | null }) {
+// ============================================================
+// PLACE VIEWPORT
+// ============================================================
+
+function PlaceViewport({
+  position,
+}: {
+  position: Coordinates | null;
+}) {
   const map = useMap();
+
   const latitude = position?.[0];
   const longitude = position?.[1];
 
   useEffect(() => {
-    if (latitude === undefined || longitude === undefined) return;
+    if (
+      latitude === undefined ||
+      longitude === undefined
+    ) {
+      return;
+    }
 
-    map.flyTo([latitude, longitude], 16, { duration: 0.6 });
-  }, [map, latitude, longitude]);
+    map.flyTo(
+      [latitude, longitude],
+      16,
+      { duration: 0.6 },
+    );
+  }, [
+    map,
+    latitude,
+    longitude,
+  ]);
 
   return null;
 }
 
+// ============================================================
+// PINNED COMMUNITY LOCATION
+// ============================================================
+
 function PinnedMapViewport({
   location,
 }: {
-  location: { coordinates: Coordinates; label: string } | null;
+  location: {
+    coordinates: Coordinates;
+    label: string;
+  } | null;
 }) {
   const map = useMap();
+
   useEffect(() => {
-    if (!location) return;
-    map.flyTo(location.coordinates, 16, { duration: 0.6 });
+    if (!location) {
+      return;
+    }
+
+    map.flyTo(
+      location.coordinates,
+      16,
+      { duration: 0.6 },
+    );
   }, [map, location]);
-  if (!location) return null;
+
+  if (!location) {
+    return null;
+  }
+
   return (
-    <Marker position={location.coordinates} icon={getMapIcon("boarding")}>
+    <Marker
+      position={location.coordinates}
+      icon={getMapIcon("boarding")}
+    >
       <Popup>{location.label}</Popup>
     </Marker>
   );
 }
 
-export function TransitMapCanvas({ map }: { map: TransitMapController }) {
+// ============================================================
+// TRANSIT MAP CANVAS
+// ============================================================
+
+export function TransitMapCanvas({
+  map,
+}: {
+  map: TransitMapController;
+}) {
   const {
+    // Location
     currentPosition,
     locationStatus,
     requestCurrentLocation,
+
+    // Selected place
     selectedPlace,
     pinnedMapLocation,
+
+    // Route rendering
     displayedRouteLayers,
     displayedRoutePositions,
     coincidentRouteIdsByGeometry,
     selectedRouteId,
     selectedRoute,
+
+    // Journey rendering
+    journeyGeometry,
+    isJourneyViewActive,
+
+    // Stops and markers
     selectedRouteStops,
     stopMapPositions,
     boardingIndex,
@@ -135,9 +282,26 @@ export function TransitMapCanvas({ map }: { map: TransitMapController }) {
     routeColor,
     mapPoints,
     pointIcon,
+
+    // Actions
     handlePlaceSelect,
     handleRouteLineSelect,
   } = map;
+
+  // ----------------------------------------------------------
+  // VIEWPORT POSITIONS
+  // ----------------------------------------------------------
+
+  /**
+   * While a journey is active, frame only the journey segment.
+   *
+   * During journey restoration, the segment may not be ready
+   * yet. In that case we avoid briefly framing the complete route.
+   */
+  const routeViewportPositions =
+    isJourneyViewActive
+      ? journeyGeometry?.positions ?? []
+      : displayedRoutePositions;
 
   return (
     <section className="absolute inset-0 z-0 h-full w-full">
@@ -153,122 +317,272 @@ export function TransitMapCanvas({ map }: { map: TransitMapController }) {
         keyboard
         className="h-full w-full"
       >
+        {/* ==================================================
+            BASE MAP
+        ================================================== */}
+
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        <CurrentLocationMarker position={currentPosition} />
+        {/* ==================================================
+            VIEWPORT AND LOCATION MARKERS
+        ================================================== */}
+
+        <CurrentLocationMarker
+          position={currentPosition}
+        />
+
         <PlaceViewport
           position={
             selectedPlace
-              ? [selectedPlace.latitude, selectedPlace.longitude]
+              ? [
+                  selectedPlace.latitude,
+                  selectedPlace.longitude,
+                ]
               : null
           }
         />
-        <PinnedMapViewport location={pinnedMapLocation} />
 
-        {displayedRouteLayers.map(({ routeId, route, geometry }) => {
-          const isActive = routeId === Number(selectedRouteId);
-          const transportName = route.transport_types.name.toLowerCase();
-          const dashArray = transportName.includes("bus")
-            ? "3 7"
-            : transportName.includes("jeep")
-              ? "12 7"
-              : routeId % 2 === 0
-                ? "8 5"
-                : "2 5";
-          const geometryKey = getRouteGeometryKey(geometry.positions);
+        <PinnedMapViewport
+          location={pinnedMapLocation}
+        />
 
-          return geometry.positions.length >= 2 ? (
-            <Fragment key={routeId}>
+        {/* ==================================================
+            COMPLETE ROUTE LAYERS
+        ==================================================
+
+            Complete route geometry is displayed when there is
+            no active passenger journey.
+
+            Once a trip has two selected endpoints, these
+            complete route lines are hidden.
+        ================================================== */}
+
+        {!isJourneyViewActive &&
+          displayedRouteLayers.map(
+            ({
+              routeId,
+              route,
+              geometry,
+            }) => {
+              const isActive =
+                routeId === Number(selectedRouteId);
+
+              const dashArray = getRouteDashArray(
+                routeId,
+                route.transport_types.name,
+              );
+
+              const geometryKey =
+                getRouteGeometryKey(
+                  geometry.positions,
+                );
+
+              if (geometry.positions.length < 2) {
+                return null;
+              }
+
+              return (
+                <Fragment key={routeId}>
+                  {/* White route outline */}
+                  <Polyline
+                    positions={geometry.positions}
+                    pathOptions={{
+                      color: "#ffffff",
+                      weight: isActive ? 11 : 8,
+                      opacity: isActive ? 0.9 : 0.55,
+                    }}
+                  />
+
+                  {/* Actual transport route */}
+                  <Polyline
+                    positions={geometry.positions}
+                    pathOptions={{
+                      color: route.transport_types.color,
+                      weight: isActive ? 7 : 4,
+                      opacity: isActive ? 1 : 0.7,
+                      dashArray,
+                    }}
+                    eventHandlers={{
+                      click: () =>
+                        handleRouteLineSelect(
+                          getNextOverlappingRouteId(
+                            coincidentRouteIdsByGeometry.get(
+                              geometryKey,
+                            ) ?? [routeId],
+                            selectedRouteId
+                              ? Number(selectedRouteId)
+                              : null,
+                            routeId,
+                          ),
+                        ),
+                    }}
+                  />
+                </Fragment>
+              );
+            },
+          )}
+
+        {/* ==================================================
+            PASSENGER JOURNEY SEGMENT
+        ==================================================
+
+            This renders only the line between the selected
+            origin and destination.
+
+            It is derived from the existing route geometry.
+            No second OSRM route is requested.
+        ================================================== */}
+
+        {isJourneyViewActive &&
+          journeyGeometry &&
+          selectedRoute &&
+          journeyGeometry.positions.length >= 2 && (
+            <Fragment key={`journey-${selectedRoute.id}`}>
+              {/* Journey outline */}
               <Polyline
-                positions={geometry.positions}
+                positions={journeyGeometry.positions}
                 pathOptions={{
                   color: "#ffffff",
-                  weight: isActive ? 11 : 8,
-                  opacity: isActive ? 0.9 : 0.55,
+                  weight: 13,
+                  opacity: 0.95,
                 }}
               />
+
+              {/* Selected journey */}
               <Polyline
-                positions={geometry.positions}
+                positions={journeyGeometry.positions}
                 pathOptions={{
-                  color: route.transport_types.color,
-                  weight: isActive ? 7 : 4,
-                  opacity: isActive ? 1 : 0.7,
-                  dashArray,
-                }}
-                eventHandlers={{
-                  click: () =>
-                    handleRouteLineSelect(
-                      getNextOverlappingRouteId(
-                        coincidentRouteIdsByGeometry.get(geometryKey) ?? [
-                          routeId,
-                        ],
-                        selectedRouteId ? Number(selectedRouteId) : null,
-                        routeId
-                      )
-                    ),
+                  color: selectedRoute.transport_types.color,
+                  weight: 8,
+                  opacity: 1,
                 }}
               />
             </Fragment>
-          ) : null;
-        })}
-        {displayedRoutePositions.length > 0 && (
-          <RouteViewport positions={displayedRoutePositions} />
+          )}
+
+        {/* ==================================================
+            ROUTE / JOURNEY VIEWPORT
+        ================================================== */}
+
+        {routeViewportPositions.length > 0 && (
+          <RouteViewport
+            positions={routeViewportPositions}
+          />
         )}
+
+        {/* ==================================================
+            MAP POINT MARKERS
+        ==================================================
+
+            Keep independent stop and terminal locations visible,
+            including those that are not served by any route.
+
+            Selected journey endpoints use their boarding and
+            destination icons through pointIcon().
+        ================================================== */}
 
         {mapPoints.flatMap((point) => {
           const routeStopIndex = selectedRoute
-            ? findRouteStopIndex(selectedRouteStops, point)
+            ? findRouteStopIndex(
+                selectedRouteStops,
+                point,
+              )
             : null;
+
           const routeStop =
             routeStopIndex === null
               ? null
-              : selectedRouteStops[routeStopIndex] ?? null;
+              : selectedRouteStops[
+                  routeStopIndex
+                ] ?? null;
+
           const isOnSelectedRoute =
-            routeStopIndex !== null && routeStop !== null;
+            routeStopIndex !== null &&
+            routeStop !== null;
+
           const position: Coordinates =
             routeStopIndex !== null && routeStop
-              ? stopMapPositions[routeStopIndex] ?? [
+              ? stopMapPositions[
+                  routeStopIndex
+                ] ?? [
                   point.latitude,
                   point.longitude,
                 ]
-              : [point.latitude, point.longitude];
+              : [
+                  point.latitude,
+                  point.longitude,
+                ];
 
-          // One marker per transport type serving this point, each in its
-          // configured transport_types.color.
+          // ----------------------------------------------------
+          // TRANSPORT MODES SERVING THIS POINT
+          // ----------------------------------------------------
+
           const routeModes = new Map<
             number,
-            { vehicleType: MapVehicleType; color: string }
+            {
+              vehicleType: MapVehicleType;
+              color: string;
+            }
           >();
+
           point.routes.forEach(({ route }) => {
-            routeModes.set(route.transport_type_id, {
-              vehicleType: getMapVehicleType(route.transport_types.name),
-              color: route.transport_types.color,
-            });
+            routeModes.set(
+              route.transport_type_id,
+              {
+                vehicleType: getMapVehicleType(
+                  route.transport_types.name,
+                ),
+                color: route.transport_types.color,
+              },
+            );
           });
-          const modes = [...routeModes.values()];
-          if (modes.length === 0 && point.kind === "stop") {
+
+          const modes = [
+            ...routeModes.values(),
+          ];
+
+          // Unassociated stops remain visible.
+          if (
+            modes.length === 0 &&
+            point.kind === "stop"
+          ) {
             modes.push({
               vehicleType:
-                point.stop_type === "train_station" ? "train" : "other",
+                point.stop_type === "train_station"
+                  ? "train"
+                  : "other",
               color: "#2563eb",
             });
           }
 
-          const isBoardingMarker = routeStopIndex === boardingIndex;
-          const isDestinationMarker = routeStopIndex === destinationIndex;
+          // ----------------------------------------------------
+          // BOARDING / DESTINATION MARKERS
+          // ----------------------------------------------------
+
+          const isBoardingMarker =
+            routeStopIndex !== null &&
+            routeStopIndex === boardingIndex;
+
+          const isDestinationMarker =
+            routeStopIndex !== null &&
+            routeStopIndex === destinationIndex;
+
           const markerModes =
-            isBoardingMarker || isDestinationMarker
+            isBoardingMarker ||
+            isDestinationMarker
               ? [
                   {
                     kind: isBoardingMarker
                       ? ("boarding" as const)
                       : ("destination" as const),
+
                     color: routeColor,
+
                     vehicleType: getMapVehicleType(
-                      selectedRoute?.transport_types.name ?? ""
+                      selectedRoute?.transport_types.name ?? "",
                     ),
                   },
                 ]
@@ -280,54 +594,92 @@ export function TransitMapCanvas({ map }: { map: TransitMapController }) {
                       vehicleType: "other" as const,
                     },
                   ]
-                : modes.map((mode) => ({ ...mode, kind: "vehicle" as const }));
-          const offsetStart = -((markerModes.length - 1) * 9) / 2;
+                : modes.map((mode) => ({
+                    ...mode,
+                    kind: "vehicle" as const,
+                  }));
 
-          return markerModes.map((mode, modeIndex) => {
-            const icon =
-              mode.kind !== "vehicle" &&
-              mode.kind !== "terminal" &&
-              routeStopIndex !== null &&
-              routeStop
-                ? pointIcon(routeStopIndex, routeStop)
-                : mode.kind === "terminal"
-                  ? getMapIcon("terminal")
-                  : getVehicleMapIcon(
-                      mode.vehicleType,
-                      mode.color,
-                      offsetStart + modeIndex * 9
-                    );
+          const offsetStart =
+            -((markerModes.length - 1) * 9) / 2;
 
-            return (
-              <Marker
-                key={`${point.kind}-${point.ref_id}-${mode.kind}-${mode.vehicleType}-${modeIndex}`}
-                position={position}
-                icon={icon}
-                alt={`${point.name} ${mode.kind === "vehicle" ? mode.vehicleType : mode.kind}`}
-                title={`${point.name} — ${mode.kind === "vehicle" ? mode.vehicleType : mode.kind}`}
-                zIndexOffset={isOnSelectedRoute ? 1000 : 500}
-                eventHandlers={{
-                  click: () => handlePlaceSelect(point),
-                }}
-              />
-            );
-          });
+          // ----------------------------------------------------
+          // RENDER MARKERS
+          // ----------------------------------------------------
+
+          return markerModes.map(
+            (mode, modeIndex) => {
+              const icon =
+                mode.kind !== "vehicle" &&
+                mode.kind !== "terminal" &&
+                routeStopIndex !== null &&
+                routeStop
+                  ? pointIcon(
+                      routeStopIndex,
+                      routeStop,
+                    )
+                  : mode.kind === "terminal"
+                    ? getMapIcon("terminal")
+                    : getVehicleMapIcon(
+                        mode.vehicleType,
+                        mode.color,
+                        offsetStart + modeIndex * 9,
+                      );
+
+              return (
+                <Marker
+                  key={`${point.kind}-${point.ref_id}-${mode.kind}-${mode.vehicleType}-${modeIndex}`}
+                  position={position}
+                  icon={icon}
+                  alt={`${point.name} ${
+                    mode.kind === "vehicle"
+                      ? mode.vehicleType
+                      : mode.kind
+                  }`}
+                  title={`${point.name} — ${
+                    mode.kind === "vehicle"
+                      ? mode.vehicleType
+                      : mode.kind
+                  }`}
+                  zIndexOffset={
+                    isOnSelectedRoute ? 1000 : 500
+                  }
+                  eventHandlers={{
+                    click: () =>
+                      handlePlaceSelect(point),
+                  }}
+                />
+              );
+            },
+          );
         })}
       </MapContainer>
+
+      {/* ======================================================
+          CURRENT LOCATION CONTROL
+      ====================================================== */}
 
       <button
         type="button"
         aria-label="Show my location"
         title="Show my location"
         disabled={locationStatus === "loading"}
-        onClick={() => void requestCurrentLocation()}
+        onClick={() =>
+          void requestCurrentLocation()
+        }
         className="absolute right-4 top-4 z-[1000] flex h-11 w-11 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-md transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        <LocateFixed size={20} aria-hidden="true" />
+        <LocateFixed
+          size={20}
+          aria-hidden="true"
+        />
       </button>
     </section>
   );
 }
+
+// ============================================================
+// MAP STATUS
+// ============================================================
 
 export function TransitMapStatus({
   map,
@@ -354,18 +706,25 @@ export function TransitMapStatus({
           className="absolute bottom-5 right-5 z-[3000] max-w-sm rounded-xl bg-white px-4 py-3 text-sm shadow-lg"
         >
           {locationStatus === "loading" && (
-            <p className="text-gray-700">Getting your location...</p>
+            <p className="text-gray-700">
+              Getting your location...
+            </p>
           )}
 
           {locationStatus === "success" && (
             <p className="text-green-700">
-              <MapPin size={16} className="mr-1 inline" />
+              <MapPin
+                size={16}
+                className="mr-1 inline"
+              />
               Your location has been detected.
             </p>
           )}
 
           {locationStatus === "error" && (
-            <p className="text-red-700">{locationError}</p>
+            <p className="text-red-700">
+              {locationError}
+            </p>
           )}
         </div>
       )}
@@ -377,7 +736,9 @@ export function TransitMapStatus({
           className={terminalStatusClassName}
         >
           {terminalsLoading && (
-            <p className="text-gray-700">Loading saved terminals...</p>
+            <p className="text-gray-700">
+              Loading saved terminals...
+            </p>
           )}
 
           {terminalError && (
