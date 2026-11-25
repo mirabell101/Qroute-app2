@@ -1,3 +1,4 @@
+
 import { API_BASE_URL } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import type { CommunityPost } from "@/lib/community";
@@ -41,8 +42,11 @@ interface AdminRoutePoint {
 }
 
 interface AdminRouteStop {
+  id: number;
   route_id: number;
   stop_order: number;
+  terminal_id: number | null;
+  stop_id: number | null;
   terminals: AdminRoutePoint | null;
   stops:
     | (AdminRoutePoint & {
@@ -86,7 +90,10 @@ export interface AdminTransitPointRecord {
   is_active: boolean | null;
   is_approved: boolean | null;
   is_banned: boolean | null;
+
+  // Preserved deletion state.
   is_deleted: boolean | null;
+
   moderation_status: "pending" | "approved" | "rejected";
   moderation_note: string | null;
   transport_types: {
@@ -101,11 +108,99 @@ export interface AdminTransportTypeRecord {
   color: string;
 }
 
+/* -------------------------------------------------------------------------- */
+/*                       ROUTE-CHANGE PROPOSAL TYPES                         */
+/* -------------------------------------------------------------------------- */
+
+export type AdminRouteChangeProposalType =
+  | "insert_point"
+  | "extend_route";
+
+export type AdminRouteChangeProposalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "conflicted"
+  | "withdrawn";
+
+export type AdminRouteChangeProposalAction =
+  | "approve"
+  | "reject";
+
+/**
+ * One entry in a complete proposed route sequence.
+ *
+ * Exactly one of terminal_id or stop_id is populated.
+ *
+ * Nested location information is provided by server/admin.ts.
+ */
+export interface AdminRouteChangeProposalPointRecord {
+  proposal_id: number;
+  stop_order: number;
+
+  terminal_id: number | null;
+  stop_id: number | null;
+
+  /**
+   * True when the location was created specifically
+   * for this proposal.
+   */
+  is_new_point: boolean;
+
+  terminals: AdminTransitPointRecord | null;
+  stops: AdminTransitPointRecord | null;
+}
+
+/**
+ * A proposed modification to an existing approved route.
+ *
+ * The proposal contains a complete ordered sequence,
+ * not only the newly added locations.
+ */
+export interface AdminRouteChangeProposalRecord {
+  id: number;
+  route_id: number;
+
+  contributor_id: string | null;
+  contributor_display_name: string;
+
+  proposal_type: AdminRouteChangeProposalType;
+
+  proposed_name: string | null;
+
+  base_route_snapshot: Record<string, unknown>;
+
+  status: AdminRouteChangeProposalStatus;
+
+  moderation_note: string | null;
+
+  moderated_by: string | null;
+  moderator_display_name: string | null;
+
+  moderated_at: string | null;
+  applied_at: string | null;
+
+  created_at: string;
+  updated_at: string;
+
+  route_change_proposal_points:
+    AdminRouteChangeProposalPointRecord[];
+}
+
+/**
+ * Data returned by the existing Route Management endpoint.
+ */
 export interface AdminRouteManagementData {
   routes: AdminRouteRecord[];
   stops: AdminTransitPointRecord[];
   terminals: AdminTransitPointRecord[];
   transportTypes: AdminTransportTypeRecord[];
+
+  /**
+   * Pending proposals are displayed separately from
+   * ordinary route, stop, and terminal contributions.
+   */
+  routeChangeProposals: AdminRouteChangeProposalRecord[];
 }
 
 export interface AdminRouteStopPayload {
@@ -127,6 +222,19 @@ export type RouteManagementEntityType =
   | "route"
   | "stop"
   | "terminal";
+
+/**
+ * Response from public.moderate_route_change_proposal().
+ */
+export interface AdminRouteChangeProposalModerationResult {
+  proposalId: number;
+  routeId: number;
+  proposalType: AdminRouteChangeProposalType;
+  status: "approved" | "rejected" | "conflicted";
+  moderationNote: string | null;
+  appliedAt: string | null;
+  synchronization: Record<string, unknown> | null;
+}
 
 /* -------------------------------------------------------------------------- */
 /*                              USER MANAGEMENT                              */
@@ -189,25 +297,9 @@ export interface AdminUserRecord {
   banReason: string | null;
   muteReason: string | null;
 
-  /**
-   * Indicates whether the Supabase Auth ban state matches
-   * the database moderation state.
-   *
-   * This is informational. It is not a general-purpose
-   * synchronization/retry action.
-   */
   authBanSynced: boolean;
 }
 
-/**
- * Parameters for the paginated User Management endpoint.
- *
- * Defaults:
- * - page: 1
- * - pageSize: 25
- * - search: ""
- * - status: "all"
- */
 export interface AdminUsersPageRequest {
   page?: number;
   pageSize?: AdminUserPageSize;
@@ -215,11 +307,6 @@ export interface AdminUsersPageRequest {
   status?: AdminUserManagementStatus;
 }
 
-/**
- * Paginated result returned by:
- *
- * GET /api/admin/users
- */
 export interface AdminUsersPage {
   users: AdminUserRecord[];
   totalCount: number;
@@ -228,37 +315,12 @@ export interface AdminUsersPage {
   totalPages: number;
 }
 
-/**
- * Payload accepted by:
- *
- * POST /api/admin/users/:id/restrictions
- *
- * For mute:
- * - durationSeconds: null or omitted means indefinite mute.
- * - A positive duration creates a temporary mute.
- *
- * For ban_temporary:
- * - durationSeconds is required.
- *
- * For ban_permanent:
- * - durationSeconds is not needed.
- *
- * For unmute and unban:
- * - reason is optional.
- */
 export interface AdminUserRestrictionPayload {
   action: AdminUserRestrictionAction;
   durationSeconds?: number | null;
   reason?: string;
 }
 
-/**
- * Matches the actual AdminUserModerationHistoryItem returned
- * by server/admin.ts.
- *
- * The backend returns description and metadata,
- * not category and detail.
- */
 export interface AdminUserModerationHistoryItem {
   id: string;
   actionKey: string;
@@ -312,13 +374,6 @@ export interface AdminNotificationList {
 /*                              API ERROR TYPE                                */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Preserves useful HTTP response information for frontend handling.
- *
- * In particular, restrictionSaved tells the UI whether the database
- * restriction was successfully saved even though Auth synchronization
- * subsequently failed.
- */
 export class AdminApiError extends Error {
   readonly status: number;
   readonly restrictionSaved: boolean;
@@ -409,6 +464,15 @@ function isNullableCount(
   );
 }
 
+function isValidDateString(
+  value: unknown,
+): value is string {
+  return (
+    typeof value === "string" &&
+    Number.isFinite(new Date(value).getTime())
+  );
+}
+
 /**
  * Profile photo URLs must be valid HTTPS URLs.
  *
@@ -471,19 +535,31 @@ function isAdminUserManagementStatus(
 function isRoutePoint(
   value: unknown,
 ): value is AdminRoutePoint {
-  return (
-    isRecord(value) &&
-    isNonNegativeInteger(value.id) &&
-    typeof value.name === "string" &&
-    typeof value.latitude === "number" &&
-    Number.isFinite(value.latitude) &&
-    typeof value.longitude === "number" &&
-    Number.isFinite(value.longitude) &&
-    (
-      value.is_approved === null ||
-      typeof value.is_approved === "boolean"
-    )
-  );
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.id) ||
+    typeof value.name !== "string" ||
+    typeof value.latitude !== "number" ||
+    !Number.isFinite(value.latitude) ||
+    typeof value.longitude !== "number" ||
+    !Number.isFinite(value.longitude) ||
+    !isNullableBoolean(value.is_approved)
+  ) {
+    return false;
+  }
+
+  if (
+    value.moderation_status !== undefined &&
+    ![
+      "pending",
+      "approved",
+      "rejected",
+    ].includes(String(value.moderation_status))
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function isAdminRouteStop(
@@ -491,9 +567,25 @@ function isAdminRouteStop(
 ): value is AdminRouteStop {
   if (
     !isRecord(value) ||
-    !isNonNegativeInteger(value.route_id) ||
-    !isNonNegativeInteger(value.stop_order)
+    !isPositiveInteger(value.id) ||
+    !isPositiveInteger(value.route_id) ||
+    !isPositiveInteger(value.stop_order) ||
+    !(
+      value.terminal_id === null ||
+      isPositiveInteger(value.terminal_id)
+    ) ||
+    !(
+      value.stop_id === null ||
+      isPositiveInteger(value.stop_id)
+    )
   ) {
+    return false;
+  }
+
+  const hasTerminal = value.terminal_id !== null;
+  const hasStop = value.stop_id !== null;
+
+  if (hasTerminal === hasStop) {
     return false;
   }
 
@@ -508,16 +600,42 @@ function isAdminRouteStop(
       record.stop_type === "train_station"
     );
 
-  return (
-    isNullableRecord(
+  if (
+    !isNullableRecord(
       value.terminals,
       isRoutePoint,
-    ) &&
-    isNullableRecord(
+    ) ||
+    !isNullableRecord(
       value.stops,
       isStopRecord,
     )
-  );
+  ) {
+    return false;
+  }
+
+  if (
+    hasTerminal &&
+    (
+      !isRecord(value.terminals) ||
+      value.terminals.id !== value.terminal_id ||
+      value.stops !== null
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    hasStop &&
+    (
+      !isRecord(value.stops) ||
+      value.stops.id !== value.stop_id ||
+      value.terminals !== null
+    )
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function isAdminRouteRecord(
@@ -525,15 +643,21 @@ function isAdminRouteRecord(
 ): value is AdminRouteRecord {
   if (
     !isRecord(value) ||
-    !isNonNegativeInteger(value.id) ||
+    !isPositiveInteger(value.id) ||
     typeof value.name !== "string" ||
-    !isNonNegativeInteger(value.transport_type_id) ||
+    !isPositiveInteger(value.transport_type_id) ||
     typeof value.is_active !== "boolean" ||
     typeof value.is_approved !== "boolean" ||
     typeof value.is_banned !== "boolean" ||
     typeof value.is_deleted !== "boolean" ||
-    !["pending", "approved", "rejected"].includes(
-      String(value.moderation_status),
+    ![
+      "pending",
+      "approved",
+      "rejected",
+    ].includes(String(value.moderation_status)) ||
+    !(
+      value.moderation_note === undefined ||
+      isNullableString(value.moderation_note)
     ) ||
     !Array.isArray(value.route_stops) ||
     !value.route_stops.every(isAdminRouteStop)
@@ -550,7 +674,7 @@ function isAdminRouteRecord(
   const isTransportVariant = (
     record: Record<string, unknown>,
   ) =>
-    isNonNegativeInteger(record.id) &&
+    isPositiveInteger(record.id) &&
     typeof record.code === "string" &&
     typeof record.name === "string" &&
     (
@@ -575,7 +699,7 @@ function isAdminTransitPointRecord(
 ): value is AdminTransitPointRecord {
   if (
     !isRecord(value) ||
-    !isNonNegativeInteger(value.id) ||
+    !isPositiveInteger(value.id) ||
     typeof value.name !== "string" ||
     !(
       value.description === undefined ||
@@ -593,15 +717,17 @@ function isAdminTransitPointRecord(
     !Number.isFinite(value.longitude) ||
     !(
       value.transport_type_id === null ||
-      isNonNegativeInteger(value.transport_type_id)
+      isPositiveInteger(value.transport_type_id)
     ) ||
     !isNullableBoolean(value.is_active) ||
     !isNullableBoolean(value.is_approved) ||
     !isNullableBoolean(value.is_banned) ||
     !isNullableBoolean(value.is_deleted) ||
-    !["pending", "approved", "rejected"].includes(
-      String(value.moderation_status),
-    ) ||
+    ![
+      "pending",
+      "approved",
+      "rejected",
+    ].includes(String(value.moderation_status)) ||
     !isNullableString(value.moderation_note)
   ) {
     return false;
@@ -620,9 +746,189 @@ function isAdminTransportTypeRecord(
 ): value is AdminTransportTypeRecord {
   return (
     isRecord(value) &&
-    isNonNegativeInteger(value.id) &&
+    isPositiveInteger(value.id) &&
     typeof value.name === "string" &&
     typeof value.color === "string"
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*                    ROUTE-CHANGE PROPOSAL VALIDATORS                       */
+/* -------------------------------------------------------------------------- */
+
+function isAdminRouteChangeProposalType(
+  value: unknown,
+): value is AdminRouteChangeProposalType {
+  return (
+    value === "insert_point" ||
+    value === "extend_route"
+  );
+}
+
+function isAdminRouteChangeProposalStatus(
+  value: unknown,
+): value is AdminRouteChangeProposalStatus {
+  return (
+    value === "pending" ||
+    value === "approved" ||
+    value === "rejected" ||
+    value === "conflicted" ||
+    value === "withdrawn"
+  );
+}
+
+function isAdminRouteChangeProposalPointRecord(
+  value: unknown,
+): value is AdminRouteChangeProposalPointRecord {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.proposal_id) ||
+    !isPositiveInteger(value.stop_order) ||
+    !(
+      value.terminal_id === null ||
+      isPositiveInteger(value.terminal_id)
+    ) ||
+    !(
+      value.stop_id === null ||
+      isPositiveInteger(value.stop_id)
+    ) ||
+    typeof value.is_new_point !== "boolean" ||
+    !isNullableRecord(
+      value.terminals,
+      isAdminTransitPointRecord,
+    ) ||
+    !isNullableRecord(
+      value.stops,
+      isAdminTransitPointRecord,
+    )
+  ) {
+    return false;
+  }
+
+  const hasTerminal = value.terminal_id !== null;
+  const hasStop = value.stop_id !== null;
+
+  if (hasTerminal === hasStop) {
+    return false;
+  }
+
+  if (
+    hasTerminal &&
+    (
+      !isRecord(value.terminals) ||
+      value.terminals.id !== value.terminal_id ||
+      value.stops !== null
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    hasStop &&
+    (
+      !isRecord(value.stops) ||
+      value.stops.id !== value.stop_id ||
+      value.terminals !== null
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function isAdminRouteChangeProposalRecord(
+  value: unknown,
+): value is AdminRouteChangeProposalRecord {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.id) ||
+    !isPositiveInteger(value.route_id) ||
+    !isNullableString(value.contributor_id) ||
+    typeof value.contributor_display_name !== "string" ||
+    !isAdminRouteChangeProposalType(value.proposal_type) ||
+    !isNullableString(value.proposed_name) ||
+    !isRecord(value.base_route_snapshot) ||
+    !isAdminRouteChangeProposalStatus(value.status) ||
+    !isNullableString(value.moderation_note) ||
+    !isNullableString(value.moderated_by) ||
+    !isNullableString(value.moderator_display_name) ||
+    !(
+      value.moderated_at === null ||
+      isValidDateString(value.moderated_at)
+    ) ||
+    !(
+      value.applied_at === null ||
+      isValidDateString(value.applied_at)
+    ) ||
+    !isValidDateString(value.created_at) ||
+    !isValidDateString(value.updated_at) ||
+    !Array.isArray(value.route_change_proposal_points) ||
+    !value.route_change_proposal_points.every(
+      isAdminRouteChangeProposalPointRecord,
+    )
+  ) {
+    return false;
+  }
+
+  const points =
+    value.route_change_proposal_points as
+      AdminRouteChangeProposalPointRecord[];
+
+  if (
+    points.length < 2 ||
+    points.length > 100
+  ) {
+    return false;
+  }
+
+  const sortedOrders = points
+    .map((point) => point.stop_order)
+    .sort((a, b) => a - b);
+
+  for (let index = 0; index < sortedOrders.length; index += 1) {
+    if (sortedOrders[index] !== index + 1) {
+      return false;
+    }
+  }
+
+  if (
+    points.some(
+      (point) => point.proposal_id !== value.id,
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                       MODERATION RESULT VALIDATOR                         */
+/* -------------------------------------------------------------------------- */
+
+function isAdminRouteChangeProposalModerationResult(
+  value: unknown,
+): value is AdminRouteChangeProposalModerationResult {
+  return (
+    isRecord(value) &&
+    isPositiveInteger(value.proposalId) &&
+    isPositiveInteger(value.routeId) &&
+    isAdminRouteChangeProposalType(value.proposalType) &&
+    (
+      value.status === "approved" ||
+      value.status === "rejected" ||
+      value.status === "conflicted"
+    ) &&
+    isNullableString(value.moderationNote) &&
+    (
+      value.appliedAt === null ||
+      isValidDateString(value.appliedAt)
+    ) &&
+    (
+      value.synchronization === null ||
+      isRecord(value.synchronization)
+    )
   );
 }
 
@@ -1109,37 +1415,48 @@ export async function getRouteManagementData(
     expectedUserId,
   );
 
-  if (
-    !isRecord(payload.records) ||
-    !Array.isArray(payload.records.routes) ||
-    !payload.records.routes.every(isAdminRouteRecord) ||
-    !Array.isArray(payload.records.stops) ||
-    !payload.records.stops.every(
-      isAdminTransitPointRecord,
-    ) ||
-    !Array.isArray(payload.records.terminals) ||
-    !payload.records.terminals.every(
-      isAdminTransitPointRecord,
-    ) ||
-    !Array.isArray(payload.records.transportTypes) ||
-    !payload.records.transportTypes.every(
-      isAdminTransportTypeRecord,
-    )
-  ) {
+  if (!isRecord(payload.records)) {
     throw new Error(
       "Route Management returned an invalid response.",
     );
   }
 
+  const records = payload.records;
+
+  if (
+    !Array.isArray(records.routes) ||
+    !records.routes.every(isAdminRouteRecord) ||
+    !Array.isArray(records.stops) ||
+    !records.stops.every(isAdminTransitPointRecord) ||
+    !Array.isArray(records.terminals) ||
+    !records.terminals.every(isAdminTransitPointRecord) ||
+    !Array.isArray(records.transportTypes) ||
+    !records.transportTypes.every(isAdminTransportTypeRecord) ||
+    !Array.isArray(records.routeChangeProposals) ||
+    !records.routeChangeProposals.every(
+      isAdminRouteChangeProposalRecord,
+    )
+  ) {
+    throw new Error(
+      "Route Management returned invalid record data.",
+    );
+  }
+
   return {
-    routes:
-      payload.records.routes as AdminRouteRecord[],
+    routes: records.routes as AdminRouteRecord[],
+
     stops:
-      payload.records.stops as AdminTransitPointRecord[],
+      records.stops as AdminTransitPointRecord[],
+
     terminals:
-      payload.records.terminals as AdminTransitPointRecord[],
+      records.terminals as AdminTransitPointRecord[],
+
     transportTypes:
-      payload.records.transportTypes as AdminTransportTypeRecord[],
+      records.transportTypes as AdminTransportTypeRecord[],
+
+    routeChangeProposals:
+      records.routeChangeProposals as
+        AdminRouteChangeProposalRecord[],
   };
 }
 
@@ -1160,6 +1477,19 @@ export async function moderateRouteManagementRecord(
     | "unban",
   moderationNote?: string,
 ): Promise<void> {
+  if (!isPositiveInteger(id)) {
+    throw new Error("A valid record ID is required.");
+  }
+
+  if (
+    moderationNote !== undefined &&
+    moderationNote.length > 500
+  ) {
+    throw new Error(
+      "Moderation notes cannot exceed 500 characters.",
+    );
+  }
+
   await requestRouteManagement(
     `/moderation/${entityType}/${id}`,
     expectedUserId,
@@ -1177,12 +1507,92 @@ export async function moderateRouteManagementRecord(
   );
 }
 
+/**
+ * Moderates an existing-route modification proposal.
+ *
+ * This is deliberately separate from
+ * moderateRouteManagementRecord().
+ *
+ * Route-change proposals are not ordinary routes,
+ * stops, or terminals.
+ *
+ * Endpoint to be implemented in:
+ * server/routes/routeManagementRoutes.ts
+ *
+ * POST /api/route-management/proposals/:id/moderation
+ */
+export async function moderateRouteChangeProposal(
+  expectedUserId: string,
+  proposalId: number,
+  action: AdminRouteChangeProposalAction,
+  moderationNote?: string,
+): Promise<AdminRouteChangeProposalModerationResult> {
+  if (!isPositiveInteger(proposalId)) {
+    throw new Error(
+      "A valid route-change proposal ID is required.",
+    );
+  }
+
+  if (
+    action !== "approve" &&
+    action !== "reject"
+  ) {
+    throw new Error(
+      "A valid proposal moderation action is required.",
+    );
+  }
+
+  if (
+    moderationNote !== undefined &&
+    (
+      typeof moderationNote !== "string" ||
+      moderationNote.length > 500
+    )
+  ) {
+    throw new Error(
+      "Moderation notes cannot exceed 500 characters.",
+    );
+  }
+
+  const payload = await requestRouteManagement(
+    `/proposals/${proposalId}/moderation`,
+    expectedUserId,
+    {
+      method: "POST",
+      body: {
+        action,
+        ...(moderationNote !== undefined
+          ? {
+              moderation_note: moderationNote,
+            }
+          : {}),
+      },
+    },
+  );
+
+  if (
+    !isAdminRouteChangeProposalModerationResult(
+      payload.result,
+    )
+  ) {
+    throw new Error(
+      "Route Management returned an invalid proposal moderation result.",
+    );
+  }
+
+  return payload.result;
+}
+
 export async function updateRouteManagementRecord(
   expectedUserId: string,
   entityType: RouteManagementEntityType,
   id: number,
   payload: Record<string, unknown>,
 ): Promise<void> {
+  if (!isPositiveInteger(id)) {
+    throw new Error("A valid record ID is required.");
+  }
+
   await requestRouteManagement(
     `/records/${entityType}/${id}`,
     expectedUserId,
@@ -1198,6 +1608,10 @@ export async function archiveRouteManagementRecord(
   entityType: RouteManagementEntityType,
   id: number,
 ): Promise<void> {
+  if (!isPositiveInteger(id)) {
+    throw new Error("A valid record ID is required.");
+  }
+
   await requestRouteManagement(
     `/records/${entityType}/${id}`,
     expectedUserId,
@@ -1231,6 +1645,12 @@ export async function updateAdminTransportType(
   name: string,
   color: string,
 ): Promise<void> {
+  if (!isPositiveInteger(id)) {
+    throw new Error(
+      "A valid transport type ID is required.",
+    );
+  }
+
   await requestRouteManagement(
     `/transport-types/${id}`,
     expectedUserId,
@@ -1621,6 +2041,10 @@ export async function updateAdminRoute(
   routeId: number,
   payload: AdminRouteUpdatePayload,
 ): Promise<void> {
+  if (!isPositiveInteger(routeId)) {
+    throw new Error("A valid route ID is required.");
+  }
+
   await requestAdmin(
     `/routes/${routeId}`,
     expectedUserId,
@@ -1635,6 +2059,10 @@ export async function deleteAdminRoute(
   expectedUserId: string,
   routeId: number,
 ): Promise<void> {
+  if (!isPositiveInteger(routeId)) {
+    throw new Error("A valid route ID is required.");
+  }
+
   await requestAdmin(
     `/routes/${routeId}`,
     expectedUserId,

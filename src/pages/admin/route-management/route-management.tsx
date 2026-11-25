@@ -28,11 +28,14 @@ import {
   archiveRouteManagementRecord,
   createAdminTransportType,
   getRouteManagementData,
+  moderateRouteChangeProposal,
   moderateRouteManagementRecord,
   updateAdminTransportType,
   updateRouteManagementRecord,
   type AdminRouteManagementData,
   type AdminRouteRecord,
+  type AdminRouteChangeProposalPointRecord,
+  type AdminRouteChangeProposalRecord,
   type AdminTransitPointRecord,
   type AdminTransportTypeRecord,
   type RouteManagementEntityType,
@@ -75,6 +78,11 @@ import {
   Check,
   Ban,
   Plus,
+  GitBranch,
+  MapPin,
+  Clock3,
+  ArrowRight,
+  AlertTriangle,
 } from "lucide-react";
 
 // ============================================================
@@ -437,6 +445,67 @@ function editorMapPoints(
 }
 
 // ============================================================
+// ROUTE CHANGE PROPOSAL HELPERS
+// ============================================================
+
+function proposalTypeLabel(
+  proposal: AdminRouteChangeProposalRecord,
+): string {
+  return proposal.proposal_type === "insert_point"
+    ? "Insert point into route"
+    : "Extend existing route";
+}
+
+function proposalPointName(
+  point: AdminRouteChangeProposalPointRecord,
+): string {
+  return (
+    point.terminals?.name ??
+    point.stops?.name ??
+    "Point unavailable"
+  );
+}
+
+function proposalPointType(
+  point: AdminRouteChangeProposalPointRecord,
+): string {
+  if (point.terminals) {
+    return "Terminal";
+  }
+
+  if (point.stops) {
+    return point.stops.stop_type === "train_station"
+      ? "Train station"
+      : "Road stop";
+  }
+
+  return point.terminal_id !== null
+    ? "Terminal"
+    : "Stop";
+}
+
+function formatProposalDate(
+  value: string,
+): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Date unavailable";
+  }
+
+  return date.toLocaleString();
+}
+
+function proposalPoints(
+  proposal: AdminRouteChangeProposalRecord,
+): AdminRouteChangeProposalPointRecord[] {
+  return [...proposal.route_change_proposal_points].sort(
+    (left, right) =>
+      left.stop_order - right.stop_order,
+  );
+}
+
+// ============================================================
 // EDITOR HELPERS
 // ============================================================
 
@@ -544,6 +613,317 @@ function Detail({
 }
 
 // ============================================================
+// ROUTE CHANGE PROPOSAL CARD
+// ============================================================
+
+function RouteChangeProposalCard({
+  proposal,
+  route,
+  canModerate,
+  isMutating,
+  onModerate,
+}: {
+  proposal: AdminRouteChangeProposalRecord;
+  route: AdminRouteRecord | undefined;
+  canModerate: boolean;
+  isMutating: boolean;
+  onModerate: (
+    proposal: AdminRouteChangeProposalRecord,
+    action: "approve" | "reject",
+  ) => void;
+}) {
+  const orderedPoints = proposalPoints(proposal);
+
+  const currentRoutePoints = route
+    ? [...route.route_stops].sort(
+        (left, right) =>
+          left.stop_order - right.stop_order,
+      )
+    : [];
+
+  const routeName =
+    route?.name ?? `Route #${proposal.route_id}`;
+
+  const proposedRouteName =
+    proposal.proposed_name?.trim() || routeName;
+
+  return (
+    <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      {/* PROPOSAL HEADER */}
+
+      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#EAF1F8] px-3 py-1.5 text-xs font-semibold text-[#102E4D]">
+              <GitBranch size={13} />
+              {proposalTypeLabel(proposal)}
+            </span>
+
+            <span className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-700">
+              Pending review
+            </span>
+          </div>
+
+          <h4 className="mt-3 break-words text-lg font-bold text-slate-900">
+            {proposedRouteName}
+          </h4>
+
+          <p className="mt-1 text-sm text-slate-500">
+            Existing route:{" "}
+            <span className="font-semibold text-slate-700">
+              {routeName}
+            </span>
+            {" · "}
+            Route ID: {proposal.route_id}
+          </p>
+
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-500">
+            <span>
+              Submitted by{" "}
+              <span className="font-semibold text-slate-700">
+                {proposal.contributor_display_name}
+              </span>
+            </span>
+
+            <span className="inline-flex items-center gap-1">
+              <Clock3 size={13} />
+              {formatProposalDate(proposal.created_at)}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+            Proposal #{proposal.id}
+          </span>
+        </div>
+      </div>
+
+      {/* PROPOSED ROUTE DETAILS */}
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <section className="rounded-xl border border-blue-100 bg-blue-50/50 p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h5 className="flex items-center gap-2 text-sm font-bold text-[#102E4D]">
+              <GitBranch size={16} />
+              Proposed sequence
+            </h5>
+
+            <span className="text-xs text-slate-500">
+              {orderedPoints.length}{" "}
+              {orderedPoints.length === 1
+                ? "point"
+                : "points"}
+            </span>
+          </div>
+
+          {proposal.proposed_name && (
+            <div className="mb-3 rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs">
+              <span className="text-slate-500">
+                Proposed route name
+              </span>
+
+              <p className="mt-0.5 font-semibold text-slate-800">
+                {proposal.proposed_name}
+              </p>
+            </div>
+          )}
+
+          {orderedPoints.length > 0 ? (
+            <ol className="space-y-2">
+              {orderedPoints.map((point) => (
+                <li
+                  key={`${proposal.id}-${point.stop_order}`}
+                  className="flex items-start gap-3 rounded-lg border border-blue-100 bg-white px-3 py-2.5"
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#EAF1F8] text-xs font-bold text-[#102E4D]">
+                    {point.stop_order}
+                  </span>
+
+                  <div className="min-w-0 flex-1">
+                    <p className="break-words text-sm font-semibold text-slate-800">
+                      {proposalPointName(point)}
+                    </p>
+
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {proposalPointType(point)}
+                      {" · "}
+                      {point.is_new_point
+                        ? "New proposed point"
+                        : "Existing approved point"}
+                    </p>
+                  </div>
+
+                  {point.is_new_point ? (
+                    <span className="shrink-0 rounded-full bg-green-50 px-2 py-1 text-[10px] font-semibold text-green-700">
+                      New
+                    </span>
+                  ) : (
+                    <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-500">
+                      Existing
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="rounded-lg bg-white px-3 py-4 text-center text-sm text-slate-500">
+              No proposed points are available.
+            </p>
+          )}
+        </section>
+
+        {/* CURRENT ROUTE SEQUENCE */}
+
+        <section className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h5 className="flex items-center gap-2 text-sm font-bold text-slate-700">
+              <MapPin size={16} />
+              Current route sequence
+            </h5>
+
+            <span className="text-xs text-slate-500">
+              {currentRoutePoints.length}{" "}
+              {currentRoutePoints.length === 1
+                ? "point"
+                : "points"}
+            </span>
+          </div>
+
+          {currentRoutePoints.length > 0 ? (
+            <ol className="space-y-2">
+              {currentRoutePoints.map((routeStop) => (
+                <li
+                  key={routeStop.id}
+                  className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5"
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600">
+                    {routeStop.stop_order}
+                  </span>
+
+                  <div className="min-w-0 flex-1">
+                    <p className="break-words text-sm font-medium text-slate-700">
+                      {routeStop.terminals?.name ??
+                        routeStop.stops?.name ??
+                        "Point unavailable"}
+                    </p>
+
+                    <p className="mt-0.5 text-xs text-slate-400">
+                      {routeStop.terminals
+                        ? "Terminal"
+                        : routeStop.stops?.stop_type ===
+                            "train_station"
+                          ? "Train station"
+                          : "Road stop"}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-4">
+              <p className="flex items-center gap-2 text-sm font-semibold text-amber-800">
+                <AlertTriangle size={15} />
+                Current route unavailable
+              </p>
+
+              <p className="mt-1 text-xs text-amber-700">
+                The target route could not be loaded. The proposal
+                should be checked for a conflict before approval.
+              </p>
+            </div>
+          )}
+        </section>
+      </div>
+
+      {/* PROPOSAL CHANGE SUMMARY */}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+        <span className="font-semibold text-slate-700">
+          Proposed change:
+        </span>
+
+        {proposal.proposal_type === "insert_point" ? (
+          <span>
+            Add one or more points within the existing route sequence.
+          </span>
+        ) : (
+          <span>
+            Extend the existing continuous route while keeping its
+            route identity.
+          </span>
+        )}
+
+        <ArrowRight
+          size={14}
+          className="text-slate-400"
+        />
+
+        <span>
+          Transport type and variant remain tied to the existing
+          route.
+        </span>
+      </div>
+
+      {/* REJECTION NOTE, IF PRESENT */}
+
+      {proposal.moderation_note && (
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+          <p className="text-xs font-semibold text-slate-600">
+            Existing moderation note
+          </p>
+
+          <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">
+            {proposal.moderation_note}
+          </p>
+        </div>
+      )}
+
+      {/* ACTIONS */}
+
+      {canModerate && (
+        <div className="mt-5 flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            disabled={isMutating}
+            onClick={() =>
+              onModerate(proposal, "reject")
+            }
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Ban size={15} />
+            Reject proposal
+          </button>
+
+          <button
+            type="button"
+            disabled={
+              isMutating ||
+              orderedPoints.length < 2 ||
+              !route
+            }
+            onClick={() =>
+              onModerate(proposal, "approve")
+            }
+            title={
+              !route
+                ? "The target route is unavailable."
+                : orderedPoints.length < 2
+                  ? "The proposal needs at least two points."
+                  : undefined
+            }
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Check size={15} />
+            Approve proposal
+          </button>
+        </div>
+      )}
+    </article>
+  );
+}
+
+// ============================================================
 // ROUTE MANAGEMENT PAGE
 // ============================================================
 
@@ -578,6 +958,7 @@ export default function RouteManagement() {
       stops: [],
       terminals: [],
       transportTypes: [],
+      routeChangeProposals: [],
     });
 
   const [dataOwnerId, setDataOwnerId] =
@@ -763,6 +1144,7 @@ export default function RouteManagement() {
       stops: [],
       terminals: [],
       transportTypes: [],
+      routeChangeProposals: [],
     });
 
     setErrorMessage(null);
@@ -827,6 +1209,7 @@ export default function RouteManagement() {
           stops: [],
           terminals: [],
           transportTypes: [],
+          routeChangeProposals: [],
         });
 
         setErrorMessage(
@@ -1085,7 +1468,14 @@ export default function RouteManagement() {
   ).length;
 
   // ==========================================================
-  // 9. CENTRALIZED LOGOUT
+  // 9. PENDING ROUTE CHANGE PROPOSAL COUNT
+  // ==========================================================
+
+  const pendingRouteChangeProposalCount =
+    data.routeChangeProposals.length;
+
+  // ==========================================================
+  // 10. CENTRALIZED LOGOUT
   // ==========================================================
 
   const handleLogout = async () => {
@@ -1114,7 +1504,7 @@ export default function RouteManagement() {
   };
 
   // ==========================================================
-  // 10. OPEN EDITOR
+  // 11. OPEN EDITOR
   // ==========================================================
 
   const openEditor = async (
@@ -1176,7 +1566,7 @@ export default function RouteManagement() {
   };
 
   // ==========================================================
-  // 11. CLOSE EDITOR
+  // 12. CLOSE EDITOR
   // ==========================================================
 
   const closeEditor = () => {
@@ -1189,7 +1579,7 @@ export default function RouteManagement() {
   };
 
   // ==========================================================
-  // 12. SAVE EDITOR
+  // 13. SAVE EDITOR
   // ==========================================================
 
   const saveEditor = async () => {
@@ -1348,7 +1738,7 @@ export default function RouteManagement() {
   };
 
   // ==========================================================
-  // 13. ADD ROUTE POINT
+  // 14. ADD ROUTE POINT
   // ==========================================================
 
   const addRoutePoint = () => {
@@ -1380,7 +1770,7 @@ export default function RouteManagement() {
   };
 
   // ==========================================================
-  // 14. MODERATION
+  // 15. ORDINARY RECORD MODERATION
   // ==========================================================
 
   const handleModeration = async (
@@ -1443,7 +1833,118 @@ export default function RouteManagement() {
   };
 
   // ==========================================================
-  // 15. MAP INFORMATION ACTIONS
+  // 16. ROUTE CHANGE PROPOSAL MODERATION
+  // ==========================================================
+
+  const handleRouteChangeProposalModeration = async (
+    proposal: AdminRouteChangeProposalRecord,
+    action: "approve" | "reject",
+  ) => {
+    if (!userId || !role || isMutating) {
+      return;
+    }
+
+    if (
+      proposal.status !== "pending"
+    ) {
+      return;
+    }
+
+    if (
+      action === "approve" &&
+      proposal.route_change_proposal_points.length < 2
+    ) {
+      window.alert(
+        "This proposal does not contain enough route points to approve.",
+      );
+
+      return;
+    }
+
+    if (
+      action === "approve" &&
+      !data.routes.some(
+        (route) => route.id === proposal.route_id,
+      )
+    ) {
+      window.alert(
+        "The target route could not be loaded. The proposal cannot be approved from this page.",
+      );
+
+      return;
+    }
+
+    if (
+      action === "approve" &&
+      !window.confirm(
+        `Approve this route change proposal?\n\nThe existing route (ID ${proposal.route_id}) will be updated. Its route identity will remain the same.`,
+      )
+    ) {
+      return;
+    }
+
+    const moderationNote =
+      action === "reject"
+        ? window.prompt(
+            "Optional rejection note (500 characters maximum):",
+            "",
+          ) ?? null
+        : undefined;
+
+    if (moderationNote === null) {
+      return;
+    }
+
+    if (
+      moderationNote !== undefined &&
+      moderationNote.length > 500
+    ) {
+      window.alert(
+        "Rejection notes must be 500 characters or fewer.",
+      );
+
+      return;
+    }
+
+    setIsMutating(true);
+    setErrorMessage(null);
+
+    try {
+      const result = await moderateRouteChangeProposal(
+        userId,
+        proposal.id,
+        action,
+        moderationNote,
+      );
+
+      if (result.status === "conflicted") {
+        window.alert(
+          "This proposal could not be applied because the route or one of its underlying records changed after the proposal was submitted.\n\nNo route changes were applied. The proposal has been marked as conflicted.",
+        );
+      } else if (result.status === "approved") {
+        window.alert(
+          "The route change proposal was approved and applied successfully.",
+        );
+      } else if (result.status === "rejected") {
+        window.alert(
+          "The route change proposal was rejected.",
+        );
+      }
+
+      refreshData();
+    } catch (error: unknown) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to moderate the route change proposal.",
+      );
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  // ==========================================================
+  // 17. MAP INFORMATION ACTIONS
   // ==========================================================
 
   const handleMapInformationAction = async (
@@ -1492,7 +1993,7 @@ export default function RouteManagement() {
   };
 
   // ==========================================================
-  // 16. ARCHIVE RECORD
+  // 18. ARCHIVE RECORD
   // ==========================================================
 
   const handleArchive = async (
@@ -1537,7 +2038,7 @@ export default function RouteManagement() {
   };
 
   // ==========================================================
-  // 17. TAB CHANGE
+  // 19. TAB CHANGE
   // ==========================================================
 
   const changeTab = (tab: ManagementTab) => {
@@ -1803,6 +2304,94 @@ export default function RouteManagement() {
               )}
             </div>
           )}
+
+          {/* =================================================
+              PENDING ROUTE CHANGE PROPOSALS
+          ================================================== */}
+
+          <section className="mb-8 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_3px_14px_rgba(15,23,42,0.035)] sm:p-6">
+            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Pending Route Change Proposals
+                  </h3>
+
+                  <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
+                    {pendingRouteChangeProposalCount} pending
+                  </span>
+                </div>
+
+                <p className="mt-1 max-w-3xl text-sm text-slate-500">
+                  Review proposed insertions and extensions to
+                  existing routes. Approved proposals update the
+                  existing route rather than creating a duplicate
+                  route.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <GitBranch size={15} />
+                Separate from new route submissions
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              {isLoading &&
+              pendingRouteChangeProposalCount === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
+                  <p className="text-sm font-semibold text-slate-700">
+                    Loading route change proposals...
+                  </p>
+
+                  <p className="mt-1 text-xs text-slate-500">
+                    Pending proposals will appear here.
+                  </p>
+                </div>
+              ) : pendingRouteChangeProposalCount > 0 ? (
+                data.routeChangeProposals.map((proposal) => {
+                  const route = data.routes.find(
+                    (record) =>
+                      record.id === proposal.route_id,
+                  );
+
+                  return (
+                    <RouteChangeProposalCard
+                      key={proposal.id}
+                      proposal={proposal}
+                      route={route}
+                      canModerate={role !== null}
+                      isMutating={isMutating}
+                      onModerate={
+                        handleRouteChangeProposalModeration
+                      }
+                    />
+                  );
+                })
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-[#EAF1F8] text-[#102E4D]">
+                    <GitBranch size={22} />
+                  </div>
+
+                  <p className="mt-3 text-sm font-semibold text-slate-800">
+                    No pending route change proposals
+                  </p>
+
+                  <p className="mx-auto mt-1 max-w-md text-xs text-slate-500">
+                    New insertions and extensions submitted by
+                    contributors will appear here for review.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <p className="mt-4 border-t border-slate-100 pt-4 text-xs text-slate-400">
+              New standalone routes continue to use the normal
+              Contributions review workflow. This section is only
+              for changes to existing approved routes.
+            </p>
+          </section>
 
           {/* RECORD MANAGEMENT PANEL */}
 
@@ -2433,7 +3022,7 @@ export default function RouteManagement() {
                       {selectedRow.record.route_stops.map(
                         (stop) => (
                           <li
-                            key={`${stop.route_id}-${stop.stop_order}`}
+                            key={stop.id}
                             className="rounded-lg bg-slate-50 px-3 py-2 text-sm"
                           >
                             {stop.stop_order}.{" "}

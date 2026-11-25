@@ -1,71 +1,78 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
 import {
   Bell,
   Car,
   Home as HomeIcon,
-  ImagePlus,
-  LocateFixed,
   MapPin,
   MessageSquare,
   Plus,
-  Trash2,
 } from "lucide-react";
-import {
-  CircleMarker,
-  MapContainer,
-  Marker,
-  Pane,
-  Polyline,
-  TileLayer,
-  Tooltip,
-  useMap,
-  useMapEvents,
-} from "react-leaflet";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
 
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-import markerIcon from "leaflet/dist/images/marker-icon.png";
-import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
 import MapSidebar from "@/components/map-layout/MapSidebar";
 import MapHeader from "@/components/map-layout/MapHeader";
 import AccountAvatar from "@/components/account/AccountAvatar";
 import { useAccountProfile } from "@/components/account/accountProfileStore";
 
-import { getMapIcon } from "@/lib/mapIcons";
-import { attachMapImage, validateImage } from "@/lib/mapImages";
+import ContributionHistory from "@/components/contributions/ContributionHistory";
+import ContributionFormModal from "@/components/contributions/ContributionFormModal";
+
+import type {
+  ContributionMapLine,
+  ContributionMapMarker,
+} from "@/components/contributions/ContributionMap";
+import type {
+  RouteSequenceEntry,
+} from "@/components/contributions/RouteSequencePanel";
+import type {
+  PhotoPreview,
+} from "@/components/contributions/PhotoUploadGrid";
+
+import {
+  attachMapImage,
+  validateImage,
+} from "@/lib/mapImages";
+
 import {
   getMyContributions,
   getTransitCatalog,
   getTransportOptions,
   pointKey,
   submitContribution,
+  submitRouteChangeProposal,
 } from "@/lib/contributions";
+
 import type {
   ContributionInput,
   ContributionKind,
   ExistingPoint,
   ExistingRoute,
   MyContribution,
+  MyContributionStatus,
   PointInput,
   PointKind,
+  RouteChangePointInput,
+  RouteChangeProposalInput,
   StopKind,
   TransportTypeOption,
   TransportVariantOption,
 } from "@/lib/contributions";
 
-// Leaflet's default marker config (used for the single draggable pin).
-delete (
-  L.Icon.Default.prototype as L.Icon.Default & { _getIconUrl?: unknown }
-)._getIconUrl;
-
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x,
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-});
+import {
+  buildAutomaticRouteSequence,
+  suggestExtendedRouteName,
+} from "@/lib/routePlacement";
+import type {
+  RoutePlacementPoint,
+} from "@/lib/routePlacement";
 
 interface ContributionProps {
   currentUserId: string;
@@ -73,6 +80,7 @@ interface ContributionProps {
 }
 
 type Coordinates = [number, number];
+type FormAction = "terminal" | "route" | "modify_route";
 
 interface PhotoItem {
   file: File;
@@ -91,15 +99,23 @@ interface RoutePoint {
   photo: PhotoItem | null;
 }
 
-interface PreviewLine {
-  id: number;
-  positions: Coordinates[];
-  color: string;
+interface AutomaticBasePoint extends RoutePlacementPoint {
+  source: "base";
+  kind: PointKind;
+  existingId: number;
+  point: ExistingPoint;
 }
 
-const defaultPosition: Coordinates = [14.7167, 121.05];
+interface AutomaticAdditionPoint extends RoutePlacementPoint {
+  source: "addition";
+  kind: PointKind;
+  existingId: number | null;
+  point: RoutePoint;
+}
+
 const MAX_PHOTOS = 3;
 const MAX_ROUTE_POINTS = 60;
+const MAX_PROPOSED_ROUTE_POINTS = 100;
 
 const navItems = [
   { label: "Recents", icon: HomeIcon },
@@ -108,44 +124,10 @@ const navItems = [
   { label: "Community", icon: MessageSquare },
 ];
 
-const kindOptions: { value: ContributionKind; label: string; hint: string }[] =
-  [
-    { value: "terminal", label: "Terminal", hint: "Where vehicles start or end" },
-    { value: "stop", label: "Stop", hint: "A stop or station" },
-    { value: "route", label: "Route", hint: "A path made of several points" },
-  ];
-
-const kindLabel: Record<ContributionKind, string> = {
-  terminal: "Terminal",
-  stop: "Stop",
-  route: "Route",
-};
-
-function formatDate(date: string) {
-  return new Date(date).toLocaleDateString("en-PH", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
 function safeColor(color: string | undefined) {
-  return color && /^#[0-9a-fA-F]{3,8}$/.test(color) ? color : "#12395A";
-}
-
-function numberedIcon(position: number, color: string) {
-  return L.divIcon({
-    className: "",
-    html: `<div style="background:${color};color:#fff;width:26px;height:26px;border-radius:9999px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;font:600 12px sans-serif">${position}</div>`,
-    iconSize: [26, 26],
-    iconAnchor: [13, 13],
-  });
-}
-
-function existingLabel(point: ExistingPoint) {
-  return point.kind === "stop" && point.stopType === "train_station"
-    ? `${point.name} (Station)`
-    : point.name;
+  return color && /^#[0-9a-fA-F]{3,8}$/.test(color)
+    ? color
+    : "#12395A";
 }
 
 function existingPointTypeLabel(point: ExistingPoint) {
@@ -153,9 +135,31 @@ function existingPointTypeLabel(point: ExistingPoint) {
   return point.stopType === "train_station" ? "Station" : "Stop";
 }
 
+function routePointTypeLabel(point: RoutePoint) {
+  if (point.kind === "terminal") return "Terminal";
+  return point.stopType === "train_station" ? "Station" : "Stop";
+}
+
+function getPointStopNumber(
+  points: readonly { kind: PointKind }[],
+  index: number
+): number | null {
+  if (points[index]?.kind !== "stop") return null;
+  return points
+    .slice(0, index + 1)
+    .filter((point) => point.kind === "stop")
+    .length;
+}
+
+function getCoordinates(
+  points: readonly { latitude: number; longitude: number }[]
+): Coordinates[] {
+  return points.map(({ latitude, longitude }) => [latitude, longitude]);
+}
+
 function toRoutePoint(point: ExistingPoint): RoutePoint {
   return {
-    key: crypto.randomUUID(),
+    key: pointKey(point.kind, point.id),
     kind: point.kind,
     existingId: point.id,
     name: point.name,
@@ -167,251 +171,14 @@ function toRoutePoint(point: ExistingPoint): RoutePoint {
   };
 }
 
-// ==================================================
-// MAP HELPERS
-// ==================================================
-
-function ClickToPin({ onPick }: { onPick: (position: Coordinates) => void }) {
-  useMapEvents({
-    click: (event) => onPick([event.latlng.lat, event.latlng.lng]),
-  });
-  return null;
-}
-
-function FlyTo({ position }: { position: Coordinates | null }) {
-  const map = useMap();
-  const latitude = position?.[0];
-  const longitude = position?.[1];
-
-  useEffect(() => {
-    if (latitude === undefined || longitude === undefined) return;
-    map.flyTo([latitude, longitude], 17, { duration: 0.6 });
-  }, [map, latitude, longitude]);
-
-  return null;
-}
-
-function InvalidateOnMount() {
-  const map = useMap();
-  useEffect(() => {
-    const timer = window.setTimeout(() => map.invalidateSize(), 150);
-    return () => window.clearTimeout(timer);
-  }, [map]);
-  return null;
-}
-
-function FitRouteLines({
-  lines,
-  selectedRouteId,
-}: {
-  lines: PreviewLine[];
-  selectedRouteId: number | null;
-}) {
-  const map = useMap();
-
-  useEffect(() => {
-    const visibleLines = selectedRouteId
-      ? lines.filter((line) => line.id === selectedRouteId)
-      : lines;
-    const positions = visibleLines.flatMap((line) => line.positions);
-    if (positions.length === 0) return;
-
-    const bounds = L.latLngBounds(positions);
-    if (!bounds.isValid()) return;
-    map.fitBounds(bounds, { padding: [32, 32], maxZoom: 15, animate: true });
-  }, [map, lines, selectedRouteId]);
-
-  return null;
-}
-
-interface PinMapProps {
-  currentPosition: Coordinates | null;
-  focus: Coordinates | null;
-  mode: ContributionKind;
-  pin: Coordinates | null;
-  routePoints: RoutePoint[];
-  routeColor: string;
-  candidates: ExistingPoint[];
-  stopCandidates: ExistingPoint[];
-  selectedStopReferenceKey: string | null;
-  selectedPreviewRouteId: number | null;
-  connectedKeys: Set<string>;
-  previewLines: PreviewLine[];
-  onPick: (position: Coordinates) => void;
-  onPickExisting: (point: ExistingPoint) => void;
-  onPickStopReference: (point: ExistingPoint) => void;
-  onMovePin: (position: Coordinates) => void;
-  onMoveRoutePoint: (index: number, position: Coordinates) => void;
-}
-
-function PinMap({
-  currentPosition,
-  focus,
-  mode,
-  pin,
-  routePoints,
-  routeColor,
-  candidates,
-  stopCandidates,
-  selectedStopReferenceKey,
-  selectedPreviewRouteId,
-  connectedKeys,
-  previewLines,
-  onPick,
-  onPickExisting,
-  onPickStopReference,
-  onMovePin,
-  onMoveRoutePoint,
-}: PinMapProps) {
-  return (
-    <MapContainer
-      center={currentPosition ?? defaultPosition}
-      zoom={currentPosition ? 17 : 14}
-      scrollWheelZoom
-      className="h-full w-full"
-    >
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-      />
-
-      <InvalidateOnMount />
-      <FlyTo position={focus ?? currentPosition} />
-      <FitRouteLines
-        lines={previewLines}
-        selectedRouteId={selectedPreviewRouteId}
-      />
-      <ClickToPin onPick={onPick} />
-
-      {currentPosition && (
-        <Marker
-          position={currentPosition}
-          icon={getMapIcon("current_location")}
-          interactive={false}
-        />
-      )}
-
-      <Pane name="routePreviewPane" style={{ zIndex: 650, pointerEvents: "none" }}>
-        {(mode === "route" || mode === "stop") &&
-          previewLines.map((line) => {
-            const selected = line.id === selectedPreviewRouteId;
-            return (
-              <Polyline
-                key={line.id}
-                positions={line.positions}
-                interactive={false}
-                pathOptions={{
-                  color: line.color,
-                  weight: selected ? 8 : 5,
-                  opacity: selected ? 0.98 : 0.72,
-                  dashArray: selected ? undefined : "8 6",
-                }}
-              />
-            );
-          })}
-      </Pane>
-
-      <Pane name="contributionPinPane" style={{ zIndex: 670 }} />
-      <Pane name="selectedPointPane" style={{ zIndex: 680 }} />
-
-      <Pane name="contributionMarkerPane" style={{ zIndex: 625 }}>
-        {mode !== "route" && pin && (
-          <Marker
-            position={pin}
-            draggable
-            pane="contributionPinPane"
-            eventHandlers={{
-              dragend: (event) => {
-                const { lat, lng } = (event.target as L.Marker).getLatLng();
-                onMovePin([lat, lng]);
-              },
-            }}
-          />
-        )}
-
-        {mode === "stop" &&
-          stopCandidates.map((point) => {
-            const key = pointKey(point.kind, point.id);
-            const selected = key === selectedStopReferenceKey;
-
-            return (
-              <CircleMarker
-                key={key}
-                pane={selected ? "selectedPointPane" : "contributionMarkerPane"}
-                center={[point.latitude, point.longitude]}
-                radius={selected ? 10 : 7}
-                bubblingMouseEvents={false}
-                pathOptions={{
-                  color: "#ffffff",
-                  weight: selected ? 3 : 2,
-                  fillColor: selected ? "#f97316" : "#12395A",
-                  fillOpacity: 0.9,
-                }}
-                eventHandlers={{ click: () => onPickStopReference(point) }}
-              >
-                <Tooltip>
-                  {existingPointTypeLabel(point)}: {point.name}
-                </Tooltip>
-              </CircleMarker>
-            );
-          })}
-
-        {mode === "route" &&
-          candidates.map((point) => {
-            const connected = connectedKeys.has(pointKey(point.kind, point.id));
-
-            return (
-              <CircleMarker
-                key={pointKey(point.kind, point.id)}
-                center={[point.latitude, point.longitude]}
-                radius={connected ? 9 : 7}
-                bubblingMouseEvents={false}
-                pathOptions={{
-                  color: "#ffffff",
-                  weight: 2,
-                  fillColor: connected ? routeColor : "#6b7280",
-                  fillOpacity: connected ? 0.95 : 0.7,
-                }}
-                eventHandlers={{ click: () => onPickExisting(point) }}
-              >
-                <Tooltip>{existingLabel(point)}</Tooltip>
-              </CircleMarker>
-            );
-          })}
-
-        {mode === "route" &&
-          routePoints.map((point, index) => (
-            <Marker
-              key={point.key}
-              position={[point.latitude, point.longitude]}
-              icon={numberedIcon(index + 1, routeColor)}
-              draggable={point.existingId === null}
-              pane="contributionPinPane"
-              eventHandlers={{
-                dragend: (event) => {
-                  const { lat, lng } = (event.target as L.Marker).getLatLng();
-                  onMoveRoutePoint(index, [lat, lng]);
-                },
-              }}
-            />
-          ))}
-      </Pane>
-    </MapContainer>
-  );
-}
-
-// ==================================================
-// PAGE
-// ==================================================
-
 export default function Contribution({
   currentUserId,
   onLogout,
 }: ContributionProps) {
   const { account, userId: profileUserId } = useAccountProfile();
-  const profileAccount =
-    profileUserId === currentUserId ? account : null;
+  const profileAccount = profileUserId === currentUserId ? account : null;
 
+  // Page and modal state
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
@@ -419,228 +186,109 @@ export default function Contribution({
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // Form
-  const [kind, setKind] = useState<ContributionKind>("terminal");
+  // Draft mode and fields
+  const [formAction, setFormAction] = useState<FormAction>("terminal");
+  const isRouteChange = formAction === "modify_route";
+  const kind: ContributionKind = formAction === "terminal" ? "terminal" : "route";
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [stopType, setStopType] = useState<StopKind>("road_stop");
-  const [pin, setPin] = useState<Coordinates | null>(null);
-  const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
+  const [routeNameEdited, setRouteNameEdited] = useState(false);
+
+  // Vehicle and route selection
   const [vehicleTypeId, setVehicleTypeId] = useState("");
   const [variantId, setVariantId] = useState("");
-  const [existingQuery, setExistingQuery] = useState("");
-  const [inspectKey, setInspectKey] = useState<string | null>(null);
-  const [selectedStopReferenceKey, setSelectedStopReferenceKey] = useState<string | null>(null);
-  const [selectedPreviewRouteId, setSelectedPreviewRouteId] = useState<number | null>(null);
-  const [photos, setPhotos] = useState<PhotoItem[]>([]);
-  const photoInputRef = useRef<HTMLInputElement>(null);
-  const pointPhotoInputRef = useRef<HTMLInputElement>(null);
-  const pointPhotoTarget = useRef<string | null>(null);
-
-  // Transport options + approved points/routes from the database
+  const [selectedExistingRouteId, setSelectedExistingRouteId] = useState("");
   const [types, setTypes] = useState<TransportTypeOption[]>([]);
   const [variants, setVariants] = useState<TransportVariantOption[]>([]);
   const [optionsError, setOptionsError] = useState("");
+
+  // Catalog is fetched only after a vehicle type is selected.
   const [existingPoints, setExistingPoints] = useState<ExistingPoint[]>([]);
   const [existingRoutes, setExistingRoutes] = useState<ExistingRoute[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const [existingError, setExistingError] = useState("");
-  const [catalogLoading, setCatalogLoading] = useState(true);
+  const catalogRequestId = useRef(0);
 
-  // Location
-  const [currentPosition, setCurrentPosition] = useState<Coordinates | null>(
-    null
-  );
+  // Map and route draft
+  const [pin, setPin] = useState<Coordinates | null>(null);
+  const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
+  const [currentPosition, setCurrentPosition] = useState<Coordinates | null>(null);
   const [focus, setFocus] = useState<Coordinates | null>(null);
   const [locationMessage, setLocationMessage] = useState("");
   const autoPinned = useRef(false);
+  const [existingQuery, setExistingQuery] = useState("");
+  const [inspectKey, setInspectKey] = useState<string | null>(null);
+  const [selectedPointKey, setSelectedPointKey] = useState<string | null>(null);
+  const [selectedPreviewRouteId, setSelectedPreviewRouteId] = useState<number | null>(null);
 
-  // The user's own submissions
+  // Photos
+  const [photos, setPhotos] = useState<PhotoItem[]>([]);
+
+  // Contribution history
   const [mine, setMine] = useState<MyContribution[]>([]);
   const [mineLoading, setMineLoading] = useState(true);
   const [mineError, setMineError] = useState("");
 
-  const selectedType = types.find((item) => String(item.id) === vehicleTypeId);
-
+  // Derived selections and lookups
+  const selectedType = types.find((type) => String(type.id) === vehicleTypeId);
   const typeVariants = variants.filter(
-    (item) => String(item.transport_type_id) === vehicleTypeId
+    (variant) => String(variant.transport_type_id) === vehicleTypeId
   );
-
-  const selectedVariant = variants.find(
-    (item) => String(item.id) === variantId
-  );
-
-  const isRail = selectedVariant?.fare_model === "matrix";
+  const selectedVariant = variants.find((variant) => String(variant.id) === variantId);
   const routeColor = safeColor(selectedType?.color);
 
-  // ---------- existing points ----------
-
   const existingByKey = useMemo(
-    () =>
-      new Map(existingPoints.map((p) => [pointKey(p.kind, p.id), p] as const)),
+    () => new Map(
+      existingPoints.map((point) => [pointKey(point.kind, point.id), point] as const)
+    ),
     [existingPoints]
   );
 
   const usedKeys = useMemo(
-    () =>
-      new Set(
-        routePoints
-          .filter((p) => p.existingId !== null)
-          .map((p) => pointKey(p.kind, p.existingId as number))
-      ),
+    () => new Set(
+      routePoints.flatMap((point) =>
+        point.existingId === null
+          ? []
+          : [pointKey(point.kind, point.existingId)]
+      )
+    ),
     [routePoints]
   );
 
-  const candidates = useMemo(
-    () =>
-      vehicleTypeId
-        ? existingPoints.filter(
-            (p) =>
-              String(p.transportTypeId) === vehicleTypeId &&
-              !usedKeys.has(pointKey(p.kind, p.id)) &&
-              (!isRail || (p.kind === "stop" && p.stopType === "train_station"))
-          )
-        : [],
-    [existingPoints, usedKeys, isRail, vehicleTypeId]
-  );
-
-  const stopCandidates = useMemo(() => {
-    if (!vehicleTypeId) return [];
-
-    const isRailType = typeVariants.some(
-      (variant) => variant.fare_model === "matrix"
-    );
-
-    return existingPoints.filter(
-      (point) =>
-        String(point.transportTypeId) === vehicleTypeId &&
-        (!isRailType ||
-          point.kind === "terminal" ||
-          point.stopType === "train_station")
-    );
-  }, [existingPoints, typeVariants, vehicleTypeId]);
-
-  const lastPoint = routePoints[routePoints.length - 1];
-
-  const lastExisting =
-    lastPoint && lastPoint.existingId !== null
-      ? existingByKey.get(pointKey(lastPoint.kind, lastPoint.existingId))
-      : undefined;
-
-  const connectedKeys = useMemo(() => {
-    if (!lastExisting) return new Set<string>();
-
-    const routeIds = new Set(lastExisting.routeIds);
-
-    return new Set(
-      candidates
-        .filter((p) => p.routeIds.some((id) => routeIds.has(id)))
-        .map((p) => pointKey(p.kind, p.id))
-    );
-  }, [lastExisting, candidates]);
-
   const query = existingQuery.trim().toLowerCase();
-  const matches = (p: ExistingPoint) =>
-    !query || p.name.toLowerCase().includes(query);
-
-  const isConnected = (p: ExistingPoint) =>
-    connectedKeys.has(pointKey(p.kind, p.id));
-
-  const connectedList = candidates.filter(
-    (p) => isConnected(p) && matches(p)
+  const matches = useCallback(
+    (point: ExistingPoint) =>
+      !query || point.name.toLowerCase().includes(query),
+    [query]
   );
 
-  const otherTerminals = candidates.filter(
-    (p) => p.kind === "terminal" && !isConnected(p) && matches(p)
+  const selectedExistingRoute = useMemo(
+    () => existingRoutes.find(
+      (route) => String(route.id) === selectedExistingRouteId
+    ) ?? null,
+    [existingRoutes, selectedExistingRouteId]
   );
 
-  const otherStops = candidates.filter(
-    (p) => p.kind === "stop" && !isConnected(p) && matches(p)
-  );
-
-  const matchingStopCandidates = stopCandidates.filter(matches);
-
-  const selectedStopReference = selectedStopReferenceKey
-    ? existingByKey.get(selectedStopReferenceKey)
+  const selectedExistingRouteVariant = selectedExistingRoute
+    ? variants.find((variant) => variant.id === selectedExistingRoute.variantId)
     : undefined;
+  const selectedExistingRouteType = selectedExistingRoute
+    ? types.find((type) => type.id === selectedExistingRoute.transportTypeId)
+    : undefined;
+  const selectedExistingRouteColor = safeColor(selectedExistingRouteType?.color);
+  const isRail = (
+    isRouteChange
+      ? selectedExistingRouteVariant?.fare_model
+      : selectedVariant?.fare_model
+  ) === "matrix";
+  const selectedVehicleTypeName = isRouteChange
+    ? selectedExistingRouteType?.name ?? ""
+    : selectedType?.name ?? "";
+  const activeRouteColor = isRouteChange
+    ? selectedExistingRouteColor
+    : routeColor;
 
-  // ---------- details of the selected point ----------
-
-  const inspectPoint = inspectKey ? existingByKey.get(inspectKey) : undefined;
-
-  const inspectRoutes = useMemo(
-    () =>
-      inspectKey
-        ? existingRoutes.filter(
-            (r) =>
-              String(r.transportTypeId) === vehicleTypeId &&
-              r.keys.includes(inspectKey)
-          )
-        : [],
-    [existingRoutes, inspectKey, vehicleTypeId]
-  );
-
-  const previewLines = useMemo<PreviewLine[]>(
-    () =>
-      inspectRoutes.map((route) => ({
-        id: route.id,
-        color: routeColor,
-        positions: route.keys.flatMap((key): Coordinates[] => {
-          const point = existingByKey.get(key);
-          return point ? [[point.latitude, point.longitude]] : [];
-        }),
-      })),
-    [inspectRoutes, existingByKey, routeColor]
-  );
-
-  const stopReferenceRoutes = useMemo(() => {
-    if (!selectedStopReferenceKey) return [];
-
-    const routeIds = new Set(
-      existingByKey.get(selectedStopReferenceKey)?.routeIds ?? []
-    );
-
-    return existingRoutes.filter(
-      (route) =>
-        routeIds.has(route.id) &&
-        route.keys.includes(selectedStopReferenceKey)
-    );
-  }, [existingByKey, existingRoutes, selectedStopReferenceKey]);
-
-  const stopReferencePreviewLines = useMemo<PreviewLine[]>(
-    () =>
-      stopReferenceRoutes.map((route) => ({
-        id: route.id,
-        color: safeColor(
-          types.find((type) => type.id === route.transportTypeId)?.color
-        ),
-        positions: route.keys.flatMap((key): Coordinates[] => {
-          const point = existingByKey.get(key);
-          return point ? [[point.latitude, point.longitude]] : [];
-        }),
-      })),
-    [stopReferenceRoutes, types, existingByKey]
-  );
-
-  const variantName = (variantIdValue: number) =>
-    variants.find((v) => v.id === variantIdValue)?.name ?? "";
-
-  const segmentKeys = (
-    route: ExistingRoute,
-    anchor: string,
-    target: string
-  ): string[] => {
-    const a = route.keys.indexOf(anchor);
-    const b = route.keys.indexOf(target);
-
-    if (a < 0 || b < 0 || a === b) return [];
-
-    return a < b
-      ? route.keys.slice(a + 1, b + 1)
-      : route.keys.slice(b, a).reverse();
-  };
-
-  // ---------- data ----------
-
+  // Data loading
   const loadMine = useCallback(async () => {
     setMineLoading(true);
     setMineError("");
@@ -649,97 +297,406 @@ export default function Contribution({
       setMine(await getMyContributions(currentUserId));
     } catch (error: unknown) {
       setMineError(
-        error instanceof Error
-          ? error.message
-          : "Unable to load your contributions."
+        error instanceof Error ? error.message : "Unable to load your contributions."
       );
     } finally {
       setMineLoading(false);
     }
   }, [currentUserId]);
 
-  const loadCatalog = useCallback(async () => {
+  const loadCatalogForVehicle = useCallback(async (transportTypeId: number) => {
+    const requestId = ++catalogRequestId.current;
     setCatalogLoading(true);
+    setExistingError("");
+    setExistingPoints([]);
+    setExistingRoutes([]);
 
     try {
-      const catalog = await getTransitCatalog(currentUserId);
+      const catalog = await getTransitCatalog(currentUserId, transportTypeId);
+      if (requestId !== catalogRequestId.current) return;
       setExistingPoints(catalog.points);
       setExistingRoutes(catalog.routes);
-      setExistingError("");
     } catch (error: unknown) {
+      if (requestId !== catalogRequestId.current) return;
       setExistingError(
         error instanceof Error
           ? error.message
-          : "Unable to load existing terminals and stops."
+          : "Unable to load the selected vehicle's approved locations."
       );
     } finally {
-      setCatalogLoading(false);
+      if (requestId === catalogRequestId.current) setCatalogLoading(false);
     }
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
     void loadMine();
   }, [loadMine]);
 
   useEffect(() => {
-    void loadCatalog();
-  }, [loadCatalog]);
-
-  useEffect(() => {
     let active = true;
 
-    getTransportOptions()
+    getTransportOptions(currentUserId)
       .then((options) => {
         if (!active) return;
         setTypes(options.types);
         setVariants(options.variants);
+        setOptionsError("");
       })
       .catch((error: unknown) => {
-        if (active) {
-          setOptionsError(
-            error instanceof Error
-              ? error.message
-              : "Unable to load vehicle types."
-          );
-        }
+        if (!active) return;
+        setOptionsError(
+          error instanceof Error ? error.message : "Unable to load vehicle types."
+        );
       });
 
     return () => {
       active = false;
     };
+  }, [currentUserId]);
+
+  useEffect(() => () => {
+    catalogRequestId.current += 1;
   }, []);
 
   useEffect(() => {
     if (!notice) return;
-
-    const timer = window.setTimeout(() => setNotice(""), 5000);
+    const timer = window.setTimeout(() => setNotice(""), 6000);
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  // ---------- location ----------
+  // Existing locations available when creating a new route
+  const candidates = useMemo(() => {
+    if (formAction !== "route" || !vehicleTypeId || !selectedVariant) return [];
 
-  const locate = useCallback(() => {
+    return existingPoints.filter((point) => {
+      const key = pointKey(point.kind, point.id);
+      if (String(point.transportTypeId) !== vehicleTypeId || usedKeys.has(key)) {
+        return false;
+      }
+
+      if (selectedVariant.fare_model === "matrix") {
+        return point.kind === "stop" && point.stopType === "train_station";
+      }
+
+      if (routePoints.length === 0) return point.kind === "terminal";
+      return point.kind === "stop" && point.stopType === "road_stop";
+    });
+  }, [formAction, vehicleTypeId, selectedVariant, existingPoints, usedKeys, routePoints.length]);
+
+  const lastPoint = routePoints[routePoints.length - 1];
+  const lastExisting = lastPoint?.existingId !== null && lastPoint?.existingId !== undefined
+    ? existingByKey.get(pointKey(lastPoint.kind, lastPoint.existingId))
+    : undefined;
+
+  const connectedKeys = useMemo(() => {
+    if (!lastExisting) return new Set<string>();
+    const routeIds = new Set(lastExisting.routeIds);
+    return new Set(
+      candidates
+        .filter((point) => point.routeIds.some((routeId) => routeIds.has(routeId)))
+        .map((point) => pointKey(point.kind, point.id))
+    );
+  }, [lastExisting, candidates]);
+
+  const connectedList = candidates.filter((point) =>
+    connectedKeys.has(pointKey(point.kind, point.id)) && matches(point)
+  );
+  const otherTerminals = candidates.filter(
+    (point) => point.kind === "terminal" &&
+      !connectedKeys.has(pointKey(point.kind, point.id)) && matches(point)
+  );
+  const otherStops = candidates.filter(
+    (point) => point.kind === "stop" &&
+      !connectedKeys.has(pointKey(point.kind, point.id)) && matches(point)
+  );
+
+  // Existing route's approved sequence
+  const routeChangeBasePoints = useMemo(
+    () => selectedExistingRoute
+      ? selectedExistingRoute.keys.flatMap((key) => {
+          const point = existingByKey.get(key);
+          return point ? [point] : [];
+        })
+      : [],
+    [selectedExistingRoute, existingByKey]
+  );
+
+  const routeChangeBaseKeys = useMemo(
+    () => new Set(selectedExistingRoute?.keys ?? []),
+    [selectedExistingRoute]
+  );
+
+  const routeChangeCandidates = useMemo(() => {
+    if (!selectedExistingRoute || !selectedExistingRouteVariant) return [];
+
+    return existingPoints.filter((point) => {
+      if (
+        point.kind !== "stop" ||
+        point.transportTypeId !== selectedExistingRoute.transportTypeId
+      ) return false;
+
+      const key = pointKey(point.kind, point.id);
+      if (routeChangeBaseKeys.has(key) || usedKeys.has(key)) return false;
+
+      return selectedExistingRouteVariant.fare_model === "matrix"
+        ? point.stopType === "train_station"
+        : point.stopType === "road_stop";
+    });
+  }, [
+    existingPoints,
+    selectedExistingRoute,
+    selectedExistingRouteVariant,
+    routeChangeBaseKeys,
+    usedKeys,
+  ]);
+
+  const matchingRouteChangeCandidates = routeChangeCandidates.filter(matches);
+
+  // Build an ordered route proposal from coordinates, without a distance cutoff.
+  const routeChangePlacement = useMemo(() => {
+    if (
+      !isRouteChange ||
+      !selectedExistingRoute ||
+      routePoints.length === 0 ||
+      routeChangeBasePoints.length !== selectedExistingRoute.keys.length
+    ) return null;
+
+    const basePoints: AutomaticBasePoint[] = routeChangeBasePoints.map((point) => ({
+      key: pointKey(point.kind, point.id),
+      name: point.name,
+      latitude: point.latitude,
+      longitude: point.longitude,
+      source: "base",
+      kind: point.kind,
+      existingId: point.id,
+      point,
+    }));
+
+    const additionPoints: AutomaticAdditionPoint[] = routePoints.map((point) => ({
+      key: point.key,
+      name: point.name,
+      latitude: point.latitude,
+      longitude: point.longitude,
+      source: "addition",
+      kind: point.kind,
+      existingId: point.existingId,
+      point,
+    }));
+
+    return buildAutomaticRouteSequence(basePoints, additionPoints);
+  }, [isRouteChange, selectedExistingRoute, routeChangeBasePoints, routePoints]);
+
+  const routeNameSuggestion = useMemo(() => {
+    if (
+      routeChangePlacement?.status !== "ready" ||
+      routeChangePlacement.proposalType !== "extend_route"
+    ) return null;
+
+    return suggestExtendedRouteName(routeChangePlacement.points);
+  }, [routeChangePlacement]);
+
+  useEffect(() => {
+    if (!isRouteChange || routeNameEdited) return;
+    setName(routeNameSuggestion ?? "");
+  }, [isRouteChange, routeNameEdited, routeNameSuggestion]);
+
+  // Existing route inspection (used while creating a new route)
+  const inspectPoint = inspectKey ? existingByKey.get(inspectKey) : undefined;
+  const inspectRoutes = useMemo(
+    () => inspectKey
+      ? existingRoutes.filter((route) =>
+          String(route.transportTypeId) === vehicleTypeId &&
+          route.keys.includes(inspectKey)
+        )
+      : [],
+    [existingRoutes, inspectKey, vehicleTypeId]
+  );
+
+  const previewLines = useMemo<ContributionMapLine[]>(
+    () => inspectRoutes.map((route) => ({
+      id: route.id,
+      color: safeColor(
+        types.find((type) => type.id === route.transportTypeId)?.color
+      ),
+      positions: route.keys.flatMap((key): Coordinates[] => {
+        const point = existingByKey.get(key);
+        return point ? [[point.latitude, point.longitude]] : [];
+      }),
+    })),
+    [inspectRoutes, existingByKey, types]
+  );
+
+  // Complete sequence shown below the map
+  const routeSequenceEntries = useMemo<RouteSequenceEntry[]>(() => {
+    if (isRouteChange) {
+      if (routeChangePlacement?.status === "ready") {
+        let stopNumber = 0;
+
+        return routeChangePlacement.points.map((item): RouteSequenceEntry => {
+          if (item.source === "base") {
+            const point = item.point;
+            if (point.kind === "stop") stopNumber += 1;
+
+            return {
+              key: item.key,
+              kind: point.kind,
+              name: point.name,
+              stopNumber: point.kind === "stop" ? stopNumber : null,
+              typeLabel: existingPointTypeLabel(point),
+              existing: true,
+              editable: false,
+              draftIndex: null,
+              canMove: false,
+              canRemove: false,
+              canUpload: false,
+              photoPreviewUrl: null,
+              photoFileName: null,
+              positionPending: false,
+            };
+          }
+
+          const point = item.point;
+          const isExisting = point.existingId !== null;
+          const draftIndex = routePoints.findIndex((draft) => draft.key === point.key);
+          if (point.kind === "stop") stopNumber += 1;
+
+          return {
+            key: point.key,
+            kind: point.kind,
+            name: point.name,
+            stopNumber: point.kind === "stop" ? stopNumber : null,
+            typeLabel: routePointTypeLabel(point),
+            existing: isExisting,
+            editable: !isExisting,
+            draftIndex: draftIndex >= 0 ? draftIndex : null,
+            canMove: false,
+            canRemove: true,
+            canUpload: !isExisting && point.kind === "stop",
+            photoPreviewUrl: isExisting ? null : point.photo?.previewUrl ?? null,
+            photoFileName: isExisting ? null : point.photo?.file.name ?? null,
+            positionPending: false,
+          };
+        });
+      }
+
+      let stopNumber = 0;
+      const entries: RouteSequenceEntry[] = routeChangeBasePoints.map((point) => {
+        if (point.kind === "stop") stopNumber += 1;
+        return {
+          key: pointKey(point.kind, point.id),
+          kind: point.kind,
+          name: point.name,
+          stopNumber: point.kind === "stop" ? stopNumber : null,
+          typeLabel: existingPointTypeLabel(point),
+          existing: true,
+          editable: false,
+          draftIndex: null,
+          canMove: false,
+          canRemove: false,
+          canUpload: false,
+          photoPreviewUrl: null,
+          photoFileName: null,
+          positionPending: false,
+        };
+      });
+
+      for (const point of routePoints) {
+        const isExisting = point.existingId !== null;
+        const draftIndex = routePoints.findIndex((draft) => draft.key === point.key);
+        entries.push({
+          key: point.key,
+          kind: point.kind,
+          name: point.name,
+          stopNumber: null,
+          typeLabel: routePointTypeLabel(point),
+          existing: isExisting,
+          editable: !isExisting,
+          draftIndex: draftIndex >= 0 ? draftIndex : null,
+          canMove: false,
+          canRemove: true,
+          canUpload: !isExisting && point.kind === "stop",
+          photoPreviewUrl: isExisting ? null : point.photo?.previewUrl ?? null,
+          photoFileName: isExisting ? null : point.photo?.file.name ?? null,
+          positionPending: true,
+        });
+      }
+
+      return entries;
+    }
+
+    return routePoints.map((point, index): RouteSequenceEntry => ({
+      key: point.key,
+      kind: point.kind,
+      name: point.name,
+      stopNumber: getPointStopNumber(routePoints, index),
+      typeLabel: routePointTypeLabel(point),
+      existing: point.existingId !== null,
+      editable: point.existingId === null,
+      draftIndex: index,
+      canMove: true,
+      canRemove: true,
+      canUpload: point.existingId === null && point.kind === "stop",
+      photoPreviewUrl: point.existingId === null ? point.photo?.previewUrl ?? null : null,
+      photoFileName: point.existingId === null ? point.photo?.file.name ?? null : null,
+      positionPending: false,
+    }));
+  }, [isRouteChange, routeChangePlacement, routeChangeBasePoints, routePoints]);
+
+  const routeMarkers = useMemo<ContributionMapMarker[]>(
+    () => routeSequenceEntries.map((entry) => {
+      const point = entry.draftIndex !== null
+        ? routePoints[entry.draftIndex]
+        : existingByKey.get(entry.key);
+
+      return {
+        key: entry.key,
+        kind: entry.kind,
+        name: entry.name,
+        latitude: point?.latitude ?? 0,
+        longitude: point?.longitude ?? 0,
+        stopNumber: entry.stopNumber,
+        draftIndex: entry.draftIndex,
+        draggable: entry.draftIndex !== null && !entry.existing,
+      };
+    }),
+    [routeSequenceEntries, routePoints, existingByKey]
+  );
+
+  const routeLinePositions = useMemo<Coordinates[]>(() => {
+    if (isRouteChange && routeChangePlacement?.status === "ready") {
+      return getCoordinates(routeChangePlacement.points);
+    }
+    if (isRouteChange) return getCoordinates(routeChangeBasePoints);
+    if (formAction === "route") return getCoordinates(routePoints);
+    return [];
+  }, [isRouteChange, routeChangePlacement, routeChangeBasePoints, formAction, routePoints]);
+
+  const mapCandidates = formAction === "route" ? candidates : [];
+  const mapConnectedKeys = formAction === "route" ? connectedKeys : new Set<string>();
+  const mapPreviewLines = formAction === "route" ? previewLines : [];
+
+  // Location and map interaction
+  const locate = useCallback((pinOnSuccess = false) => {
     if (!navigator.geolocation) {
       setLocationMessage("Your browser does not support location access.");
       return;
     }
 
     setLocationMessage("Finding your location...");
-
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const next: Coordinates = [
           position.coords.latitude,
           position.coords.longitude,
         ];
-
         setCurrentPosition(next);
         setFocus(null);
         setLocationMessage("");
 
-        if (!autoPinned.current) {
+        if (pinOnSuccess && !autoPinned.current) {
           autoPinned.current = true;
-          setPin((existing) => existing ?? next);
+          setPin(next);
+          setSelectedPointKey("terminal-pin");
         }
       },
       (error) => {
@@ -753,44 +710,54 @@ export default function Contribution({
     );
   }, []);
 
-  // ---------- form helpers ----------
-
-  const clearPhotos = () => {
-    setPhotos((previous) => {
-      previous.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
-      return [];
+  const revokePointPhotos = (points: RoutePoint[]) => {
+    points.forEach((point) => {
+      if (point.photo) URL.revokeObjectURL(point.photo.previewUrl);
     });
   };
 
-  const resetForm = () => {
-    routePoints.forEach((point) => {
-      if (point.photo) URL.revokeObjectURL(point.photo.previewUrl);
-    });
+  const clearDraft = (nextAction: FormAction) => {
+    revokePointPhotos(routePoints);
+    photos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+    catalogRequestId.current += 1;
 
-    setKind("terminal");
+    setFormAction(nextAction);
     setName("");
     setDescription("");
-    setStopType("road_stop");
+    setRouteNameEdited(false);
     setPin(null);
     setRoutePoints([]);
+    setPhotos([]);
     setVehicleTypeId("");
     setVariantId("");
+    setSelectedExistingRouteId("");
+    setExistingPoints([]);
+    setExistingRoutes([]);
+    setCatalogLoading(false);
+    setExistingError("");
     setExistingQuery("");
     setInspectKey(null);
-    setSelectedStopReferenceKey(null);
+    setSelectedPointKey(null);
     setSelectedPreviewRouteId(null);
+    setCurrentPosition(null);
     setFocus(null);
+    setLocationMessage("");
     setShowValidation(false);
     setFormError("");
     autoPinned.current = false;
-    clearPhotos();
+  };
+
+  const resetForm = () => clearDraft("terminal");
+
+  const switchFormAction = (action: FormAction) => {
+    if (submitting || action === formAction) return;
+    clearDraft(action);
   };
 
   const openModal = () => {
     resetForm();
     setShowModal(true);
-    locate();
-    void loadCatalog();
+    locate(true);
   };
 
   const closeModal = () => {
@@ -802,90 +769,168 @@ export default function Contribution({
   const handleVehicleTypeChange = (value: string) => {
     setVehicleTypeId(value);
     setVariantId("");
-    setInspectKey(null);
+    setSelectedExistingRouteId("");
+    setName("");
+    setRouteNameEdited(false);
     setExistingQuery("");
-    setSelectedStopReferenceKey(null);
+    setInspectKey(null);
+    setSelectedPointKey(null);
     setSelectedPreviewRouteId(null);
+    revokePointPhotos(routePoints);
+    setRoutePoints([]);
 
-    setRoutePoints((previous) => {
-      const kept = previous.filter(
-        (point) =>
-          point.existingId === null ||
-          existingByKey.get(pointKey(point.kind, point.existingId))
-            ?.transportTypeId === Number(value)
-      );
-
-      previous
-        .filter((point) => !kept.includes(point))
-        .forEach((point) => {
-          if (point.photo) URL.revokeObjectURL(point.photo.previewUrl);
-        });
-
-      return kept;
-    });
-  };
-
-  const handleMapPick = (position: Coordinates) => {
-    if (kind !== "route") {
-      setPin(position);
+    if (!value) {
+      catalogRequestId.current += 1;
+      setExistingPoints([]);
+      setExistingRoutes([]);
+      setExistingError("");
+      setCatalogLoading(false);
       return;
     }
 
-    setRoutePoints((previous) => {
-      if (previous.length >= MAX_ROUTE_POINTS) return previous;
+    if (formAction === "terminal") {
+      catalogRequestId.current += 1;
+      setExistingPoints([]);
+      setExistingRoutes([]);
+      setCatalogLoading(false);
+      return;
+    }
 
-      return [
-        ...previous,
-        {
-          key: crypto.randomUUID(),
-          kind: previous.length === 0 ? "terminal" : "stop",
-          existingId: null,
-          name: "",
-          description: "",
-          stopType: "road_stop",
-          latitude: position[0],
-          longitude: position[1],
-          photo: null,
-        },
-      ];
-    });
+    void loadCatalogForVehicle(Number(value));
   };
 
-  const addExistingKeys = (keys: string[]) => {
+  const handleExistingRouteChange = (value: string) => {
+    revokePointPhotos(routePoints);
+    setSelectedExistingRouteId(value);
+    setRoutePoints([]);
+    setName("");
+    setRouteNameEdited(false);
+    setExistingQuery("");
+    setInspectKey(null);
+    setSelectedPointKey(null);
     setFormError("");
+    setShowValidation(false);
+    setSelectedPreviewRouteId(null);
 
-    setRoutePoints((previous) => {
-      const used = new Set(
-        previous
-          .filter((p) => p.existingId !== null)
-          .map((p) => pointKey(p.kind, p.existingId as number))
+    if (!value) {
+      setVariantId("");
+      setFocus(null);
+      return;
+    }
+
+    const route = existingRoutes.find((item) => String(item.id) === value);
+    if (!route) {
+      setVariantId("");
+      setFocus(null);
+      setFormError(
+        "The selected route is no longer available. Reload the vehicle catalog and try again."
       );
+      return;
+    }
 
-      const next = [...previous];
+    setVariantId(String(route.variantId));
+    const firstPoint = existingByKey.get(route.keys[0] ?? "");
+    if (firstPoint) {
+      setFocus([firstPoint.latitude, firstPoint.longitude]);
+    } else {
+      setFocus(null);
+      setFormError("The selected route's starting location could not be loaded.");
+    }
+  };
 
-      for (const key of keys) {
-        const point = existingByKey.get(key);
+  const handleMapPick = (position: Coordinates) => {
+    if (formAction === "terminal") {
+      setPin(position);
+      setSelectedPointKey("terminal-pin");
+      setFormError("");
+      return;
+    }
 
-        if (!point || used.has(key) || next.length >= MAX_ROUTE_POINTS) {
-          continue;
-        }
+    if (!vehicleTypeId || (formAction === "route" && !variantId)) {
+      setFormError("Choose a vehicle type and variant before adding route locations.");
+      return;
+    }
 
-        if (
-          isRail &&
-          !(point.kind === "stop" && point.stopType === "train_station")
-        ) {
-          continue;
-        }
+    if (isRouteChange) {
+      if (!selectedExistingRoute) {
+        setFormError("Select an approved route before adding locations.");
+        return;
+      }
+      if (catalogLoading || routeChangeBasePoints.length !== selectedExistingRoute.keys.length) {
+        setFormError("Wait for the complete approved route to load before adding a stop.");
+        return;
+      }
+      if (routeChangeBasePoints.length + routePoints.length >= MAX_PROPOSED_ROUTE_POINTS) {
+        setFormError("The proposed route cannot contain more than 100 locations.");
+        return;
+      }
+    } else if (routePoints.length >= MAX_ROUTE_POINTS) {
+      setFormError("A new route cannot contain more than 60 locations.");
+      return;
+    }
 
-        used.add(key);
-        next.push(toRoutePoint(point));
+    const pointKind: PointKind = isRail || isRouteChange
+      ? "stop"
+      : routePoints.length === 0
+        ? "terminal"
+        : "stop";
+
+    const point: RoutePoint = {
+      key: crypto.randomUUID(),
+      kind: pointKind,
+      existingId: null,
+      name: "",
+      description: "",
+      stopType: isRail ? "train_station" : "road_stop",
+      latitude: position[0],
+      longitude: position[1],
+      photo: null,
+    };
+
+    setRoutePoints((previous) => [...previous, point]);
+    setSelectedPointKey(point.key);
+    setFormError("");
+  };
+
+  // Add approved points to a new route. All selection state is derived
+  // before calling setters, avoiding side effects inside a state updater.
+  const addExistingKeys = (keys: string[]) => {
+    const next = [...routePoints];
+    const used = new Set(
+      next.flatMap((point) => point.existingId === null
+        ? []
+        : [pointKey(point.kind, point.existingId)])
+    );
+    let lastAdded: ExistingPoint | null = null;
+
+    for (const key of keys) {
+      const point = existingByKey.get(key);
+      if (!point || used.has(key)) continue;
+
+      if (next.length >= MAX_ROUTE_POINTS) {
+        setFormError("A new route cannot contain more than 60 locations.");
+        break;
       }
 
-      return next;
-    });
+      const valid = isRail
+        ? point.kind === "stop" && point.stopType === "train_station"
+        : next.length === 0
+          ? point.kind === "terminal"
+          : point.kind === "stop" && point.stopType === "road_stop";
 
-    const last = existingByKey.get(keys[keys.length - 1] ?? "");
-    if (last) setFocus([last.latitude, last.longitude]);
+      if (!valid) continue;
+
+      next.push(toRoutePoint(point));
+      used.add(key);
+      lastAdded = point;
+    }
+
+    if (next.length !== routePoints.length) setRoutePoints(next);
+
+    if (lastAdded) {
+      setFocus([lastAdded.latitude, lastAdded.longitude]);
+      setSelectedPointKey(pointKey(lastAdded.kind, lastAdded.id));
+    }
   };
 
   const addExistingPoint = (point: ExistingPoint) => {
@@ -895,242 +940,371 @@ export default function Contribution({
     setSelectedPreviewRouteId(null);
   };
 
-  const focusStopReference = (point: ExistingPoint) => {
-    setSelectedStopReferenceKey(pointKey(point.kind, point.id));
-    setSelectedPreviewRouteId(null);
+  const addRouteChangeExistingPoint = (point: ExistingPoint) => {
+    if (!selectedExistingRoute) {
+      setFormError("Select an approved route first.");
+      return;
+    }
+    if (point.kind !== "stop") {
+      setFormError("Only existing stops can be added through this workflow. Terminal relocation is handled separately.");
+      return;
+    }
+
+    const key = pointKey(point.kind, point.id);
+    if (routeChangeBaseKeys.has(key)) {
+      setFormError("This stop is already part of the selected route.");
+      return;
+    }
+    if (usedKeys.has(key)) {
+      setFormError("This stop has already been added to your proposal.");
+      return;
+    }
+    if (point.transportTypeId !== selectedExistingRoute.transportTypeId) {
+      setFormError("This stop is not compatible with the selected route's vehicle type.");
+      return;
+    }
+    if (selectedExistingRouteVariant?.fare_model === "matrix" && point.stopType !== "train_station") {
+      setFormError("This route can only use train stations.");
+      return;
+    }
+    if (selectedExistingRouteVariant?.fare_model === "distance" && point.stopType !== "road_stop") {
+      setFormError("This route can only use road stops.");
+      return;
+    }
+    if (routeChangeBasePoints.length + routePoints.length >= MAX_PROPOSED_ROUTE_POINTS) {
+      setFormError("The proposed route cannot contain more than 100 locations.");
+      return;
+    }
+
+    const routePoint = toRoutePoint(point);
+    setRoutePoints((previous) => [...previous, routePoint]);
+    setSelectedPointKey(routePoint.key);
     setFocus([point.latitude, point.longitude]);
+    setFormError("");
   };
 
-  const inspectExistingPoint = (key: string) => {
-    setInspectKey(key);
-    setSelectedPreviewRouteId(null);
-  };
-
-  const updateRoutePoint = (index: number, updates: Partial<RoutePoint>) => {
-    setRoutePoints((previous) =>
-      previous.map((point, i) => (i === index ? { ...point, ...updates } : point))
-    );
+  const updateRoutePoint = (key: string, updates: Partial<RoutePoint>) => {
+    setRoutePoints((previous) => previous.map((point) =>
+      point.key === key ? { ...point, ...updates } : point
+    ));
   };
 
   const moveRoutePoint = (index: number, direction: -1 | 1) => {
+    if (isRouteChange) return;
     setRoutePoints((previous) => {
       const target = index + direction;
-
       if (target < 0 || target >= previous.length) return previous;
-
       const next = [...previous];
       [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
   };
 
-  const removeRoutePoint = (index: number) => {
-    const target = routePoints[index];
+  const removeRoutePoint = (key: string) => {
+    const target = routePoints.find((point) => point.key === key);
     if (target?.photo) URL.revokeObjectURL(target.photo.previewUrl);
-
-    setRoutePoints((previous) => previous.filter((_, i) => i !== index));
+    if (selectedPointKey === key) setSelectedPointKey(null);
+    setRoutePoints((previous) => previous.filter((point) => point.key !== key));
   };
 
-  // ---------- photos ----------
-
-  const handlePhotoChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
-
+  const addTerminalPhotos = (files: File[]) => {
     const accepted: PhotoItem[] = [];
-
     for (const file of files) {
       const problem = validateImage(file);
-
       if (problem) {
         setFormError(problem);
         continue;
       }
-
       accepted.push({ file, previewUrl: URL.createObjectURL(file) });
     }
 
-    setPhotos((previous) => {
-      const room = MAX_PHOTOS - previous.length;
-      accepted.slice(room).forEach((p) => URL.revokeObjectURL(p.previewUrl));
-      return [...previous, ...accepted.slice(0, room)];
-    });
+    const room = Math.max(0, MAX_PHOTOS - photos.length);
+    accepted.slice(room).forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+    if (room > 0) setPhotos((previous) => [...previous, ...accepted.slice(0, room)]);
   };
 
-  const removePhoto = (index: number) => {
-    setPhotos((previous) => {
-      URL.revokeObjectURL(previous[index]?.previewUrl ?? "");
-      return previous.filter((_, i) => i !== index);
-    });
+  const removeTerminalPhoto = (index: number) => {
+    const target = photos[index];
+    if (target) URL.revokeObjectURL(target.previewUrl);
+    setPhotos((previous) => previous.filter((_, photoIndex) => photoIndex !== index));
   };
 
-  const choosePointPhoto = (pointKeyValue: string) => {
-    pointPhotoTarget.current = pointKeyValue;
-    pointPhotoInputRef.current?.click();
-  };
-
-  const handlePointPhotoChange = (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-
-    const target = pointPhotoTarget.current;
-    if (!file || !target) return;
-
+  const addPointPhoto = (key: string, file: File) => {
     const problem = validateImage(file);
-
     if (problem) {
       setFormError(problem);
       return;
     }
+    if (!routePoints.some((point) => point.key === key)) return;
 
-    const previewUrl = URL.createObjectURL(file);
-
-    setRoutePoints((previous) =>
-      previous.map((point) => {
-        if (point.key !== target) return point;
-
-        if (point.photo) URL.revokeObjectURL(point.photo.previewUrl);
-
-        return { ...point, photo: { file, previewUrl } };
-      })
-    );
+    const previous = routePoints.find((point) => point.key === key)?.photo;
+    if (previous) URL.revokeObjectURL(previous.previewUrl);
+    updateRoutePoint(key, {
+      photo: { file, previewUrl: URL.createObjectURL(file) },
+    });
   };
 
-  const removePointPhoto = (pointKeyValue: string) => {
-    setRoutePoints((previous) =>
-      previous.map((point) => {
-        if (point.key !== pointKeyValue || !point.photo) return point;
-
-        URL.revokeObjectURL(point.photo.previewUrl);
-        return { ...point, photo: null };
-      })
-    );
+  const removePointPhoto = (key: string) => {
+    const previous = routePoints.find((point) => point.key === key)?.photo;
+    if (previous) URL.revokeObjectURL(previous.previewUrl);
+    updateRoutePoint(key, { photo: null });
   };
 
-  // ---------- validation + submit ----------
-
-  const validate = (): string | null => {
+  // Validation
+  const validateNormalContribution = (): string | null => {
     if (!vehicleTypeId) return "Choose the type of vehicle.";
-
     if (!name.trim()) {
-      return kind === "route"
-        ? "Give the route a name."
-        : "Give this place a name.";
+      return kind === "route" ? "Give the route a name." : "Give this terminal a name.";
     }
 
-    if (kind !== "route") {
-      return pin ? null : "Tap the map to place your pin.";
+    if (kind === "terminal") return pin ? null : "Tap the map to place the terminal pin.";
+    if (!variantId) return "Choose the vehicle variant.";
+    if (routePoints.length < 2) return "Add at least two route locations.";
+    if (routePoints.some((point) => point.existingId === null && !point.name.trim())) {
+      return "Every new route location needs a name.";
     }
-
-    if (!variantId) return "Choose the variant of the vehicle.";
-
-    if (routePoints.length < 2) {
-      return "Add at least two points (start and end).";
+    if (isRail && routePoints.some((point) =>
+      point.kind !== "stop" || point.stopType !== "train_station"
+    )) {
+      return "Rail routes can only use train stations.";
     }
-
-    if (routePoints.some((p) => p.existingId === null && !p.name.trim())) {
-      return "Every new point needs a name.";
+    if (!isRail) {
+      if (routePoints[0]?.kind !== "terminal") {
+        return "A distance-based route must begin with a terminal.";
+      }
+      if (routePoints.slice(1).some((point) =>
+        point.kind !== "stop" || point.stopType !== "road_stop"
+      )) {
+        return "After its starting terminal, a distance-based route must contain road stops.";
+      }
     }
-
-    if (
-      isRail &&
-      routePoints.some(
-        (p) =>
-          p.existingId !== null &&
-          !(p.kind === "stop" && p.stopType === "train_station")
-      )
-    ) {
-      return "Rail routes can only use train stations. Remove the other points.";
-    }
-
     return null;
   };
 
-  const buildInput = (): ContributionInput | null => {
-    if (kind !== "route") {
-      if (!pin) return null;
+  const validateRouteChangeProposal = (): string | null => {
+    if (!vehicleTypeId) return "Choose the vehicle type first.";
+    if (!selectedExistingRoute) return "Choose an approved route to modify.";
+    if (routeChangeBasePoints.length !== selectedExistingRoute.keys.length) {
+      return "The selected route could not be loaded completely. Reload the vehicle catalog and try again.";
+    }
+    if (!selectedExistingRouteVariant) return "The selected route's variant is unavailable.";
+    if (routePoints.length < 1) return "Add at least one location to the proposal.";
+    if (routeChangeBasePoints.length + routePoints.length > MAX_PROPOSED_ROUTE_POINTS) {
+      return "A proposed route cannot contain more than 100 locations.";
+    }
+    if (routePoints.some((point) => point.existingId === null && !point.name.trim())) {
+      return "Every new stop needs a name.";
+    }
+    if (routeChangePlacement?.status !== "ready") {
+      return routeChangePlacement?.message ?? "The automatic route position could not be determined.";
+    }
+    if (name.trim().length > 180) return "The proposed route name cannot exceed 180 characters.";
 
+    const seen = new Set<string>();
+    for (const point of routePoints) {
+      if (point.kind !== "stop") {
+        return "Route modifications can add stops only. Use the terminal relocation workflow when it becomes available.";
+      }
+      if (point.existingId === null) {
+        if (selectedExistingRouteVariant.fare_model === "matrix" && point.stopType !== "train_station") {
+          return "This route can only use new train stations.";
+        }
+        if (selectedExistingRouteVariant.fare_model === "distance" && point.stopType !== "road_stop") {
+          return "This route can only use new road stops.";
+        }
+        continue;
+      }
+
+      const key = pointKey(point.kind, point.existingId);
+      if (routeChangeBaseKeys.has(key)) return "A stop already in the route cannot be added again.";
+      if (seen.has(key)) return "The same existing stop cannot be added more than once.";
+      seen.add(key);
+
+      const existing = existingByKey.get(key);
+      if (!existing) return "One of the selected stops is unavailable. Remove it and select another.";
+      if (existing.transportTypeId !== selectedExistingRoute.transportTypeId) {
+        return "An existing stop is incompatible with the selected route.";
+      }
+      if (selectedExistingRouteVariant.fare_model === "matrix" && existing.stopType !== "train_station") {
+        return "This route can only use train stations.";
+      }
+      if (selectedExistingRouteVariant.fare_model === "distance" && existing.stopType !== "road_stop") {
+        return "This route can only use road stops.";
+      }
+    }
+    return null;
+  };
+
+  const validate = () => isRouteChange
+    ? validateRouteChangeProposal()
+    : validateNormalContribution();
+
+  // Submission payloads
+  const buildInput = (): ContributionInput | null => {
+    if (kind === "terminal") {
+      if (!pin) return null;
       return {
-        kind,
+        kind: "terminal",
         transportTypeId: Number(vehicleTypeId),
-        name,
-        description,
-        stopType,
+        name: name.trim(),
+        description: description.trim(),
+        stopType: "road_stop",
         latitude: pin[0],
         longitude: pin[1],
       };
     }
 
-    const points: PointInput[] = routePoints.map((point) =>
-      point.existingId !== null
-        ? {
-            kind: point.kind,
-            existingId: point.existingId,
-            name: point.name,
-            description: "",
-            stopType: point.stopType,
-            latitude: point.latitude,
-            longitude: point.longitude,
-          }
-        : {
-            kind: isRail ? "stop" : point.kind,
-            existingId: null,
-            name: point.name,
-            description: point.description,
-            stopType: isRail ? "train_station" : "road_stop",
-            latitude: point.latitude,
-            longitude: point.longitude,
-          }
-    );
+    const points: PointInput[] = routePoints.map((point) => ({
+      kind: point.kind,
+      existingId: point.existingId,
+      name: point.name.trim(),
+      description: point.existingId !== null ? "" : point.description.trim(),
+      stopType: point.stopType,
+      latitude: point.latitude,
+      longitude: point.longitude,
+    }));
 
-    return { kind: "route", name, variantId: Number(variantId), points };
+    return {
+      kind: "route",
+      name: name.trim(),
+      variantId: Number(variantId),
+      points,
+    };
+  };
+
+  const buildRouteChangePoint = (point: RoutePoint): RouteChangePointInput => {
+    if (point.existingId !== null) {
+      return { kind: point.kind, existingId: point.existingId };
+    }
+    if (point.kind === "terminal") {
+      return {
+        kind: "terminal",
+        existingId: null,
+        name: point.name.trim(),
+        latitude: point.latitude,
+        longitude: point.longitude,
+      };
+    }
+    return {
+      kind: "stop",
+      existingId: null,
+      name: point.name.trim(),
+      description: point.description.trim(),
+      stopType: point.stopType,
+      latitude: point.latitude,
+      longitude: point.longitude,
+    };
+  };
+
+  const buildRouteChangeInput = (): RouteChangeProposalInput | null => {
+    if (!selectedExistingRoute || routeChangePlacement?.status !== "ready") return null;
+
+    const points: RouteChangePointInput[] = routeChangePlacement.points.map((item) => {
+      if (item.source === "base") {
+        return { kind: item.point.kind, existingId: item.point.id };
+      }
+      return buildRouteChangePoint(item.point);
+    });
+
+    return {
+      routeId: selectedExistingRoute.id,
+      proposalType: routeChangePlacement.proposalType,
+      proposedName:
+        routeChangePlacement.proposalType === "extend_route" && name.trim()
+          ? name.trim()
+          : undefined,
+      points,
+    };
+  };
+
+  const uploadRoutePointImages = async (
+    resultPoints: { kind: PointKind; id: number }[],
+    files: (File | null)[]
+  ) => {
+    let failures = 0;
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const saved = resultPoints[index];
+      if (!file || !saved) continue;
+      if (await attachMapImage(saved.kind, saved.id, file)) failures += 1;
+    }
+    return failures;
+  };
+
+  const uploadRouteProposalImages = async (
+    resultPoints: { kind: PointKind; id: number; isNewPoint: boolean }[],
+    placementPoints: (AutomaticBasePoint | AutomaticAdditionPoint)[]
+  ) => {
+    let failures = 0;
+    for (let index = 0; index < placementPoints.length; index += 1) {
+      const item = placementPoints[index];
+      const saved = resultPoints[index];
+      if (!item || item.source !== "addition" || !saved) continue;
+
+      const point = item.point;
+      if (point.existingId !== null || !point.photo || !saved.isNewPoint) continue;
+      if (await attachMapImage(saved.kind, saved.id, point.photo.file)) failures += 1;
+    }
+    return failures;
   };
 
   const handleSubmit = async () => {
+    if (submitting) return;
     setShowValidation(true);
-
     const problem = validate();
-
     if (problem) {
       setFormError(problem);
       return;
     }
 
-    const input = buildInput();
-    if (!input) return;
-
-    const pointFiles = routePoints.map((point) => point.photo?.file ?? null);
-    const placeFiles = photos.map((photo) => photo.file);
-
     setFormError("");
     setSubmitting(true);
 
     try {
-      const result = await submitContribution(input);
+      if (isRouteChange) {
+        const placement = routeChangePlacement;
+        if (!placement || placement.status !== "ready") {
+          throw new Error("The automatic route sequence is not ready.");
+        }
+        const proposalInput = buildRouteChangeInput();
+        if (!proposalInput) {
+          throw new Error("Unable to construct the proposed route sequence.");
+        }
 
+        const result = await submitRouteChangeProposal(proposalInput);
+        const photoFailures = await uploadRouteProposalImages(
+          result.points,
+          placement.points as (AutomaticBasePoint | AutomaticAdditionPoint)[]
+        );
+
+        setShowModal(false);
+        resetForm();
+        void loadMine();
+        setNotice(
+          photoFailures > 0
+            ? `Route-change proposal #${result.proposalId} submitted, but ${photoFailures} photo(s) could not be uploaded.`
+            : `Route-change proposal #${result.proposalId} submitted for admin review. The approved route remains unchanged until approval.`
+        );
+        return;
+      }
+
+      const input = buildInput();
+      if (!input) {
+        throw new Error("Unable to construct the contribution. Check the selected location.");
+      }
+
+      const pointFiles = routePoints.map((point) => point.photo?.file ?? null);
+      const terminalFiles = photos.map((photo) => photo.file);
+      const result = await submitContribution(input);
       let photoFailures = 0;
 
       if (input.kind === "route") {
-        for (let i = 0; i < pointFiles.length; i += 1) {
-          const file = pointFiles[i];
-          const saved = result.points[i];
-
-          if (!file || !saved) continue;
-
-          const error = await attachMapImage(saved.kind, saved.id, file);
-          if (error) photoFailures += 1;
-        }
+        photoFailures += await uploadRoutePointImages(result.points, pointFiles);
       } else if (result.points[0]) {
-        for (const file of placeFiles) {
-          const error = await attachMapImage(
-            input.kind,
-            result.points[0].id,
-            file
-          );
-
-          if (error) photoFailures += 1;
+        for (const file of terminalFiles) {
+          if (await attachMapImage("terminal", result.points[0].id, file)) {
+            photoFailures += 1;
+          }
         }
       }
 
@@ -1149,45 +1323,30 @@ export default function Contribution({
             : "Submitted! An admin will review it before it appears on the map."
       );
     } catch (error: unknown) {
-      setFormError(
-        error instanceof Error ? error.message : "Unable to submit. Try again."
-      );
+      setFormError(error instanceof Error ? error.message : "Unable to submit. Try again.");
     } finally {
       setSubmitting(false);
     }
   };
 
-  // ---------- navigation ----------
-
+  // Navigation and display data
   const handleNavigation = (label: string) => {
     if (label === "Recents") {
       window.location.href = "/home";
-      return;
-    }
-
-    if (label === "Saved") {
+    } else if (label === "Saved") {
       window.location.href = "/saved";
-      return;
-    }
-
-    if (label === "Community") {
+    } else if (label === "Community") {
       window.location.href = "/community";
-      return;
     }
   };
 
-  const fieldClass = (hasError: boolean) =>
-    `h-10 w-full rounded-lg border px-3 text-sm outline-none focus:ring-1 ${
-      hasError
-        ? "border-red-500 focus:border-red-500 focus:ring-red-500"
-        : "border-gray-300 focus:border-[#12395A] focus:ring-[#12395A]"
-    }`;
-
-  const showPhotos = kind !== "route";
+  const terminalPhotoPreviews: PhotoPreview[] = photos.map((photo) => ({
+    previewUrl: photo.previewUrl,
+    fileName: photo.file.name,
+  }));
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#f7f7f7]">
-      {/* Shared sidebar */}
       <MapSidebar
         logo={
           <img
@@ -1197,14 +1356,11 @@ export default function Contribution({
           />
         }
         logoTitle="Home"
-        onLogoClick={() => {
-          window.location.href = "/home";
-        }}
+        onLogoClick={() => { window.location.href = "/home"; }}
         items={navItems}
         onItemClick={handleNavigation}
       />
 
-      {/* Shared header */}
       <MapHeader>
         <div className="flex w-[calc(100vw-330px)] min-h-[80px] items-start justify-between gap-6">
           <div className="flex min-w-0 flex-col justify-center">
@@ -1212,25 +1368,18 @@ export default function Contribution({
               Your Contributions
             </h1>
             <p className="mt-1 max-w-[620px] text-[14px] text-gray-500">
-              Add terminals, stops and routes. An admin reviews each one before
-              it goes on the map.
+              Add terminals and routes, or propose changes to an existing approved route.
             </p>
           </div>
 
           <div className="relative flex h-[55px] shrink-0 items-center gap-[20px]">
             <button
               type="button"
-              onClick={() => {
-                console.log("Notifications clicked", { currentUserId });
-              }}
+              onClick={() => setNotice("Notifications are not available here yet.")}
               title="Notifications"
               className="group flex h-[45px] w-[45px] items-center justify-center rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.15)] transition-all duration-200 hover:scale-105 hover:bg-gray-100 hover:shadow-[0_4px_12px_rgba(0,0,0,0.22)]"
             >
-              <Bell
-                size={20}
-                strokeWidth={2}
-                className="transition-transform duration-200 group-hover:rotate-6"
-              />
+              <Bell size={20} strokeWidth={2} className="transition-transform duration-200 group-hover:rotate-6" />
             </button>
 
             <button
@@ -1259,7 +1408,6 @@ export default function Contribution({
                 >
                   Account
                 </button>
-
                 <button
                   type="button"
                   onClick={() => {
@@ -1277,14 +1425,8 @@ export default function Contribution({
         </div>
       </MapHeader>
 
-      {/* ==================================================
-          MY SUBMISSIONS
-          ================================================== */}
-
       <section className="absolute inset-0 z-0 ml-[220px] overflow-y-auto pt-[10px] sm:ml-[230px] md:ml-[170px] lg:ml-[250px]">
         <div className="mx-auto w-full max-w-[900px] px-8 pb-12 pt-[105px]">
-          <div className="h-[23px]" />
-
           <button
             type="button"
             onClick={openModal}
@@ -1293,1133 +1435,123 @@ export default function Contribution({
             <div className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full bg-[#12395A] text-white transition-transform duration-200 group-hover:scale-105">
               <Plus size={21} strokeWidth={2.2} />
             </div>
-
             <div>
-              <p className="text-[15px] font-semibold text-gray-900">
-                Add a contribution
-              </p>
+              <p className="text-[15px] font-semibold text-gray-900">Add a contribution</p>
               <p className="mt-0.5 text-[13px] text-gray-500">
-                Pin a terminal, a stop, or build a route from existing and new
-                points
+                Add a terminal, create a new route, or propose changes to an existing route.
               </p>
             </div>
           </button>
 
-          <div className="mt-6 flex flex-col gap-3">
-            {mineLoading && (
-              <p role="status" className="text-sm text-gray-500">
-                Loading your contributions...
-              </p>
-            )}
-
-            {mineError && (
-              <p role="alert" className="text-sm text-red-600">
-                {mineError}
-              </p>
-            )}
-
-            {!mineLoading && !mineError && mine.length === 0 && (
-              <div className="flex min-h-[330px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-6 text-center shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
-                <div className="flex h-[58px] w-[58px] items-center justify-center rounded-full bg-[#f1f3f5]">
-                  <Car size={27} strokeWidth={1.8} className="text-gray-400" />
-                </div>
-
-                <h2 className="mt-5 text-[17px] font-semibold text-gray-800">
-                  Nothing to see here yet.
-                </h2>
-
-                <p className="mt-2 max-w-[380px] text-[13px] leading-[1.6] text-gray-500">
-                  Your submitted contributions and their review statuses will
-                  appear here.
-                </p>
-              </div>
-            )}
-
-            {mine.map((item) => (
-              <article
-                key={item.key}
-                className="rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-[0_2px_8px_rgba(0,0,0,0.06)]"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-[11px] font-semibold text-gray-700">
-                      {kindLabel[item.kind]}
-                    </span>
-
-                    <p className="text-xs text-gray-500">
-                      Submitted {formatDate(item.createdAt)}
-                    </p>
-                  </div>
-
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      item.status === "pending"
-                        ? "bg-amber-100 text-amber-800"
-                        : item.status === "approved"
-                          ? "bg-green-100 text-green-800"
-                          : "bg-red-100 text-red-800"
-                    }`}
-                  >
-                    {item.status === "pending"
-                      ? "Pending review"
-                      : item.status === "approved"
-                        ? "Approved"
-                        : "Rejected"}
-                  </span>
-                </div>
-
-                <p className="mt-2 break-words text-sm font-semibold text-gray-900">
-                  {item.name}
-                </p>
-
-                {item.status === "pending" && (
-                  <p className="mt-1 text-xs text-gray-500">
-                    Only you can see this until an admin approves it.
-                  </p>
-                )}
-
-                {item.status === "rejected" && item.note && (
-                  <p className="mt-2 text-sm text-red-700">
-                    Admin feedback: {item.note}
-                  </p>
-                )}
-              </article>
-            ))}
-          </div>
+          <ContributionHistory
+            contributions={mine}
+            loading={mineLoading}
+            error={mineError}
+          />
         </div>
       </section>
 
-      {/* ==================================================
-          ADD CONTRIBUTION MODAL
-          ================================================== */}
-
       {showModal && (
-        <div
-          className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/45 px-4 py-6"
-          onClick={closeModal}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="add-contribution-title"
-            className="max-h-[92vh] w-full max-w-[680px] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl sm:p-8"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="mb-5 flex items-start justify-between gap-4">
-              <div>
-                <h2
-                  id="add-contribution-title"
-                  className="text-xl font-semibold text-gray-900"
-                >
-                  Add a contribution
-                </h2>
-                <p className="mt-1 text-sm text-gray-500">
-                  It stays hidden from everyone until an admin approves it.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                aria-label="Close"
-                onClick={closeModal}
-                className="rounded-full px-2 py-1 text-xl leading-none text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
-              >
-                ×
-              </button>
-            </div>
-
-            {formError && (
-              <p
-                role="alert"
-                className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-              >
-                {formError}
-              </p>
-            )}
-
-            <div className="space-y-5">
-              {/* What are you adding? */}
-              <div>
-                <p className="mb-1.5 text-sm font-medium text-gray-700">
-                  What are you adding?
-                </p>
-
-                <div className="grid grid-cols-3 gap-2">
-                  {kindOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => {
-                        setKind(option.value);
-                        setFormError("");
-                      }}
-                      className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
-                        kind === option.value
-                          ? "border-[#12395A] bg-[#12395A] text-white"
-                          : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-                      }`}
-                    >
-                      <span className="block text-sm font-semibold">
-                        {option.label}
-                      </span>
-
-                      <span
-                        className={`mt-0.5 block text-[11px] leading-snug ${
-                          kind === option.value
-                            ? "text-white/80"
-                            : "text-gray-500"
-                        }`}
-                      >
-                        {option.hint}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Vehicle + variant */}
-              <div
-                className={`grid grid-cols-1 gap-3 ${
-                  kind === "route" ? "sm:grid-cols-2" : ""
-                }`}
-              >
-                <div>
-                  <label
-                    htmlFor="vehicle-type"
-                    className="mb-1.5 block text-sm font-medium text-gray-700"
-                  >
-                    Type of vehicle <span className="text-red-500">*</span>
-                  </label>
-
-                  <select
-                    id="vehicle-type"
-                    value={vehicleTypeId}
-                    onChange={(event) =>
-                      handleVehicleTypeChange(event.target.value)
-                    }
-                    className={fieldClass(showValidation && !vehicleTypeId)}
-                  >
-                    <option value="" disabled>
-                      Vehicle type
-                    </option>
-
-                    {types.map((type) => (
-                      <option key={type.id} value={type.id}>
-                        {type.name}
-                      </option>
-                    ))}
-                  </select>
-
-                  {optionsError && (
-                    <p className="mt-1 text-xs text-red-600">
-                      {optionsError}
-                    </p>
-                  )}
-
-                  {kind !== "route" && (
-                    <p className="mt-1 text-xs text-gray-500">
-                      Jeep and bus terminals and stops are kept separate.
-                    </p>
-                  )}
-                </div>
-
-                {kind === "route" && (
-                  <div>
-                    <label
-                      htmlFor="route-variant"
-                      className="mb-1.5 block text-sm font-medium text-gray-700"
-                    >
-                      Variant <span className="text-red-500">*</span>
-                    </label>
-
-                    <select
-                      id="route-variant"
-                      value={variantId}
-                      onChange={(event) => setVariantId(event.target.value)}
-                      disabled={!vehicleTypeId}
-                      className={`${fieldClass(
-                        showValidation && !variantId
-                      )} disabled:bg-gray-100`}
-                    >
-                      <option value="" disabled>
-                        {vehicleTypeId
-                          ? "Choose a variant"
-                          : "Pick a vehicle first"}
-                      </option>
-
-                      {typeVariants.map((variant) => (
-                        <option key={variant.id} value={variant.id}>
-                          {variant.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              {/* Name */}
-              <div>
-                <label
-                  htmlFor="contribution-name"
-                  className="mb-1.5 block text-sm font-medium text-gray-700"
-                >
-                  {kind === "route"
-                    ? "Route name"
-                    : kind === "terminal"
-                      ? "Terminal name"
-                      : "Stop name"}{" "}
-                  <span className="text-red-500">*</span>
-                </label>
-
-                <input
-                  id="contribution-name"
-                  value={name}
-                  maxLength={120}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder={
-                    kind === "route"
-                      ? "e.g. Novaliches – Quiapo"
-                      : "e.g. SM Fairview Terminal"
-                  }
-                  className={fieldClass(showValidation && !name.trim())}
-                />
-              </div>
-
-              {/* Stop details */}
-              {kind === "stop" && (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <label
-                      htmlFor="stop-type"
-                      className="mb-1.5 block text-sm font-medium text-gray-700"
-                    >
-                      Stop type
-                    </label>
-
-                    <select
-                      id="stop-type"
-                      value={stopType}
-                      onChange={(event) =>
-                        setStopType(event.target.value as StopKind)
-                      }
-                      className={fieldClass(false)}
-                    >
-                      <option value="road_stop">Bus / jeepney stop</option>
-                      <option value="train_station">Train station</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="stop-description"
-                      className="mb-1.5 block text-sm font-medium text-gray-700"
-                    >
-                      Landmark / description
-                    </label>
-
-                    <input
-                      id="stop-description"
-                      value={description}
-                      maxLength={500}
-                      onChange={(event) => setDescription(event.target.value)}
-                      placeholder="Optional"
-                      className={fieldClass(false)}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {kind === "stop" && (
-                <div>
-                  <label
-                    htmlFor="existing-stop-reference"
-                    className="mb-1.5 block text-sm font-medium text-gray-700"
-                  >
-                    Start from an existing terminal or stop
-                  </label>
-
-                  <input
-                    id="existing-stop-reference"
-                    aria-label="Search existing terminals and stops"
-                    value={existingQuery}
-                    disabled={!vehicleTypeId}
-                    onChange={(event) => setExistingQuery(event.target.value)}
-                    placeholder="Search by name..."
-                    className={`${fieldClass(false)} disabled:bg-gray-100`}
-                  />
-
-                  <div className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-lg border border-gray-200 bg-white p-1">
-                    {!vehicleTypeId ? (
-                      <p className="px-3 py-2 text-xs text-gray-500">
-                        Choose a vehicle type to find approved points.
-                      </p>
-                    ) : catalogLoading ? (
-                      <p role="status" className="px-3 py-2 text-xs text-gray-500">
-                        Loading approved terminals and stops...
-                      </p>
-                    ) : existingError ? (
-                      <p role="alert" className="px-3 py-2 text-xs text-red-600">
-                        {existingError}
-                      </p>
-                    ) : stopCandidates.length === 0 ? (
-                      <p className="px-3 py-2 text-xs text-gray-500">
-                        No approved terminals or stops for this vehicle type.
-                      </p>
-                    ) : matchingStopCandidates.length === 0 ? (
-                      <p className="px-3 py-2 text-xs text-gray-500">
-                        No approved points match “{existingQuery.trim()}”.
-                      </p>
-                    ) : (
-                      matchingStopCandidates.map((point) => {
-                        const key = pointKey(point.kind, point.id);
-                        const selected = key === selectedStopReferenceKey;
-
-                        return (
-                          <button
-                            key={key}
-                            type="button"
-                            onClick={() => focusStopReference(point)}
-                            className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-                              selected
-                                ? "bg-blue-50 text-[#12395A]"
-                                : "text-gray-700 hover:bg-gray-50"
-                            }`}
-                          >
-                            <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
-                              {existingPointTypeLabel(point)}
-                            </span>
-                            <span className="truncate">{point.name}</span>
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-
-                  <p className="mt-1 text-xs text-gray-500">
-                    Selecting a point shows its routes for reference. It will
-                    not move the new-stop pin.
-                  </p>
-                </div>
-              )}
-
-              {/* Route: pick existing terminals / stops */}
-              {kind === "route" && (
-                <div>
-                  <label
-                    htmlFor="existing-point"
-                    className="mb-1.5 block text-sm font-medium text-gray-700"
-                  >
-                    Start from or connect to an existing terminal / stop
-                  </label>
-
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1.4fr]">
-                    <input
-                      aria-label="Search existing terminals and stops"
-                      value={existingQuery}
-                      disabled={!vehicleTypeId}
-                      onChange={(event) => setExistingQuery(event.target.value)}
-                      placeholder="Search by name..."
-                      className={`${fieldClass(false)} disabled:bg-gray-100`}
-                    />
-
-                    <select
-                      id="existing-point"
-                      value=""
-                      disabled={!vehicleTypeId}
-                      onChange={(event) => {
-                        const picked = existingByKey.get(event.target.value);
-                        if (picked) addExistingPoint(picked);
-                      }}
-                      className={`${fieldClass(false)} disabled:bg-gray-100`}
-                    >
-                      <option value="">
-                        {!vehicleTypeId
-                          ? "Pick a vehicle type first"
-                          : candidates.length === 0
-                            ? "No approved points for this vehicle"
-                            : "Choose a terminal or stop..."}
-                      </option>
-
-                      {connectedList.length > 0 && lastExisting && (
-                        <optgroup label={`Connected to ${lastExisting.name}`}>
-                          {connectedList.map((point) => (
-                            <option
-                              key={pointKey(point.kind, point.id)}
-                              value={pointKey(point.kind, point.id)}
-                            >
-                              {existingLabel(point)}
-                            </option>
-                          ))}
-                        </optgroup>
-                      )}
-
-                      {otherTerminals.length > 0 && (
-                        <optgroup label="Terminals">
-                          {otherTerminals.map((point) => (
-                            <option
-                              key={pointKey(point.kind, point.id)}
-                              value={pointKey(point.kind, point.id)}
-                            >
-                              {existingLabel(point)}
-                            </option>
-                          ))}
-                        </optgroup>
-                      )}
-
-                      {otherStops.length > 0 && (
-                        <optgroup label="Stops and stations">
-                          {otherStops.map((point) => (
-                            <option
-                              key={pointKey(point.kind, point.id)}
-                              value={pointKey(point.kind, point.id)}
-                            >
-                              {existingLabel(point)}
-                            </option>
-                          ))}
-                        </optgroup>
-                      )}
-                    </select>
-                  </div>
-
-                  {existingError && (
-                    <p className="mt-1 text-xs text-red-600">{existingError}</p>
-                  )}
-
-                  <p className="mt-1 text-xs text-gray-500">
-                    {!vehicleTypeId
-                      ? "Choose the vehicle first. Only its own terminals and stops are listed."
-                      : "Picking a point adds it and shows the routes that already pass through it, so you can add the stops you rode past in one tap."}
-                  </p>
-                </div>
-              )}
-
-              {/* Map */}
-              <div>
-                <div className="mb-1.5 flex items-center justify-between gap-2">
-                  <label className="text-sm font-medium text-gray-700">
-                    {kind === "route"
-                      ? "Build the route in order"
-                      : "Pin the location"}{" "}
-                    <span className="text-red-500">*</span>
-                  </label>
-
-                  <button
-                    type="button"
-                    onClick={locate}
-                    className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    <LocateFixed size={13} />
-                    My location
-                  </button>
-                </div>
-
-                <div
-                  className={`isolate h-[300px] overflow-hidden rounded-xl border ${
-                    showValidation &&
-                    ((kind !== "route" && !pin) ||
-                      (kind === "route" && routePoints.length < 2))
-                      ? "border-red-500"
-                      : "border-gray-300"
-                  }`}
-                >
-                  <PinMap
-                    currentPosition={currentPosition}
-                    focus={focus}
-                    mode={kind}
-                    pin={pin}
-                    routePoints={routePoints}
-                    routeColor={routeColor}
-                    candidates={candidates}
-                    stopCandidates={stopCandidates}
-                    selectedStopReferenceKey={selectedStopReferenceKey}
-                    selectedPreviewRouteId={selectedPreviewRouteId}
-                    connectedKeys={connectedKeys}
-                    previewLines={
-                      kind === "stop" ? stopReferencePreviewLines : previewLines
-                    }
-                    onPick={handleMapPick}
-                    onPickExisting={addExistingPoint}
-                    onPickStopReference={focusStopReference}
-                    onMovePin={setPin}
-                    onMoveRoutePoint={(index, position) =>
-                      updateRoutePoint(index, {
-                        latitude: position[0],
-                        longitude: position[1],
-                      })
-                    }
-                  />
-                </div>
-
-                <p className="mt-1 text-xs text-gray-500">
-                  {locationMessage ||
-                    (kind === "route"
-                      ? "Tap a dot to use an existing terminal or stop. Missing one? Tap empty map to add a new stop or terminal; new points are reviewed too."
-                      : "The pin starts at your location. Tap the map or drag the pin to adjust it.")}
-                </p>
-
-                {kind !== "route" && pin && (
-                  <p className="mt-1 text-[11px] text-gray-500">
-                    {pin[0].toFixed(5)}, {pin[1].toFixed(5)}
-                  </p>
-                )}
-              </div>
-
-              {kind === "stop" && selectedStopReference && (
-                <div className="rounded-xl border border-orange-200 bg-orange-50/70 p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">
-                        {existingPointTypeLabel(selectedStopReference)}:{" "}
-                        {selectedStopReference.name}
-                      </p>
-
-                      <p className="mt-1 text-xs text-gray-600">
-                        {selectedType?.name ?? "Transport type unavailable"} ·{" "}
-                        {selectedStopReference.latitude.toFixed(5)},{" "}
-                        {selectedStopReference.longitude.toFixed(5)}
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      aria-label="Clear selected reference point"
-                      onClick={() => {
-                        setSelectedStopReferenceKey(null);
-                        setSelectedPreviewRouteId(null);
-                      }}
-                      className="rounded-full px-2 text-lg leading-none text-gray-500 hover:bg-white"
-                    >
-                      ×
-                    </button>
-                  </div>
-
-                  {stopReferenceRoutes.length === 0 ? (
-                    <p className="mt-2 text-xs text-gray-600">
-                      No approved routes currently serve this point.
-                    </p>
-                  ) : (
-                    <div className="mt-3 max-h-[280px] space-y-2 overflow-y-auto pr-1">
-                      {stopReferenceRoutes.map((route) => {
-                        const routeType = types.find(
-                          (type) => type.id === route.transportTypeId
-                        );
-
-                        return (
-                          <div
-                            key={route.id}
-                            className="rounded-lg border border-gray-200 bg-white p-2.5"
-                          >
-                            <div className="flex items-center gap-2">
-                              <span
-                                aria-hidden="true"
-                                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                style={{
-                                  backgroundColor: safeColor(routeType?.color),
-                                }}
-                              />
-
-                              <button
-                                type="button"
-                                aria-pressed={selectedPreviewRouteId === route.id}
-                                onClick={() =>
-                                  setSelectedPreviewRouteId(route.id)
-                                }
-                                className={`min-w-0 flex-1 truncate text-left text-sm font-semibold ${
-                                  selectedPreviewRouteId === route.id
-                                    ? "text-[#12395A] underline"
-                                    : "text-gray-900 hover:underline"
-                                }`}
-                              >
-                                {route.name}
-                              </button>
-                            </div>
-
-                            <p className="ml-[18px] mt-0.5 text-xs text-gray-500">
-                              {routeType?.name ?? "Transport type unavailable"}{" "}
-                              · {variantName(route.variantId)} ·{" "}
-                              {route.keys.length} points
-                            </p>
-
-                            <ol className="ml-[18px] mt-2 space-y-1">
-                              {route.keys.map((key, index) => {
-                                const point = existingByKey.get(key);
-                                if (!point) return null;
-
-                                return (
-                                  <li
-                                    key={key}
-                                    className={`flex items-center gap-2 rounded px-2 py-1 text-xs ${
-                                      key === selectedStopReferenceKey
-                                        ? "bg-orange-100 font-semibold text-orange-900"
-                                        : "text-gray-700"
-                                    }`}
-                                  >
-                                    <span className="w-5 shrink-0 text-right text-gray-400">
-                                      {index + 1}
-                                    </span>
-
-                                    <span className="truncate">
-                                      {existingPointTypeLabel(point)}:{" "}
-                                      {point.name}
-                                    </span>
-                                  </li>
-                                );
-                              })}
-                            </ol>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Route: details of the selected point */}
-              {kind === "route" && inspectPoint && (
-                <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">
-                        Routes through {existingLabel(inspectPoint)}
-                      </p>
-
-                      <p className="mt-0.5 text-xs text-gray-600">
-                        Tap &ldquo;Add through here&rdquo; on the stop where you
-                        got off. Every stop in between is added in order.
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      aria-label="Close route details"
-                      onClick={() => {
-                        setInspectKey(null);
-                        setSelectedPreviewRouteId(null);
-                      }}
-                      className="rounded-full px-2 text-lg leading-none text-gray-500 hover:bg-white"
-                    >
-                      ×
-                    </button>
-                  </div>
-
-                  {inspectRoutes.length === 0 ? (
-                    <p className="mt-2 text-xs text-gray-600">
-                      No approved route of this vehicle type passes through
-                      this point yet. Tap the map to add the next stop
-                      yourself.
-                    </p>
-                  ) : (
-                    <div className="mt-3 max-h-[260px] space-y-3 overflow-y-auto pr-1">
-                      {inspectRoutes.map((route) => {
-                        const anchorIndex = inspectKey
-                          ? route.keys.indexOf(inspectKey)
-                          : -1;
-
-                        const firstKey = route.keys[0];
-                        const lastKey = route.keys[route.keys.length - 1];
-
-                        const firstName =
-                          existingByKey.get(firstKey)?.name ?? "start";
-
-                        const lastName =
-                          existingByKey.get(lastKey)?.name ?? "end";
-
-                        return (
-                          <div
-                            key={route.id}
-                            className="rounded-lg border border-gray-200 bg-white p-2.5"
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <button
-                                type="button"
-                                aria-pressed={selectedPreviewRouteId === route.id}
-                                onClick={() =>
-                                  setSelectedPreviewRouteId(route.id)
-                                }
-                                className={`text-left text-sm font-semibold ${
-                                  selectedPreviewRouteId === route.id
-                                    ? "text-[#12395A] underline"
-                                    : "text-gray-900 hover:underline"
-                                }`}
-                              >
-                                {route.name}
-
-                                <span className="ml-2 text-xs font-normal text-gray-500">
-                                  {variantName(route.variantId)} ·{" "}
-                                  {route.keys.length} stops
-                                </span>
-                              </button>
-
-                              <div className="flex flex-wrap gap-1.5">
-                                {anchorIndex < route.keys.length - 1 &&
-                                  inspectKey && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        addExistingKeys(
-                                          segmentKeys(
-                                            route,
-                                            inspectKey,
-                                            lastKey
-                                          )
-                                        )
-                                      }
-                                      className="rounded-md border border-[#12395A] px-2 py-1 text-[11px] font-semibold text-[#12395A] hover:bg-[#12395A] hover:text-white"
-                                    >
-                                      Add all to {lastName}
-                                    </button>
-                                  )}
-
-                                {anchorIndex > 0 && inspectKey && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      addExistingKeys(
-                                        segmentKeys(
-                                          route,
-                                          inspectKey,
-                                          firstKey
-                                        )
-                                      )
-                                    }
-                                    className="rounded-md border border-[#12395A] px-2 py-1 text-[11px] font-semibold text-[#12395A] hover:bg-[#12395A] hover:text-white"
-                                  >
-                                    Add all to {firstName}
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-
-                            <ol className="mt-2 space-y-1">
-                              {route.keys.map((key, stopIndex) => {
-                                const stop = existingByKey.get(key);
-                                if (!stop) return null;
-
-                                const isAnchor = key === inspectKey;
-                                const alreadyAdded = usedKeys.has(key);
-
-                                return (
-                                  <li
-                                    key={key}
-                                    className={`flex items-center gap-2 rounded-md px-2 py-1 text-xs ${
-                                      isAnchor
-                                        ? "bg-blue-100 font-semibold text-blue-900"
-                                        : "text-gray-700"
-                                    }`}
-                                  >
-                                    <span className="w-5 shrink-0 text-right text-gray-400">
-                                      {stopIndex + 1}
-                                    </span>
-
-                                    <span className="min-w-0 flex-1 truncate">
-                                      {existingLabel(stop)}
-
-                                      {stop.kind === "terminal" && (
-                                        <span className="ml-1 text-gray-400">
-                                          (Terminal)
-                                        </span>
-                                      )}
-                                    </span>
-
-                                    {isAnchor ? (
-                                      <span className="shrink-0 text-[11px]">
-                                        You are here
-                                      </span>
-                                    ) : alreadyAdded ? (
-                                      <span className="shrink-0 text-[11px] text-green-700">
-                                        Added
-                                      </span>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          inspectKey &&
-                                          addExistingKeys(
-                                            segmentKeys(route, inspectKey, key)
-                                          )
-                                        }
-                                        className="shrink-0 rounded border border-gray-300 px-1.5 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-100"
-                                      >
-                                        Add through here
-                                      </button>
-                                    )}
-                                  </li>
-                                );
-                              })}
-                            </ol>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Route points list */}
-              {kind === "route" && routePoints.length > 0 && (
-                <div>
-                  <p className="mb-1.5 text-sm font-medium text-gray-700">
-                    Points ({routePoints.length})
-                  </p>
-
-                  <ol className="space-y-2">
-                    {routePoints.map((point, index) => (
-                      <li
-                        key={point.key}
-                        className="rounded-lg border border-gray-200 bg-gray-50 p-2"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white"
-                            style={{ backgroundColor: routeColor }}
-                          >
-                            {index + 1}
-                          </span>
-
-                          {point.existingId !== null ? (
-                            <>
-                              <span className="w-[72px] shrink-0 text-xs text-gray-600">
-                                {point.kind === "terminal"
-                                  ? "Terminal"
-                                  : point.stopType === "train_station"
-                                    ? "Station"
-                                    : "Stop"}
-                              </span>
-
-                              <button
-                                type="button"
-                                title="Show the routes through this point"
-                                onClick={() =>
-                                  inspectExistingPoint(
-                                    pointKey(
-                                      point.kind,
-                                      point.existingId as number
-                                    )
-                                  )
-                                }
-                                className="min-w-0 flex-1 truncate text-left text-sm text-gray-800 hover:underline"
-                              >
-                                {point.name}
-
-                                <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-800">
-                                  Existing
-                                </span>
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              {isRail ? (
-                                <span className="w-[92px] shrink-0 text-xs text-gray-600">
-                                  New station
-                                </span>
-                              ) : (
-                                <select
-                                  aria-label={`Point ${index + 1} type`}
-                                  value={point.kind}
-                                  onChange={(event) =>
-                                    updateRoutePoint(index, {
-                                      kind: event.target.value as PointKind,
-                                    })
-                                  }
-                                  className="h-9 w-[92px] shrink-0 rounded-lg border border-gray-300 bg-white px-2 text-xs"
-                                >
-                                  <option value="terminal">New terminal</option>
-                                  <option value="stop">New stop</option>
-                                </select>
-                              )}
-
-                              <input
-                                aria-label={`Point ${index + 1} name`}
-                                value={point.name}
-                                maxLength={120}
-                                onChange={(event) =>
-                                  updateRoutePoint(index, {
-                                    name: event.target.value,
-                                  })
-                                }
-                                placeholder="Name of this new point"
-                                className={`h-9 min-w-0 flex-1 rounded-lg border bg-white px-2 text-sm outline-none ${
-                                  showValidation && !point.name.trim()
-                                    ? "border-red-500"
-                                    : "border-gray-300"
-                                }`}
-                              />
-                            </>
-                          )}
-
-                          <button
-                            type="button"
-                            aria-label={`Add a photo to point ${index + 1}`}
-                            title="Add a photo of this point"
-                            onClick={() => choosePointPhoto(point.key)}
-                            className={`rounded p-1.5 hover:bg-gray-200 ${
-                              point.photo ? "text-[#12395A]" : "text-gray-500"
-                            }`}
-                          >
-                            <ImagePlus size={16} />
-                          </button>
-
-                          <button
-                            type="button"
-                            aria-label={`Move point ${index + 1} up`}
-                            disabled={index === 0}
-                            onClick={() => moveRoutePoint(index, -1)}
-                            className="rounded px-1.5 text-gray-600 hover:bg-gray-200 disabled:opacity-30"
-                          >
-                            ↑
-                          </button>
-
-                          <button
-                            type="button"
-                            aria-label={`Move point ${index + 1} down`}
-                            disabled={index === routePoints.length - 1}
-                            onClick={() => moveRoutePoint(index, 1)}
-                            className="rounded px-1.5 text-gray-600 hover:bg-gray-200 disabled:opacity-30"
-                          >
-                            ↓
-                          </button>
-
-                          <button
-                            type="button"
-                            aria-label={`Remove point ${index + 1}`}
-                            onClick={() => removeRoutePoint(index)}
-                            className="rounded p-1.5 text-gray-500 hover:bg-red-50 hover:text-red-600"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-
-                        {point.photo && (
-                          <div className="ml-8 mt-2 flex items-center gap-2">
-                            <img
-                              src={point.photo.previewUrl}
-                              alt={`Photo for point ${index + 1}`}
-                              className="h-12 w-16 rounded-md border border-gray-200 object-cover"
-                            />
-
-                            <span className="min-w-0 flex-1 truncate text-xs text-gray-500">
-                              {point.photo.file.name}
-                            </span>
-
-                            <button
-                              type="button"
-                              aria-label={`Remove photo from point ${index + 1}`}
-                              onClick={() => removePointPhoto(point.key)}
-                              className="rounded px-1.5 text-sm text-gray-500 hover:bg-red-50 hover:text-red-600"
-                            >
-                              ×
-                            </button>
-                          </div>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
-
-                  <input
-                    ref={pointPhotoInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    className="hidden"
-                    onChange={handlePointPhotoChange}
-                  />
-                </div>
-              )}
-
-              {/* Photos */}
-              {showPhotos && (
-                <div>
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <label className="text-sm font-medium text-gray-700">
-                      Photos (optional)
-                    </label>
-
-                    <span className="text-xs text-gray-500">
-                      {photos.length}/{MAX_PHOTOS}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {photos.map((photo, index) => (
-                      <div
-                        key={photo.previewUrl}
-                        className="relative overflow-hidden rounded-xl border border-gray-200 bg-gray-50"
-                      >
-                        <img
-                          src={photo.previewUrl}
-                          alt={`Selected photo ${index + 1}`}
-                          className="h-24 w-full object-cover"
-                        />
-
-                        <button
-                          type="button"
-                          aria-label={`Remove photo ${index + 1}`}
-                          onClick={() => removePhoto(index)}
-                          className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white transition-colors hover:bg-red-600"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-
-                    {photos.length < MAX_PHOTOS && (
-                      <button
-                        type="button"
-                        onClick={() => photoInputRef.current?.click()}
-                        className="flex min-h-[96px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 px-3 py-3 text-center transition-colors hover:border-[#12395A] hover:bg-gray-100"
-                      >
-                        <Plus size={22} className="mb-1 text-gray-500" />
-
-                        <span className="text-sm font-medium text-gray-700">
-                          Add photo
-                        </span>
-
-                        <span className="mt-0.5 text-xs text-gray-500">
-                          JPG, PNG or WebP, up to 5 MB
-                        </span>
-                      </button>
-                    )}
-                  </div>
-
-                  <input
-                    ref={photoInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    multiple
-                    className="hidden"
-                    onChange={handlePhotoChange}
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="mt-6 flex flex-col-reverse justify-end gap-3 border-t border-gray-100 pt-4 sm:flex-row">
-              <button
-                type="button"
-                onClick={closeModal}
-                disabled={submitting}
-                className="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void handleSubmit()}
-                disabled={submitting}
-                className="rounded-lg bg-[#12395A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {submitting ? "Submitting..." : "Submit for review"}
-              </button>
-            </div>
-          </section>
-        </div>
+        <ContributionFormModal
+          state={{
+            formAction,
+            submitting,
+            showValidation,
+            formError,
+            vehicleTypeId,
+            variantId,
+            selectedExistingRouteId,
+            name,
+            description,
+            existingQuery,
+            selectedPointKey,
+            selectedPreviewRouteId,
+            pin,
+            currentPosition,
+            focus,
+            locationMessage,
+            routePointCount: routePoints.length,
+            terminalPhotos: terminalPhotoPreviews,
+          }}
+          data={{
+            types,
+            typeVariants,
+            existingByKey,
+            existingRoutes,
+            catalogLoading,
+            existingError,
+            optionsError,
+            selectedExistingRoute,
+            selectedExistingRouteType,
+            selectedExistingRouteVariant,
+            selectedVehicleTypeName,
+            activeRouteColor,
+            routeMarkers,
+            candidatePoints: mapCandidates,
+            connectedKeys: mapConnectedKeys,
+            linePositions: routeLinePositions,
+            previewLines: mapPreviewLines,
+            routeSequenceEntries,
+            routeChangePlacement,
+            connectedList,
+            otherTerminals,
+            otherStops,
+            lastExistingPoint: lastExisting,
+            matchingRouteChangeCandidates,
+            inspectKey,
+            inspectPoint,
+            inspectRoutes,
+          }}
+          actions={{
+            onClose: closeModal,
+            onSwitchAction: switchFormAction,
+            onVehicleTypeChange: handleVehicleTypeChange,
+            onVariantChange: setVariantId,
+            onExistingRouteChange: handleExistingRouteChange,
+            onLocate: () => locate(),
+            onMapPick: handleMapPick,
+            onPickExisting: isRouteChange ? addRouteChangeExistingPoint : addExistingPoint,
+            onAddExistingPoint: addExistingPoint,
+            onAddRouteChangeExistingPoint: addRouteChangeExistingPoint,
+            onAddExistingKeys: addExistingKeys,
+            onSelectPoint: setSelectedPointKey,
+            onMovePin: setPin,
+            onMoveRoutePoint: (index, position) => {
+              const point = routePoints[index];
+              if (!point) return;
+              updateRoutePoint(point.key, {
+                latitude: position[0],
+                longitude: position[1],
+              });
+            },
+            onNameChange: setName,
+            onProposedRouteNameChange: (value) => {
+              setName(value);
+              setRouteNameEdited(true);
+            },
+            onDescriptionChange: setDescription,
+            onExistingQueryChange: setExistingQuery,
+            onSelectPreviewRoute: setSelectedPreviewRouteId,
+            onCloseInspection: () => {
+              setInspectKey(null);
+              setSelectedPreviewRouteId(null);
+            },
+            onRoutePointNameChange: (key, value) => updateRoutePoint(key, { name: value }),
+            onMoveRoutePointInSequence: moveRoutePoint,
+            onRemoveRoutePoint: removeRoutePoint,
+            onPointPhotoFile: addPointPhoto,
+            onRemovePointPhoto: removePointPhoto,
+            onTerminalPhotosChange: addTerminalPhotos,
+            onRemoveTerminalPhoto: removeTerminalPhoto,
+            onSubmit: () => { void handleSubmit(); },
+          }}
+        />
       )}
 
       {notice && (
         <div className="fixed bottom-5 right-5 z-[9000] max-w-sm rounded-xl bg-[#12395A] px-4 py-3 text-sm text-white shadow-xl">
           <div className="flex items-start gap-3">
             <p>{notice}</p>
-
             <button
               type="button"
               aria-label="Dismiss"

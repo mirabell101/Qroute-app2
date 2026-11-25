@@ -1,3 +1,4 @@
+
 import { Router, type Request, type Response } from "express";
 
 import {
@@ -31,6 +32,14 @@ const moderationActions = [
 
 type ModerationAction = (typeof moderationActions)[number];
 
+const routeChangeProposalActions = [
+  "approve",
+  "reject",
+] as const;
+
+type RouteChangeProposalAction =
+  (typeof routeChangeProposalActions)[number];
+
 function getAccessToken(res: Response): string | null {
   const token = res.locals.accessToken;
 
@@ -59,6 +68,17 @@ function isModerationAction(
   return (
     typeof value === "string" &&
     moderationActions.some((action) => action === value)
+  );
+}
+
+function isRouteChangeProposalAction(
+  value: unknown,
+): value is RouteChangeProposalAction {
+  return (
+    typeof value === "string" &&
+    routeChangeProposalActions.some(
+      (action) => action === value,
+    )
   );
 }
 
@@ -255,6 +275,10 @@ async function callManagementRpc(
 
 router.use(requireAuth, requireRouteReviewer);
 
+// ============================================================
+// ROUTE MANAGEMENT DATA
+// ============================================================
+
 router.get("/", async (_req: Request, res: Response) => {
   const accessToken = getAccessToken(res);
 
@@ -284,6 +308,10 @@ router.get("/", async (_req: Request, res: Response) => {
     );
   }
 });
+
+// ============================================================
+// EXISTING ROUTE / STOP / TERMINAL MODERATION
+// ============================================================
 
 router.post(
   "/moderation/:entityType/:id",
@@ -353,6 +381,89 @@ router.post(
     }
   },
 );
+
+// ============================================================
+// ROUTE CHANGE PROPOSAL MODERATION
+// ============================================================
+
+router.post(
+  "/proposals/:id/moderation",
+  async (req, res) => {
+    const proposalId = parseId(req.params.id);
+
+    const body = getObjectBody(req.body);
+    const action = body?.action;
+    const moderationNote = body?.moderation_note;
+
+    if (
+      proposalId === null ||
+      !isRouteChangeProposalAction(action) ||
+      Object.keys(body ?? {}).some(
+        (key) =>
+          !["action", "moderation_note"].includes(key),
+      ) ||
+      (
+        moderationNote !== undefined &&
+        (
+          typeof moderationNote !== "string" ||
+          moderationNote.length > 500
+        )
+      )
+    ) {
+      res.status(400).json({
+        success: false,
+        message:
+          "A valid route change proposal id and moderation action are required.",
+      });
+
+      return;
+    }
+
+    const accessToken = getAccessToken(res);
+
+    if (!accessToken) {
+      res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+
+      return;
+    }
+
+    try {
+      const {
+        data,
+        error,
+      } = await getSupabaseClientForAccessToken(
+        accessToken,
+      ).rpc("moderate_route_change_proposal", {
+        p_proposal_id: proposalId,
+        p_action: action,
+        p_moderation_note:
+          typeof moderationNote === "string"
+            ? moderationNote.trim()
+            : "",
+      });
+
+      if (error) throw error;
+
+      res.json({
+        success: true,
+        result: data,
+      });
+    } catch (error: unknown) {
+      sendError(
+        res,
+        error,
+        "Unable to moderate the route change proposal.",
+      );
+    }
+  },
+);
+
+// ============================================================
+// ADMIN-ONLY ROUTE / STOP / TERMINAL RECORD UPDATES
+// ============================================================
 
 router.patch(
   "/records/:entityType/:id",
@@ -473,6 +584,10 @@ router.delete(
     }
   },
 );
+
+// ============================================================
+// ADMIN-ONLY TRANSPORT TYPE MANAGEMENT
+// ============================================================
 
 router.post(
   "/transport-types",

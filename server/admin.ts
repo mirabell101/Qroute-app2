@@ -137,6 +137,10 @@ export interface AdminSummary {
   recentActivity: AdminRecentActivityItem[] | null;
 }
 
+// -----------------------------------------------------------------------------
+// Route Management types
+// -----------------------------------------------------------------------------
+
 interface AdminRoutePoint {
   id: number;
   name: string;
@@ -147,8 +151,11 @@ interface AdminRoutePoint {
 }
 
 interface AdminRouteStop {
+  id: number;
   route_id: number;
   stop_order: number;
+  terminal_id: number | null;
+  stop_id: number | null;
   terminals: AdminRoutePoint | null;
   stops:
     | (AdminRoutePoint & {
@@ -195,6 +202,82 @@ export interface AdminTransitPointRecord {
   transport_types: { name: string; color: string } | null;
 }
 
+// -----------------------------------------------------------------------------
+// Route-change proposal types
+// -----------------------------------------------------------------------------
+
+export type AdminRouteChangeProposalType =
+  | "insert_point"
+  | "extend_route";
+
+export type AdminRouteChangeProposalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "conflicted"
+  | "withdrawn";
+
+/**
+ * One location in the complete proposed route sequence.
+ *
+ * Exactly one of terminal_id or stop_id is populated.
+ */
+export interface AdminRouteChangeProposalPointRecord {
+  proposal_id: number;
+  stop_order: number;
+
+  terminal_id: number | null;
+  stop_id: number | null;
+
+  /**
+   * True when this location was created specifically
+   * as part of this route-change proposal.
+   */
+  is_new_point: boolean;
+
+  terminals: AdminTransitPointRecord | null;
+  stops: AdminTransitPointRecord | null;
+}
+
+/**
+ * A pending proposal to modify an existing approved route.
+ *
+ * base_route_snapshot contains the original route state
+ * captured when the contributor submitted the proposal.
+ *
+ * route_change_proposal_points contains the complete
+ * proposed ordered sequence.
+ */
+export interface AdminRouteChangeProposalRecord {
+  id: number;
+  route_id: number;
+
+  contributor_id: string | null;
+  contributor_display_name: string;
+
+  proposal_type: AdminRouteChangeProposalType;
+
+  proposed_name: string | null;
+
+  base_route_snapshot: Record<string, unknown>;
+
+  status: AdminRouteChangeProposalStatus;
+
+  moderation_note: string | null;
+
+  moderated_by: string | null;
+  moderator_display_name: string | null;
+
+  moderated_at: string | null;
+  applied_at: string | null;
+
+  created_at: string;
+  updated_at: string;
+
+  route_change_proposal_points:
+    AdminRouteChangeProposalPointRecord[];
+}
+
 export interface AdminTransportTypeRecord {
   id: number;
   name: string;
@@ -203,10 +286,37 @@ export interface AdminTransportTypeRecord {
 
 export interface AdminRouteManagementData {
   routes: AdminRouteRecord[];
+
+  /**
+   * Standalone stop contributions.
+   *
+   * Pending stops that belong to pending route-change
+   * proposals are excluded from this collection.
+   */
   stops: AdminTransitPointRecord[];
+
+  /**
+   * Standalone terminal contributions.
+   *
+   * Pending terminals that belong to pending route-change
+   * proposals are excluded from this collection.
+   */
   terminals: AdminTransitPointRecord[];
+
   transportTypes: AdminTransportTypeRecord[];
+
+  /**
+   * Complete pending route-change proposals.
+   *
+   * Each proposal includes its entire proposed sequence
+   * and the associated stop/terminal information.
+   */
+  routeChangeProposals: AdminRouteChangeProposalRecord[];
 }
+
+// -----------------------------------------------------------------------------
+// User Management types
+// -----------------------------------------------------------------------------
 
 /**
  * Usernames are included only for internal search matching.
@@ -612,8 +722,11 @@ export async function getAdminRoutes(
       transport_types ( name, color ),
       transport_variants ( id, code, name, fare_model ),
       route_stops (
+        id,
         route_id,
         stop_order,
+        terminal_id,
+        stop_id,
         terminals ( id, name, latitude, longitude, is_approved, moderation_status ),
         stops ( id, name, description, stop_type, latitude, longitude, is_approved, moderation_status )
       )
@@ -650,6 +763,150 @@ export async function getAdminRoutes(
   });
 }
 
+/**
+ * Retrieves pending route-change proposals and their complete
+ * proposed sequences.
+ *
+ * This query uses the authenticated reviewer client.
+ * RLS grants reviewers access to all proposal records.
+ *
+ * Proposal-associated pending locations are also collected
+ * so they can be excluded from independent stop/terminal
+ * moderation results.
+ */
+async function getPendingRouteChangeProposals(
+  client: SupabaseClient,
+): Promise<AdminRouteChangeProposalRecord[]> {
+  const { data, error } = await client
+    .from("route_change_proposals")
+    .select(
+      `
+      id,
+      route_id,
+      contributor_id,
+      contributor_display_name,
+      proposal_type,
+      proposed_name,
+      base_route_snapshot,
+      status,
+      moderation_note,
+      moderated_by,
+      moderator_display_name,
+      moderated_at,
+      applied_at,
+      created_at,
+      updated_at,
+      route_change_proposal_points (
+        proposal_id,
+        stop_order,
+        terminal_id,
+        stop_id,
+        is_new_point,
+        terminals (
+          id,
+          name,
+          latitude,
+          longitude,
+          transport_type_id,
+          is_active,
+          is_approved,
+          is_banned,
+          is_deleted,
+          moderation_status,
+          moderation_note,
+          transport_types ( name, color )
+        ),
+        stops (
+          id,
+          name,
+          description,
+          stop_type,
+          latitude,
+          longitude,
+          transport_type_id,
+          is_active,
+          is_approved,
+          is_banned,
+          is_deleted,
+          moderation_status,
+          moderation_note,
+          transport_types ( name, color )
+        )
+      )
+    `,
+    )
+    .eq("status", "pending")
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+
+  if (!Array.isArray(data)) {
+    throw new Error(
+      "Route-change proposal query returned incomplete results.",
+    );
+  }
+
+  const proposals =
+    data as unknown as AdminRouteChangeProposalRecord[];
+
+  return proposals.map((proposal) => {
+    if (
+      !Number.isSafeInteger(proposal.id) ||
+      !Number.isSafeInteger(proposal.route_id) ||
+      typeof proposal.contributor_display_name !== "string" ||
+      ![
+        "insert_point",
+        "extend_route",
+      ].includes(proposal.proposal_type) ||
+      proposal.status !== "pending" ||
+      !isPlainRecord(proposal.base_route_snapshot) ||
+      !Array.isArray(proposal.route_change_proposal_points)
+    ) {
+      throw new Error(
+        "Route-change proposal query returned an invalid proposal.",
+      );
+    }
+
+    const points = proposal.route_change_proposal_points;
+
+    for (const point of points) {
+      if (
+        point.proposal_id !== proposal.id ||
+        !Number.isSafeInteger(point.stop_order) ||
+        point.stop_order < 1 ||
+        typeof point.is_new_point !== "boolean" ||
+        (
+          (point.terminal_id !== null) ===
+          (point.stop_id !== null)
+        )
+      ) {
+        throw new Error(
+          "Route-change proposal query returned an invalid proposed location.",
+        );
+      }
+    }
+
+    return {
+      ...proposal,
+      route_change_proposal_points: [...points].sort(
+        (left, right) =>
+          left.stop_order - right.stop_order,
+      ),
+    };
+  });
+}
+
+/**
+ * Retrieves the complete Route Management data set.
+ *
+ * Existing routes, standalone points, and transport types
+ * remain available to the existing administrator interface.
+ *
+ * Pending locations that belong to pending route-change
+ * proposals are excluded from standalone stop/terminal lists.
+ *
+ * Their moderation must happen through the parent proposal.
+ */
 export async function getAdminRouteManagementData(
   client: SupabaseClient,
 ): Promise<AdminRouteManagementData> {
@@ -658,6 +915,7 @@ export async function getAdminRouteManagementData(
     stopsResult,
     terminalsResult,
     typesResult,
+    routeChangeProposals,
   ] = await Promise.all([
     getAdminRoutes(client),
 
@@ -679,6 +937,8 @@ export async function getAdminRouteManagementData(
       .from("transport_types")
       .select("id, name, color")
       .order("name", { ascending: true }),
+
+    getPendingRouteChangeProposals(client),
   ]);
 
   if (stopsResult.error) throw stopsResult.error;
@@ -695,17 +955,76 @@ export async function getAdminRouteManagementData(
     );
   }
 
+  // ----------------------------------------------------------
+  // Collect proposal-owned pending location IDs.
+  // ----------------------------------------------------------
+
+  const proposalOwnedStopIds = new Set<number>();
+  const proposalOwnedTerminalIds = new Set<number>();
+
+  for (const proposal of routeChangeProposals) {
+    for (
+      const point of proposal.route_change_proposal_points
+    ) {
+      if (!point.is_new_point) {
+        continue;
+      }
+
+      if (point.stop_id !== null) {
+        proposalOwnedStopIds.add(point.stop_id);
+      }
+
+      if (point.terminal_id !== null) {
+        proposalOwnedTerminalIds.add(point.terminal_id);
+      }
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Exclude proposal-owned pending stops from standalone
+  // moderation records.
+  //
+  // Approved and rejected records are not affected.
+  // ----------------------------------------------------------
+
+  const standaloneStops =
+    (stopsResult.data as AdminTransitPointRecord[]).filter(
+      (stop) => {
+        return !(
+          stop.moderation_status === "pending" &&
+          proposalOwnedStopIds.has(stop.id)
+        );
+      },
+    );
+
+  // ----------------------------------------------------------
+  // Exclude proposal-owned pending terminals from standalone
+  // moderation records.
+  // ----------------------------------------------------------
+
+  const standaloneTerminals =
+    (terminalsResult.data as AdminTransitPointRecord[]).filter(
+      (terminal) => {
+        return !(
+          terminal.moderation_status === "pending" &&
+          proposalOwnedTerminalIds.has(terminal.id)
+        );
+      },
+    );
+
   return {
     routes,
-    stops: stopsResult.data as AdminTransitPointRecord[],
-    terminals: terminalsResult.data as AdminTransitPointRecord[],
-    transportTypes: typesResult.data as AdminTransportTypeRecord[],
+
+    stops: standaloneStops,
+
+    terminals: standaloneTerminals,
+
+    transportTypes:
+      typesResult.data as AdminTransportTypeRecord[],
+
+    routeChangeProposals,
   };
 }
-
-// -----------------------------------------------------------------------------
-// User Management
-// -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
 // User Management
