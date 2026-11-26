@@ -1,4 +1,3 @@
-
 import { Fragment, useEffect } from "react";
 
 import {
@@ -32,6 +31,7 @@ import {
 import {
   getMapIcon,
   getMapVehicleType,
+  getTerminalMapIcon,
   getVehicleMapIcon,
 } from "@/lib/mapIcons";
 
@@ -75,8 +75,7 @@ function getRouteDashArray(
   routeId: number,
   transportName: string,
 ): string {
-  const normalizedName =
-    transportName.toLowerCase();
+  const normalizedName = transportName.toLowerCase();
 
   if (normalizedName.includes("bus")) {
     return "3 7";
@@ -558,6 +557,26 @@ export function TransitMapCanvas({
             });
           }
 
+          // Terminals without an associated route also remain
+          // visible, but use a neutral vehicle glyph instead of T.
+          if (
+            modes.length === 0 &&
+            point.kind === "terminal"
+          ) {
+            modes.push({
+              vehicleType: "other",
+              color: "#0f2a47",
+            });
+          }
+
+          // ----------------------------------------------------
+          // PLACE SELECTION
+          // ----------------------------------------------------
+
+          const isSelectedPlace =
+            selectedPlace?.kind === point.kind &&
+            selectedPlace.ref_id === point.ref_id;
+
           // ----------------------------------------------------
           // BOARDING / DESTINATION MARKERS
           // ----------------------------------------------------
@@ -569,6 +588,11 @@ export function TransitMapCanvas({
           const isDestinationMarker =
             routeStopIndex !== null &&
             routeStopIndex === destinationIndex;
+
+          const terminalMode = modes[0] ?? {
+            vehicleType: "other" as const,
+            color: "#0f2a47",
+          };
 
           const markerModes =
             isBoardingMarker ||
@@ -587,13 +611,18 @@ export function TransitMapCanvas({
                   },
                 ]
               : point.kind === "terminal"
-                ? [
-                    {
+                ? isSelectedPlace
+                  ? [
+                      {
+                        kind: "terminal" as const,
+                        color: terminalMode.color,
+                        vehicleType: terminalMode.vehicleType,
+                      },
+                    ]
+                  : modes.map((mode) => ({
+                      ...mode,
                       kind: "terminal" as const,
-                      color: "#0f2a47",
-                      vehicleType: "other" as const,
-                    },
-                  ]
+                    }))
                 : modes.map((mode) => ({
                     ...mode,
                     kind: "vehicle" as const,
@@ -608,6 +637,9 @@ export function TransitMapCanvas({
 
           return markerModes.map(
             (mode, modeIndex) => {
+              const displayOffsetX =
+                offsetStart + modeIndex * 9;
+
               const icon =
                 mode.kind !== "vehicle" &&
                 mode.kind !== "terminal" &&
@@ -618,11 +650,16 @@ export function TransitMapCanvas({
                       routeStop,
                     )
                   : mode.kind === "terminal"
-                    ? getMapIcon("terminal")
+                    ? getTerminalMapIcon(
+                        isSelectedPlace,
+                        mode.vehicleType,
+                        mode.color,
+                        displayOffsetX,
+                      )
                     : getVehicleMapIcon(
                         mode.vehicleType,
                         mode.color,
-                        offsetStart + modeIndex * 9,
+                        displayOffsetX,
                       );
 
               return (

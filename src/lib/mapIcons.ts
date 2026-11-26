@@ -44,7 +44,7 @@ interface IconSpec {
 // import destinationImg from "@/assets/INSERT_DESTINATION_ICON_FILENAME.png";
 
 const ICONS: Record<MapIconKind, IconSpec> = {
-  // 1/6 — TERMINAL (every terminal on the map)
+  // 1/6 — TERMINAL (used for the currently selected terminal)
   terminal: {
     src: null, // ◄◄◄ INSERT TERMINAL IMAGE PATH HERE (e.g. terminalImg)
     size: [40, 40],
@@ -80,7 +80,7 @@ const ICONS: Record<MapIconKind, IconSpec> = {
 
   // 3/6 — TRAIN STATION (LRT-1 / LRT-2 / MRT-3 stations)
   train_station: {
-    src: '../assets/train.png', // ◄◄◄ INSERT TRAIN STATION IMAGE PATH HERE (e.g. trainStationImg)
+    src: "../assets/train.png", // ◄◄◄ INSERT TRAIN STATION IMAGE PATH HERE
     size: [32, 32],
     anchor: "center",
     fallbackColor: "#e0a526",
@@ -89,7 +89,7 @@ const ICONS: Record<MapIconKind, IconSpec> = {
 
   // 4/6 — CURRENT LOCATION (the user's position)
   current_location: {
-    src: null, // ◄◄◄ INSERT CURRENT LOCATION IMAGE PATH HERE (e.g. currentLocationImg)
+    src: null, // ◄◄◄ INSERT CURRENT LOCATION IMAGE PATH HERE
     size: [34, 34],
     anchor: "center",
     fallbackColor: "#16a34a",
@@ -98,7 +98,7 @@ const ICONS: Record<MapIconKind, IconSpec> = {
 
   // 5/6 — SELECTED BOARDING POINT
   boarding: {
-    src: null, // ◄◄◄ INSERT BOARDING POINT IMAGE PATH HERE (e.g. boardingImg)
+    src: null, // ◄◄◄ INSERT BOARDING POINT IMAGE PATH HERE
     size: [38, 38],
     anchor: "bottom",
     fallbackColor: "#16a34a",
@@ -107,7 +107,7 @@ const ICONS: Record<MapIconKind, IconSpec> = {
 
   // 6/6 — SELECTED DESTINATION POINT
   destination: {
-    src: null, // ◄◄◄ INSERT DESTINATION POINT IMAGE PATH HERE (e.g. destinationImg)
+    src: null, // ◄◄◄ INSERT DESTINATION POINT IMAGE PATH HERE
     size: [38, 38],
     anchor: "bottom",
     fallbackColor: "#dc2626",
@@ -145,23 +145,29 @@ const ENDPOINT_GLYPHS: Record<MapVehicleType, string> = {
   `,
 };
 
-export function getMapVehicleType(transportTypeName: string): MapVehicleType {
+export function getMapVehicleType(
+  transportTypeName: string,
+): MapVehicleType {
   const normalizedName = transportTypeName.toLowerCase();
+
   if (normalizedName.includes("train")) return "train";
   if (normalizedName.includes("bus")) return "bus";
   if (normalizedName.includes("jeep")) return "jeepney";
+
   return "other";
 }
 
 export function getEndpointMapIcon(
   role: EndpointRole,
-  vehicleType: MapVehicleType
+  vehicleType: MapVehicleType,
 ): L.DivIcon {
   const key = `${role}:${vehicleType}`;
   const cached = endpointIconCache.get(key);
+
   if (cached) return cached;
 
   const color = role === "boarding" ? "#16a34a" : "#dc2626";
+
   const icon = L.divIcon({
     className: "",
     iconSize: [38, 38],
@@ -190,10 +196,11 @@ export function getEndpointMapIcon(
 export function getVehicleMapIcon(
   vehicleType: MapVehicleType,
   color: string,
-  displayOffsetX = 0
+  displayOffsetX = 0,
 ): L.DivIcon {
   const key = `${vehicleType}:${color}:${displayOffsetX}`;
   const cached = vehicleIconCache.get(key);
+
   if (cached) return cached;
 
   const icon = L.divIcon({
@@ -221,14 +228,39 @@ export function getVehicleMapIcon(
   return icon;
 }
 
+/**
+ * Terminal markers are intentionally contextual:
+ *
+ * - The selected terminal gets the distinctive "T" marker.
+ * - Every other terminal displays the vehicle type(s) serving it.
+ *
+ * This prevents every terminal on the map from looking like the
+ * currently selected location while retaining vehicle information.
+ */
+export function getTerminalMapIcon(
+  isSelected: boolean,
+  vehicleType: MapVehicleType,
+  color: string,
+  displayOffsetX = 0,
+): L.Icon | L.DivIcon {
+  return isSelected
+    ? getMapIcon("terminal")
+    : getVehicleMapIcon(
+        vehicleType,
+        color,
+        displayOffsetX,
+      );
+}
+
 // `color` only tints the fallback icon (used for stops so they match the route).
 export function getMapIcon(
   kind: MapIconKind,
   color?: string,
-  displayOffsetX = 0
+  displayOffsetX = 0,
 ): L.Icon | L.DivIcon {
   const key = `${kind}:${color ?? ""}:${displayOffsetX}`;
   const cached = cache.get(key);
+
   if (cached) return cached;
 
   const spec = ICONS[kind];
@@ -238,8 +270,11 @@ export function getMapIcon(
     spec.anchor === "bottom"
       ? [width / 2, height]
       : [width / 2 - displayOffsetX, height / 2];
+
   const popupAnchor: [number, number] =
-    spec.anchor === "bottom" ? [0, -height] : [0, -height / 2];
+    spec.anchor === "bottom"
+      ? [0, -height]
+      : [0, -height / 2];
 
   const icon = spec.src
     ? L.icon({

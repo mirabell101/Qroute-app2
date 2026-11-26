@@ -1483,6 +1483,32 @@ export function useTransitMap(
   };
 
   // ==========================================================
+  // CLEAR SELECTED ROUTE AND ALL ROUTE DRAWING
+  // ==========================================================
+
+  /**
+   * Clear the selected route, every visible route line, and the
+   * selected place details associated with the current map action.
+   *
+   * This also closes the place-details panel, including its Save
+   * Stop / Save Terminal action and its photo-gallery collection.
+   * Cached route geometry is retained for efficient future use.
+   */
+  const clearSelectedRoute = () => {
+    pendingBoardingPoint.current = null;
+    pendingSavedJourney.current = null;
+
+    setBoardingIndex(null);
+    setDestinationIndex(null);
+    setVisibleRouteIds([]);
+    setRouteLinesVisible(false);
+    setSelectedRouteId("");
+
+    clearPhotoSession();
+    setSelectedPlacePoint(null);
+  };
+
+  // ==========================================================
   // SELECT MAP PLACE
   // ==========================================================
 
@@ -1606,18 +1632,21 @@ export function useTransitMap(
   // ==========================================================
 
   const handleRouteLineSelect = (routeId: number) => {
+    const nextRouteId = String(routeId);
+
+    // Clicking the already-selected route toggles it off and
+    // removes every displayed route line, not just its highlight.
+    if (selectedRouteId === nextRouteId) {
+      setSelectionError(null);
+      clearSelectedRoute();
+      return;
+    }
+
     pendingSavedJourney.current = null;
     pendingBoardingPoint.current = null;
 
     setSelectionError(null);
     setRouteLinesVisible(true);
-
-    const nextRouteId = String(routeId);
-
-    if (selectedRouteId === nextRouteId) {
-      return;
-    }
-
     setSelectedRouteId(nextRouteId);
   };
 
@@ -2075,12 +2104,7 @@ export function useTransitMap(
     handleSearchKeyDown,
     handleListPick: handleTripStop,
     clearTrip,
-
-    clearSelectedRoute: () => {
-      pendingBoardingPoint.current = null;
-      pendingSavedJourney.current = null;
-      setSelectedRouteId("");
-    },
+    clearSelectedRoute,
 
     closePlace: () => {
       clearPhotoSession();
