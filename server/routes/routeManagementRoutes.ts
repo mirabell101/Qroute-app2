@@ -1,24 +1,14 @@
-
 import { Router, type Request, type Response } from "express";
 
-import {
-  getAdminRouteManagementData,
-} from "../admin.ts";
-
+import { getAdminRouteManagementData } from "../admin.ts";
 import requireAdmin from "../middleware/requireAdmin.ts";
 import requireAuth from "../middleware/requireAuth.ts";
 import requireRouteReviewer from "../middleware/requireRouteReviewer.ts";
-
 import { getSupabaseClientForAccessToken } from "../supabaseClient.ts";
 
 const router = Router();
 
-const entityTypes = [
-  "route",
-  "stop",
-  "terminal",
-] as const;
-
+const entityTypes = ["route", "stop", "terminal"] as const;
 type EntityType = (typeof entityTypes)[number];
 
 const moderationActions = [
@@ -29,31 +19,19 @@ const moderationActions = [
   "ban",
   "unban",
 ] as const;
-
 type ModerationAction = (typeof moderationActions)[number];
 
-const routeChangeProposalActions = [
-  "approve",
-  "reject",
-] as const;
-
-type RouteChangeProposalAction =
-  (typeof routeChangeProposalActions)[number];
+const routeChangeProposalActions = ["approve", "reject"] as const;
+type RouteChangeProposalAction = (typeof routeChangeProposalActions)[number];
 
 function getAccessToken(res: Response): string | null {
   const token = res.locals.accessToken;
-
-  return typeof token === "string" && token
-    ? token
-    : null;
+  return typeof token === "string" && token ? token : null;
 }
 
 function parseId(value: string): number | null {
   const id = Number(value);
-
-  return Number.isSafeInteger(id) && id > 0
-    ? id
-    : null;
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 function parseEntityType(value: string): EntityType | null {
@@ -62,9 +40,7 @@ function parseEntityType(value: string): EntityType | null {
     : null;
 }
 
-function isModerationAction(
-  value: unknown,
-): value is ModerationAction {
+function isModerationAction(value: unknown): value is ModerationAction {
   return (
     typeof value === "string" &&
     moderationActions.some((action) => action === value)
@@ -76,138 +52,8 @@ function isRouteChangeProposalAction(
 ): value is RouteChangeProposalAction {
   return (
     typeof value === "string" &&
-    routeChangeProposalActions.some(
-      (action) => action === value,
-    )
+    routeChangeProposalActions.some((action) => action === value)
   );
-}
-
-function sendError(
-  res: Response,
-  error: unknown,
-  fallbackMessage: string,
-): void {
-  const code =
-    error && typeof error === "object" && "code" in error
-      ? error.code
-      : undefined;
-
-  const message =
-    error && typeof error === "object" && "message" in error
-      ? error.message
-      : undefined;
-
-  const details =
-    error && typeof error === "object" && "details" in error
-      ? error.details
-      : undefined;
-
-  if (code === "42501") {
-    res.status(403).json({
-      success: false,
-      message: "You are not authorized to perform this action.",
-    });
-
-    return;
-  }
-
-  if (
-    code === "P0001" &&
-    message === "route_management_shared_pending_point"
-  ) {
-    let conflict: Record<string, unknown> | null = null;
-
-    if (typeof details === "string") {
-      try {
-        const parsed: unknown = JSON.parse(details);
-        conflict = getObjectBody(parsed);
-      } catch {
-        conflict = null;
-      }
-    }
-
-    const pointType =
-      typeof conflict?.pointType === "string"
-        ? conflict.pointType
-        : "point";
-
-    const pointName =
-      typeof conflict?.pointName === "string"
-        ? ` "${conflict.pointName}"`
-        : "";
-
-    const routes = Array.isArray(conflict?.routes)
-      ? conflict.routes
-          .filter(
-            (
-              route,
-            ): route is {
-              id: number;
-              name: string;
-            } =>
-              route !== null &&
-              typeof route === "object" &&
-              "id" in route &&
-              typeof route.id === "number" &&
-              "name" in route &&
-              typeof route.name === "string",
-          )
-          .map(
-            (route) =>
-              `${route.name} (ID ${route.id})`,
-          )
-      : [];
-
-    const routeDetails = routes.length
-      ? routes.join(", ")
-      : "another route";
-
-    res.status(409).json({
-      success: false,
-      message:
-        `Cannot approve this route: pending ${pointType}` +
-        `${pointName} is also linked to ${routeDetails}.`,
-    });
-
-    return;
-  }
-
-  if (code === "P0002") {
-    res.status(404).json({
-      success: false,
-      message:
-        "The requested record was not found or is no longer pending.",
-    });
-
-    return;
-  }
-
-  if (
-    code === "P0001" ||
-    code === "22P02" ||
-    code === "22023" ||
-    code === "23502" ||
-    code === "23503" ||
-    code === "23514"
-  ) {
-    res.status(400).json({
-      success: false,
-      message:
-        "The requested Route Management change is invalid.",
-    });
-
-    return;
-  }
-
-  console.error(
-    "[routeManagement] Request failed:",
-    error,
-  );
-
-  res.status(500).json({
-    success: false,
-    message: fallbackMessage,
-  });
 }
 
 function getObjectBody(
@@ -227,15 +73,124 @@ function filterPayload(
   allowedFields: readonly string[],
 ): Record<string, unknown> | null {
   const keys = Object.keys(body);
-
   if (
     keys.length === 0 ||
     keys.some((key) => !allowedFields.includes(key))
   ) {
     return null;
   }
-
   return body;
+}
+
+function sendError(
+  res: Response,
+  error: unknown,
+  fallbackMessage: string,
+): void {
+  const errorRecord = getObjectBody(error);
+  const code = errorRecord?.code;
+  const message = errorRecord?.message;
+  const details = errorRecord?.details;
+
+  if (code === "42501") {
+    res.status(403).json({
+      success: false,
+      message: "You are not authorized to perform this action.",
+    });
+    return;
+  }
+
+  // A proposal may become stale after submission (for example, a shared
+  // stop/terminal was edited or the route sequence changed). The database
+  // raises SQLSTATE 40001 for these approval-time conflicts.
+  if (code === "40001") {
+    res.status(409).json({
+      success: false,
+      message:
+        "This proposal conflicts with the current route or one of its shared locations. Refresh Route Management and review the proposal before trying again.",
+    });
+    return;
+  }
+
+  if (
+    code === "P0001" &&
+    message === "route_management_shared_pending_point"
+  ) {
+    let conflict: Record<string, unknown> | null = null;
+
+    if (typeof details === "string") {
+      try {
+        conflict = getObjectBody(JSON.parse(details) as unknown);
+      } catch {
+        conflict = null;
+      }
+    }
+
+    const pointType =
+      typeof conflict?.pointType === "string"
+        ? conflict.pointType
+        : "point";
+    const pointName =
+      typeof conflict?.pointName === "string"
+        ? ` "${conflict.pointName}"`
+        : "";
+    const routes = Array.isArray(conflict?.routes)
+      ? conflict.routes
+          .filter(
+            (
+              route,
+            ): route is { id: number; name: string } =>
+              route !== null &&
+              typeof route === "object" &&
+              "id" in route &&
+              typeof route.id === "number" &&
+              "name" in route &&
+              typeof route.name === "string",
+          )
+          .map((route) => `${route.name} (ID ${route.id})`)
+      : [];
+    const routeDetails = routes.length
+      ? routes.join(", ")
+      : "another route";
+
+    res.status(409).json({
+      success: false,
+      message:
+        `Cannot approve this route: pending ${pointType}` +
+        `${pointName} is also linked to ${routeDetails}.`,
+    });
+    return;
+  }
+
+  if (code === "P0002") {
+    res.status(404).json({
+      success: false,
+      message:
+        "The requested record was not found or is no longer pending.",
+    });
+    return;
+  }
+
+  if (
+    code === "P0001" ||
+    code === "22P02" ||
+    code === "22023" ||
+    code === "23502" ||
+    code === "23503" ||
+    code === "23514"
+  ) {
+    res.status(400).json({
+      success: false,
+      message: "The requested Route Management change is invalid.",
+    });
+    return;
+  }
+
+  console.error("[routeManagement] Request failed:", error);
+  res.status(500).json({
+    success: false,
+    message: fallbackMessage,
+  });
 }
 
 async function callManagementRpc(
@@ -246,20 +201,15 @@ async function callManagementRpc(
   payload: Record<string, unknown> = {},
 ): Promise<unknown> {
   const accessToken = getAccessToken(res);
-
   if (!accessToken) {
     res.status(401).json({
       success: false,
       message: "Authentication required.",
     });
-
     return null;
   }
 
-  const {
-    data,
-    error,
-  } = await getSupabaseClientForAccessToken(
+  const { data, error } = await getSupabaseClientForAccessToken(
     accessToken,
   ).rpc("manage_transit_record", {
     p_entity_type: entityType,
@@ -269,7 +219,6 @@ async function callManagementRpc(
   });
 
   if (error) throw error;
-
   return data;
 }
 
@@ -281,13 +230,11 @@ router.use(requireAuth, requireRouteReviewer);
 
 router.get("/", async (_req: Request, res: Response) => {
   const accessToken = getAccessToken(res);
-
   if (!accessToken) {
     res.status(401).json({
       success: false,
       message: "Authentication required.",
     });
-
     return;
   }
 
@@ -296,6 +243,11 @@ router.get("/", async (_req: Request, res: Response) => {
       getSupabaseClientForAccessToken(accessToken),
     );
 
+    // The data loader returns the complete proposal format, including
+    // combined proposals, removals, replacements, proposed order, point
+    // edits, and contributor remarks. Keep the API response transparent so
+    // the reviewer UI receives the database-backed proposal details intact.
+    res.setHeader("Cache-Control", "no-store");
     res.json({
       success: true,
       records,
@@ -315,38 +267,32 @@ router.get("/", async (_req: Request, res: Response) => {
 
 router.post(
   "/moderation/:entityType/:id",
-  async (req, res) => {
-    const entityType = parseEntityType(
-      req.params.entityType,
-    );
-
+  async (req: Request, res: Response) => {
+    const entityType = parseEntityType(req.params.entityType);
     const id = parseId(req.params.id);
-
     const body = getObjectBody(req.body);
     const action = body?.action;
+    const moderationNote = body?.moderation_note;
 
     if (
       !entityType ||
       id === null ||
       !isModerationAction(action) ||
       Object.keys(body ?? {}).some(
-        (key) =>
-          !["action", "moderation_note"].includes(key),
+        (key) => !["action", "moderation_note"].includes(key),
       ) ||
       (
-        body?.moderation_note !== undefined &&
+        moderationNote !== undefined &&
         (
-          typeof body.moderation_note !== "string" ||
-          body.moderation_note.length > 500
+          typeof moderationNote !== "string" ||
+          moderationNote.length > 500
         )
       )
     ) {
       res.status(400).json({
         success: false,
-        message:
-          "A valid moderation action and record are required.",
+        message: "A valid moderation action and record are required.",
       });
-
       return;
     }
 
@@ -358,10 +304,7 @@ router.post(
         id,
         {
           ...(action === "reject"
-            ? {
-                moderation_note:
-                  body?.moderation_note ?? "",
-              }
+            ? { moderation_note: moderationNote ?? "" }
             : {}),
         },
       );
@@ -388,9 +331,8 @@ router.post(
 
 router.post(
   "/proposals/:id/moderation",
-  async (req, res) => {
+  async (req: Request, res: Response) => {
     const proposalId = parseId(req.params.id);
-
     const body = getObjectBody(req.body);
     const action = body?.action;
     const moderationNote = body?.moderation_note;
@@ -399,8 +341,7 @@ router.post(
       proposalId === null ||
       !isRouteChangeProposalAction(action) ||
       Object.keys(body ?? {}).some(
-        (key) =>
-          !["action", "moderation_note"].includes(key),
+        (key) => !["action", "moderation_note"].includes(key),
       ) ||
       (
         moderationNote !== undefined &&
@@ -415,26 +356,20 @@ router.post(
         message:
           "A valid route change proposal id and moderation action are required.",
       });
-
       return;
     }
 
     const accessToken = getAccessToken(res);
-
     if (!accessToken) {
       res.status(401).json({
         success: false,
         message: "Authentication required.",
       });
-
       return;
     }
 
     try {
-      const {
-        data,
-        error,
-      } = await getSupabaseClientForAccessToken(
+      const { data, error } = await getSupabaseClientForAccessToken(
         accessToken,
       ).rpc("moderate_route_change_proposal", {
         p_proposal_id: proposalId,
@@ -468,11 +403,8 @@ router.post(
 router.patch(
   "/records/:entityType/:id",
   requireAdmin,
-  async (req, res) => {
-    const entityType = parseEntityType(
-      req.params.entityType,
-    );
-
+  async (req: Request, res: Response) => {
+    const entityType = parseEntityType(req.params.entityType);
     const id = parseId(req.params.id);
     const body = getObjectBody(req.body);
 
@@ -503,9 +435,7 @@ router.patch(
               "is_active",
             ];
 
-    const payload = body
-      ? filterPayload(body, allowedFields)
-      : null;
+    const payload = body ? filterPayload(body, allowedFields) : null;
 
     if (!entityType || id === null || !payload) {
       res.status(400).json({
@@ -513,7 +443,6 @@ router.patch(
         message:
           "A valid record id and update payload are required.",
       });
-
       return;
     }
 
@@ -545,11 +474,8 @@ router.patch(
 router.delete(
   "/records/:entityType/:id",
   requireAdmin,
-  async (req, res) => {
-    const entityType = parseEntityType(
-      req.params.entityType,
-    );
-
+  async (req: Request, res: Response) => {
+    const entityType = parseEntityType(req.params.entityType);
     const id = parseId(req.params.id);
 
     if (!entityType || id === null) {
@@ -557,7 +483,6 @@ router.delete(
         success: false,
         message: "A valid record type and id are required.",
       });
-
       return;
     }
 
@@ -592,13 +517,9 @@ router.delete(
 router.post(
   "/transport-types",
   requireAdmin,
-  async (req, res) => {
+  async (req: Request, res: Response) => {
     const body = getObjectBody(req.body);
-
-    const payload = body
-      ? filterPayload(body, ["name", "color"])
-      : null;
-
+    const payload = body ? filterPayload(body, ["name", "color"]) : null;
     const name = payload?.name;
     const color = payload?.color;
 
@@ -612,10 +533,8 @@ router.post(
     ) {
       res.status(400).json({
         success: false,
-        message:
-          "A valid Transport Type name and color are required.",
+        message: "A valid Transport Type name and color are required.",
       });
-
       return;
     }
 
@@ -650,14 +569,10 @@ router.post(
 router.patch(
   "/transport-types/:id",
   requireAdmin,
-  async (req, res) => {
+  async (req: Request, res: Response) => {
     const id = parseId(req.params.id);
     const body = getObjectBody(req.body);
-
-    const payload = body
-      ? filterPayload(body, ["name", "color"])
-      : null;
-
+    const payload = body ? filterPayload(body, ["name", "color"]) : null;
     const name = payload?.name;
     const color = payload?.color;
 
@@ -675,7 +590,6 @@ router.patch(
         message:
           "A valid Transport Type id, name, and color are required.",
       });
-
       return;
     }
 

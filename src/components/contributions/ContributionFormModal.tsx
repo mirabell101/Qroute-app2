@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { MapPin } from "lucide-react";
 
@@ -28,7 +28,7 @@ import { pointKey } from "@/lib/contributions";
 type FormAction = "terminal" | "route" | "modify_route";
 type Coordinates = [number, number];
 type RoutePlacement =
-  | { status: "ready"; proposalType: "extend_route" | "insert_point" }
+  | { status: "ready"; proposalType: "extend_route" | "insert_point" | "combined" | "remove_points" }
   | { status: "error"; message: string }
   | null;
 
@@ -49,6 +49,7 @@ interface ContributionFormModalState {
   currentPosition: Coordinates | null;
   focus: Coordinates | null;
   locationMessage: string;
+  routeChangeRemarks: string;
   routePointCount: number;
   terminalPhotos: PhotoPreview[];
 }
@@ -62,6 +63,8 @@ interface ContributionFormModalData {
   existingError: string;
   optionsError: string;
   selectedExistingRoute: ExistingRoute | null;
+  selectedRouteFirstPoint: ExistingPoint | undefined;
+  selectedRouteLastPoint: ExistingPoint | undefined;
   selectedExistingRouteType: TransportTypeOption | undefined;
   selectedExistingRouteVariant: TransportVariantOption | undefined;
   selectedVehicleTypeName: string;
@@ -77,7 +80,6 @@ interface ContributionFormModalData {
   otherTerminals: ExistingPoint[];
   otherStops: ExistingPoint[];
   lastExistingPoint: ExistingPoint | undefined;
-  matchingRouteChangeCandidates: ExistingPoint[];
   inspectKey: string | null;
   inspectPoint: ExistingPoint | undefined;
   inspectRoutes: ExistingRoute[];
@@ -93,7 +95,6 @@ interface ContributionFormModalActions {
   onMapPick: (position: Coordinates) => void;
   onPickExisting: (point: ExistingPoint) => void;
   onAddExistingPoint: (point: ExistingPoint) => void;
-  onAddRouteChangeExistingPoint: (point: ExistingPoint) => void;
   onAddExistingKeys: (keys: string[]) => void;
   onSelectPoint: (key: string | null) => void;
   onMovePin: (position: Coordinates) => void;
@@ -106,7 +107,11 @@ interface ContributionFormModalActions {
   onCloseInspection: () => void;
   onRoutePointNameChange: (key: string, value: string) => void;
   onMoveRoutePointInSequence: (index: number, direction: -1 | 1) => void;
+  onMoveRoutePointTo: (fromIndex: number, toIndex: number) => void;
+  onConvertRoutePointKind: (key: string, kind: "terminal" | "stop") => void;
+  onRouteChangeRemarksChange: (value: string) => void;
   onRemoveRoutePoint: (key: string) => void;
+  onRestoreRoutePoint: (key: string) => void;
   onPointPhotoFile: (key: string, file: File) => void;
   onRemovePointPhoto: (key: string) => void;
   onTerminalPhotosChange: (files: File[]) => void;
@@ -178,10 +183,12 @@ export default function ContributionFormModal({
 }: ContributionFormModalProps) {
   const terminalPhotoInputRef = useRef<HTMLInputElement>(null);
   const pointPhotoInputRef = useRef<HTMLInputElement>(null);
+  const [showSubmitConfirmation, setShowSubmitConfirmation] = useState(false);
 
   const isRouteChange = state.formAction === "modify_route";
   const isNewRoute = state.formAction === "route";
   const isTerminal = state.formAction === "terminal";
+  const isStandalonePoint = isTerminal;
 
   const onTerminalPhotoInput = (
     event: ChangeEvent<HTMLInputElement>
@@ -267,7 +274,7 @@ export default function ContributionFormModal({
               What would you like to do?
             </p>
 
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {([
                 {
                   value: "terminal",
@@ -346,7 +353,7 @@ export default function ContributionFormModal({
                 {data.optionsError}
               </p>
             )}
-            {!isTerminal && (
+            {(isNewRoute || isRouteChange) && (
               <p className="mt-1 text-xs text-gray-500">
                 Only approved locations and routes belonging to this
                 vehicle type will be loaded.
@@ -374,9 +381,9 @@ export default function ContributionFormModal({
                 )} disabled:bg-gray-100`}
               >
                 <option value="">
-                  {state.vehicleTypeId
-                    ? "Choose a variant..."
-                    : "Choose a vehicle type first"}
+                  {!state.vehicleTypeId
+                    ? "Choose a vehicle type first"
+                    : "Choose a vehicle variant..."}
                 </option>
                 {data.typeVariants.map((variant) => (
                   <option key={variant.id} value={variant.id}>
@@ -462,6 +469,11 @@ export default function ContributionFormModal({
                     Route ID #{data.selectedExistingRoute.id} will remain
                     unchanged.
                   </p>
+                  <p className="mt-1 text-xs text-gray-700">
+                    Current endpoints: <strong>{data.selectedRouteFirstPoint?.name ?? "Unknown start"}</strong>
+                    {" → "}
+                    <strong>{data.selectedRouteLastPoint?.name ?? "Unknown end"}</strong>
+                  </p>
                 </div>
               )}
             </div>
@@ -491,12 +503,13 @@ export default function ContributionFormModal({
             <div
               className={`isolate h-[390px] overflow-hidden rounded-xl border ${
                 state.showValidation &&
-                ((isTerminal && !state.pin) ||
-                  (isNewRoute &&
-                    (!state.variantId || state.routePointCount < 2)) ||
+                ((isStandalonePoint && !state.pin) ||
+                  (isNewRoute && !state.variantId) ||
+                  (isNewRoute && state.routePointCount < 2) ||
                   (isRouteChange &&
                     (!data.selectedExistingRoute ||
-                      state.routePointCount < 1)))
+                      (state.routePointCount < 1 &&
+                        !data.routeSequenceEntries.some((entry) => entry.pendingRemoval)))))
                   ? "border-red-500"
                   : "border-gray-300"
               }`}
@@ -506,6 +519,7 @@ export default function ContributionFormModal({
                 currentPosition={state.currentPosition}
                 focus={state.focus}
                 pin={state.pin}
+                pinName={state.name}
                 routeMarkers={data.routeMarkers}
                 candidatePoints={data.candidatePoints}
                 routeColor={data.activeRouteColor}
@@ -515,33 +529,39 @@ export default function ContributionFormModal({
                 selectedPreviewRouteId={state.selectedPreviewRouteId}
                 selectedPointKey={state.selectedPointKey}
                 connectedKeys={data.connectedKeys}
+                fitBoundsKey={isRouteChange
+                  ? state.selectedExistingRouteId ? `route-${state.selectedExistingRouteId}` : ""
+                  : isNewRoute && data.inspectKey
+                    ? `inspect-${data.inspectKey}-${state.selectedPreviewRouteId ?? "all"}`
+                    : ""}
                 onPick={actions.onMapPick}
                 onPickExisting={actions.onPickExisting}
                 onSelectPoint={actions.onSelectPoint}
                 onMovePin={actions.onMovePin}
                 onMoveRoutePoint={actions.onMoveRoutePoint}
+                onPinNameChange={actions.onNameChange}
+                onRoutePointNameChange={actions.onRoutePointNameChange}
               />
             </div>
 
             <p className="mt-1 text-xs text-gray-500">
               {state.locationMessage ||
-                (isTerminal
-                  ? "Tap the map or drag the vehicle marker to position the terminal."
+                (isStandalonePoint
+                  ? "Tap the map or drag the marker to position the terminal."
                   : isRouteChange
                     ? !data.selectedExistingRoute
                       ? "Choose a vehicle type and an approved route to display its points."
-                      : "Tap the map to add a new stop. Its position in the route is calculated automatically."
+                      : "Tap the map to add a location, drag existing route markers to suggest coordinate corrections, and reorder stops below."
                     : !state.vehicleTypeId || !state.variantId
                       ? "Choose a vehicle type and variant before adding route points."
-                      : data.selectedExistingRouteVariant?.fare_model === "matrix" ||
-                          data.typeVariants.find(
-                            (variant) => String(variant.id) === state.variantId
-                          )?.fare_model === "matrix"
+                      : data.typeVariants.find(
+                          (variant) => String(variant.id) === state.variantId
+                        )?.fare_model === "matrix"
                         ? "Tap the map to add train stations, or select approved stations."
-                        : "The first point is a terminal. Subsequent points are stops.")}
+                        : "Tap the map to add road stops. A terminal is optional; you can convert an endpoint to a terminal in the sequence below.")}
             </p>
 
-            {isTerminal && state.pin && (
+            {isStandalonePoint && state.pin && (
               <p className="mt-1 text-[11px] text-gray-500">
                 {state.pin[0].toFixed(5)}, {state.pin[1].toFixed(5)}
               </p>
@@ -560,33 +580,73 @@ export default function ContributionFormModal({
                 }
                 description={
                   isRouteChange
-                    ? "Original points stay in order. New stops are automatically inserted according to their coordinates."
-                    : "The terminal is the starting point. Stop numbering begins at #1."
+                    ? "Newly placed stops open a name popup on the marker. You can edit names, drag markers to suggest coordinate corrections, reorder road stops, attach photos, convert stops and terminals, or request removal of any existing stop or terminal. Conversions and removals require moderator approval. A removed shared location is soft-deleted only if no other route still uses it; otherwise it remains available to those routes."
+                    : "Terminals are optional route endpoints. Stops can form a complete route on their own."
                 }
                 selectedKey={state.selectedPointKey}
                 showValidation={state.showValidation}
                 onSelect={actions.onSelectPoint}
                 onNameChange={actions.onRoutePointNameChange}
                 onMove={actions.onMoveRoutePointInSequence}
+                onMoveTo={actions.onMoveRoutePointTo}
+                onConvertToKind={actions.onConvertRoutePointKind}
                 onRemove={actions.onRemoveRoutePoint}
+                onRestore={actions.onRestoreRoutePoint}
                 onChoosePhoto={selectPointPhoto}
                 onRemovePhoto={actions.onRemovePointPhoto}
               />
             )}
 
-          {isRouteChange && state.routePointCount > 0 && (
+          {isRouteChange && (
+            <div>
+              <label
+                htmlFor="route-change-remarks"
+                className="mb-1.5 block text-sm font-semibold text-gray-800"
+              >
+                Reason / remarks for this proposal (optional)
+              </label>
+              <textarea
+                id="route-change-remarks"
+                value={state.routeChangeRemarks}
+                maxLength={1000}
+                onChange={(event) =>
+                  actions.onRouteChangeRemarksChange(event.target.value)
+                }
+                disabled={state.submitting}
+                rows={3}
+                placeholder="Explain what changed, why this route needs updating, or add details that may help the reviewer."
+                className="w-full resize-y rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#12395A] focus:ring-1 focus:ring-[#12395A] disabled:bg-gray-100"
+              />
+              <p className="mt-1 text-right text-[11px] text-gray-500">
+                {state.routeChangeRemarks.length}/1000
+              </p>
+            </div>
+          )}
+
+          {isRouteChange && (
             <div>
               {data.routeChangePlacement?.status === "ready" && (
                 <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2.5">
                   <p className="text-sm font-semibold text-green-800">
-                    {data.routeChangePlacement.proposalType === "extend_route"
-                      ? "Route extension detected"
-                      : "Internal route insertion detected"}
+                    {data.routeChangePlacement.proposalType === "remove_points"
+                      ? "Route removal request detected"
+                      : data.routeChangePlacement.proposalType === "combined"
+                        ? "Combined route changes detected"
+                        : data.routeChangePlacement.proposalType === "extend_route"
+                          ? "Route extension detected"
+                          : "Internal route insertion detected"}
                   </p>
                   <p className="mt-1 text-xs leading-relaxed text-green-800">
-                    {data.routeChangePlacement.proposalType === "extend_route"
-                      ? "The new stop will be appended after the existing final location."
-                      : "The new stop will be inserted between the closest matching existing route locations."}
+                    {data.routeChangePlacement.proposalType === "remove_points"
+                      ? "The marked locations will only be removed after moderator approval. A shared stop or terminal will be soft-deleted only when no other route still uses it."
+                      : data.routeChangePlacement.proposalType === "combined"
+                        ? "This proposal can add locations between existing route points and beyond the current final point in one submission."
+                        : data.routeChangePlacement.proposalType === "extend_route"
+                          ? "The new location will be appended after the existing final location."
+                          : "The new location will be inserted between existing route locations."}
+                    {data.routeChangePlacement.proposalType !== "remove_points" &&
+                      data.routeSequenceEntries.some((entry) => entry.pendingRemoval) &&
+                      " Marked existing locations will also be removed only after moderator approval; a shared location is soft-deleted only if no other route still uses it."}
                   </p>
                 </div>
               )}
@@ -602,7 +662,9 @@ export default function ContributionFormModal({
 
               {!data.routeChangePlacement && (
                 <p className="text-xs text-gray-500">
-                  Add a point to calculate the proposed route sequence.
+                  {state.routePointCount === 0
+                    ? "Add a new location, convert an existing stop or terminal, or select a route location for removal. You can also adjust existing names and positions before submitting."
+                    : "The proposed route sequence is being calculated."}
                 </p>
               )}
             </div>
@@ -632,7 +694,8 @@ export default function ContributionFormModal({
 
           {isRouteChange &&
             data.routeChangePlacement?.status === "ready" &&
-            data.routeChangePlacement.proposalType === "extend_route" && (
+            (data.routeChangePlacement.proposalType === "extend_route" ||
+              data.routeChangePlacement.proposalType === "combined") && (
               <div>
                 <label
                   htmlFor="proposed-route-name"
@@ -652,8 +715,8 @@ export default function ContributionFormModal({
                   className={fieldClass(false)}
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  The suggested name uses the starting terminal and latest
-                  stop. You can edit or clear it.
+                  The suggested name uses the first and final route locations.
+                  You can edit or clear it.
                 </p>
               </div>
             )}
@@ -667,7 +730,7 @@ export default function ContributionFormModal({
               </p>
             )}
 
-          {isTerminal && (
+          {isStandalonePoint && (
             <>
               <div>
                 <label
@@ -803,60 +866,6 @@ export default function ContributionFormModal({
               <p className="mt-1 text-xs text-gray-500">
                 Choose a compatible approved terminal or stop, or select its
                 marker on the map.
-              </p>
-            </div>
-          )}
-
-          {isRouteChange && data.selectedExistingRoute && (
-            <div>
-              <label
-                htmlFor="route-change-existing-point"
-                className="mb-1.5 block text-sm font-medium text-gray-700"
-              >
-                Add an existing approved stop (optional)
-              </label>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1.4fr]">
-                <input
-                  aria-label="Search compatible approved stops"
-                  value={state.existingQuery}
-                  onChange={(event) =>
-                    actions.onExistingQueryChange(event.target.value)
-                  }
-                  disabled={state.submitting}
-                  placeholder="Search by name..."
-                  className={fieldClass(false)}
-                />
-                <select
-                  id="route-change-existing-point"
-                  value=""
-                  disabled={data.catalogLoading || state.submitting}
-                  onChange={(event) => {
-                    const point = data.existingByKey.get(event.target.value);
-                    if (point) actions.onAddRouteChangeExistingPoint(point);
-                  }}
-                  className={`${fieldClass(false)} disabled:bg-gray-100`}
-                >
-                  <option value="">
-                    {data.catalogLoading
-                      ? "Loading compatible stops..."
-                      : data.matchingRouteChangeCandidates.length === 0
-                        ? "No compatible existing stops"
-                        : "Choose an existing stop..."}
-                  </option>
-                  {data.matchingRouteChangeCandidates.map((point) => {
-                    const key = pointKey(point.kind, point.id);
-                    return (
-                      <option key={key} value={key}>
-                        {existingPointTypeLabel(point)}: {point.name}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-              <p className="mt-1 text-xs text-gray-500">
-                Existing stops are placed automatically according to their
-                coordinates. Their coordinates are never modified by this
-                proposal.
               </p>
             </div>
           )}
@@ -1029,7 +1038,7 @@ export default function ContributionFormModal({
             />
           ) : null}
 
-          {isTerminal && (
+          {isStandalonePoint && (
             <>
               <PhotoUploadGrid
                 photos={state.terminalPhotos}
@@ -1060,7 +1069,7 @@ export default function ContributionFormModal({
           </button>
           <button
             type="button"
-            onClick={actions.onSubmit}
+            onClick={() => setShowSubmitConfirmation(true)}
             disabled={state.submitting}
             className="rounded-lg bg-[#12395A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1b4b6f] disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -1071,6 +1080,56 @@ export default function ContributionFormModal({
                 : "Submit for review"}
           </button>
         </div>
+
+        {showSubmitConfirmation && (
+          <div
+            className="fixed inset-0 z-[7000] flex items-center justify-center bg-black/55 p-4"
+            onClick={() => setShowSubmitConfirmation(false)}
+          >
+            <div
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="confirm-contribution-title"
+              className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 id="confirm-contribution-title" className="text-base font-semibold text-gray-900">
+                Confirm submission
+              </h3>
+              <p className="mt-2 text-sm leading-relaxed text-gray-600">
+                {isRouteChange
+                  ? data.routeChangePlacement?.status === "ready" &&
+                    data.routeChangePlacement.proposalType === "remove_points"
+                    ? "Submit this route-location removal request for moderator review? Nothing will be removed unless the proposal is approved. A shared location will only be soft-deleted if no other route still uses it."
+                    : data.routeSequenceEntries.some((entry) => entry.pendingRemoval)
+                      ? "Submit this route-change proposal for moderator review? It also requests removal of the marked locations. No route changes or soft-deletions will happen unless the proposal is approved."
+                      : "Submit this route-change proposal for moderator review? The approved route will remain unchanged until it is approved."
+                  : "Submit this contribution for review? It will only appear on the map after approval."}
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSubmitConfirmation(false)}
+                  disabled={state.submitting}
+                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Go back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSubmitConfirmation(false);
+                    actions.onSubmit();
+                  }}
+                  disabled={state.submitting}
+                  className="rounded-lg bg-[#12395A] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1b4b6f] disabled:opacity-50"
+                >
+                  Confirm submission
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );

@@ -40,6 +40,10 @@ import {
   attachMapImage,
   validateImage,
 } from "@/lib/mapImages";
+import {
+  attachRouteChangeProposalImage,
+  submitRouteChangeProposalWithEdits,
+} from "@/lib/routeChangeProposals";
 
 import {
   getMyContributions,
@@ -47,12 +51,10 @@ import {
   getTransportOptions,
   pointKey,
   submitContribution,
-  submitRouteChangeProposal,
 } from "@/lib/contributions";
 
 import type {
   ContributionInput,
-  ContributionKind,
   ExistingPoint,
   ExistingRoute,
   MyContribution,
@@ -60,7 +62,6 @@ import type {
   PointInput,
   PointKind,
   RouteChangePointInput,
-  RouteChangeProposalInput,
   StopKind,
   TransportTypeOption,
   TransportVariantOption,
@@ -87,6 +88,13 @@ interface PhotoItem {
   previewUrl: string;
 }
 
+interface RouteChangePointEdit {
+  name: string;
+  photo: PhotoItem | null;
+  latitude?: number;
+  longitude?: number;
+}
+
 interface RoutePoint {
   key: string;
   kind: PointKind;
@@ -97,6 +105,8 @@ interface RoutePoint {
   latitude: number;
   longitude: number;
   photo: PhotoItem | null;
+  /** Canonical order of the original route point replaced by this new point. */
+  replacesPointKey?: string;
 }
 
 interface AutomaticBasePoint extends RoutePlacementPoint {
@@ -189,7 +199,7 @@ export default function Contribution({
   // Draft mode and fields
   const [formAction, setFormAction] = useState<FormAction>("terminal");
   const isRouteChange = formAction === "modify_route";
-  const kind: ContributionKind = formAction === "terminal" ? "terminal" : "route";
+  const kind = formAction === "terminal" ? "terminal" : "route";
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [routeNameEdited, setRouteNameEdited] = useState(false);
@@ -212,6 +222,16 @@ export default function Contribution({
   // Map and route draft
   const [pin, setPin] = useState<Coordinates | null>(null);
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
+  // Draft-only edits for original points in the approved route.
+  // These are stored with the proposal and never mutate shared rows while pending.
+  const [routeChangeEdits, setRouteChangeEdits] = useState<Record<string, RouteChangePointEdit>>({});
+  // A point-type change on an approved route is a route-specific replacement.
+  // The original shared location remains intact for every other route.
+  const [routeChangeRemovedKeys, setRouteChangeRemovedKeys] = useState<string[]>([]);
+  const [routeChangeRemarks, setRouteChangeRemarks] = useState("");
+  // When a contributor manually reorders or moves a marker, preserve the
+  // visible sequence instead of letting coordinate-based placement reset it.
+  const [routeChangeOrder, setRouteChangeOrder] = useState<string[] | null>(null);
   const [currentPosition, setCurrentPosition] = useState<Coordinates | null>(null);
   const [focus, setFocus] = useState<Coordinates | null>(null);
   const [locationMessage, setLocationMessage] = useState("");
@@ -378,7 +398,10 @@ export default function Contribution({
         return point.kind === "stop" && point.stopType === "train_station";
       }
 
-      if (routePoints.length === 0) return point.kind === "terminal";
+      // A route may consist entirely of road stops. A catalog terminal may
+      // be selected as the first point; the final point can be converted to
+      // a terminal from the sequence editor.
+      if (routePoints.length === 0 && point.kind === "terminal") return true;
       return point.kind === "stop" && point.stopType === "road_stop";
     });
   }, [formAction, vehicleTypeId, selectedVariant, existingPoints, usedKeys, routePoints.length]);
@@ -426,51 +449,47 @@ export default function Contribution({
     [selectedExistingRoute]
   );
 
-  const routeChangeCandidates = useMemo(() => {
-    if (!selectedExistingRoute || !selectedExistingRouteVariant) return [];
+  const selectedRouteFirstPoint = selectedExistingRoute
+    ? existingByKey.get(selectedExistingRoute.keys[0] ?? "")
+    : undefined;
+  const selectedRouteLastPoint = selectedExistingRoute
+    ? existingByKey.get(selectedExistingRoute.keys[selectedExistingRoute.keys.length - 1] ?? "")
+    : undefined;
 
-    return existingPoints.filter((point) => {
-      if (
-        point.kind !== "stop" ||
-        point.transportTypeId !== selectedExistingRoute.transportTypeId
-      ) return false;
-
-      const key = pointKey(point.kind, point.id);
-      if (routeChangeBaseKeys.has(key) || usedKeys.has(key)) return false;
-
-      return selectedExistingRouteVariant.fare_model === "matrix"
-        ? point.stopType === "train_station"
-        : point.stopType === "road_stop";
-    });
-  }, [
-    existingPoints,
-    selectedExistingRoute,
-    selectedExistingRouteVariant,
-    routeChangeBaseKeys,
-    usedKeys,
-  ]);
-
-  const matchingRouteChangeCandidates = routeChangeCandidates.filter(matches);
-
-  // Build an ordered route proposal from coordinates, without a distance cutoff.
-  const routeChangePlacement = useMemo(() => {
+  // Keep the coordinate-based placement as the legacy/base sequence. The
+  // submitted RPC still receives this order so its existing route-snapshot
+  // and insertion checks continue to work unchanged.
+  const automaticRouteChangePlacement = useMemo(() => {
     if (
       !isRouteChange ||
       !selectedExistingRoute ||
-      routePoints.length === 0 ||
-      routeChangeBasePoints.length !== selectedExistingRoute.keys.length
+      routeChangeBasePoints.length !== selectedExistingRoute.keys.length ||
+      (routePoints.length === 0 && routeChangeRemovedKeys.length === 0)
     ) return null;
 
-    const basePoints: AutomaticBasePoint[] = routeChangeBasePoints.map((point) => ({
-      key: pointKey(point.kind, point.id),
-      name: point.name,
-      latitude: point.latitude,
-      longitude: point.longitude,
-      source: "base",
-      kind: point.kind,
-      existingId: point.id,
-      point,
-    }));
+    const basePoints: AutomaticBasePoint[] = routeChangeBasePoints.map((point) => {
+      const key = pointKey(point.kind, point.id);
+      const edit = routeChangeEdits[key];
+      return {
+        key,
+        name: edit?.name ?? point.name,
+        latitude: edit?.latitude ?? point.latitude,
+        longitude: edit?.longitude ?? point.longitude,
+        source: "base",
+        kind: point.kind,
+        existingId: point.id,
+        point,
+      };
+    });
+
+    if (routePoints.length === 0) {
+      return {
+        status: "ready" as const,
+        proposalType: "remove_points" as const,
+        points: basePoints,
+        placements: [],
+      };
+    }
 
     const additionPoints: AutomaticAdditionPoint[] = routePoints.map((point) => ({
       key: point.key,
@@ -484,21 +503,115 @@ export default function Contribution({
     }));
 
     return buildAutomaticRouteSequence(basePoints, additionPoints);
-  }, [isRouteChange, selectedExistingRoute, routeChangeBasePoints, routePoints]);
+  }, [
+    isRouteChange,
+    selectedExistingRoute,
+    routeChangeBasePoints,
+    routePoints,
+    routeChangeEdits,
+    routeChangeRemovedKeys,
+  ]);
+
+  // Apply the contributor's manual order over the automatic placement. Newly
+  // added points retain their calculated relative insertion when possible.
+  const routeChangePlacement = useMemo(() => {
+    const placement = automaticRouteChangePlacement;
+    if (!placement || placement.status !== "ready") return placement;
+
+    const removedKeys = new Set(routeChangeRemovedKeys);
+    const activePoints = placement.points.filter((point) => !removedKeys.has(point.key));
+    if (activePoints.length < 2) {
+      return {
+        status: "error" as const,
+        reason: "invalid_route" as const,
+        message: "A route must retain at least two locations after the requested removals.",
+      };
+    }
+    if (!routeChangeOrder?.length) {
+      return { ...placement, points: activePoints };
+    }
+
+    const byKey = new Map(activePoints.map((point) => [point.key, point] as const));
+    const ordered = routeChangeOrder.flatMap((key) => {
+      const point = byKey.get(key);
+      return point ? [point] : [];
+    });
+    const seen = new Set(ordered.map((point) => point.key));
+
+    for (let index = 0; index < activePoints.length; index += 1) {
+      const point = activePoints[index];
+      if (!point || seen.has(point.key)) continue;
+
+      const nextKnownKey = activePoints
+        .slice(index + 1)
+        .find((candidate) => seen.has(candidate.key))?.key;
+
+      if (nextKnownKey) {
+        const insertAt = ordered.findIndex((candidate) => candidate.key === nextKnownKey);
+        ordered.splice(insertAt < 0 ? ordered.length : insertAt, 0, point);
+      } else {
+        const previousKnownKey = activePoints
+          .slice(0, index)
+          .reverse()
+          .find((candidate) => seen.has(candidate.key))?.key;
+        const previousIndex = previousKnownKey
+          ? ordered.findIndex((candidate) => candidate.key === previousKnownKey)
+          : -1;
+        ordered.splice(previousIndex < 0 ? ordered.length : previousIndex + 1, 0, point);
+      }
+      seen.add(point.key);
+    }
+
+    return { ...placement, points: ordered };
+  }, [automaticRouteChangePlacement, routeChangeOrder, routeChangeRemovedKeys]);
+
+  const newRouteNameSuggestion = useMemo(() => {
+    if (formAction !== "route" || routePoints.length < 2) return null;
+
+    const effectivePoints = routePoints.map((point) => ({
+      key: point.key,
+      latitude: point.latitude,
+      longitude: point.longitude,
+      name: point.existingId === null
+        ? point.name
+        : existingByKey.get(pointKey(point.kind, point.existingId))?.name ?? point.name,
+    }));
+
+    return suggestExtendedRouteName(effectivePoints);
+  }, [formAction, routePoints, existingByKey]);
 
   const routeNameSuggestion = useMemo(() => {
     if (
       routeChangePlacement?.status !== "ready" ||
-      routeChangePlacement.proposalType !== "extend_route"
+      !routeChangePlacement.placements.some((placement) => placement.placement === "extend")
     ) return null;
 
-    return suggestExtendedRouteName(routeChangePlacement.points);
-  }, [routeChangePlacement]);
+    const effectivePoints = routeChangePlacement.points.map((item) => ({
+      ...item,
+      name: item.source === "base"
+        ? routeChangeEdits[item.key]?.name ?? item.name
+        : item.name,
+    }));
+
+    return suggestExtendedRouteName(effectivePoints);
+  }, [routeChangePlacement, routeChangeEdits]);
 
   useEffect(() => {
-    if (!isRouteChange || routeNameEdited) return;
-    setName(routeNameSuggestion ?? "");
-  }, [isRouteChange, routeNameEdited, routeNameSuggestion]);
+    if (routeNameEdited) return;
+    if (formAction === "route") {
+      setName(newRouteNameSuggestion ?? "");
+      return;
+    }
+    if (isRouteChange) {
+      setName(routeNameSuggestion ?? "");
+    }
+  }, [
+    formAction,
+    isRouteChange,
+    routeNameEdited,
+    newRouteNameSuggestion,
+    routeNameSuggestion,
+  ]);
 
   // Existing route inspection (used while creating a new route)
   const inspectPoint = inspectKey ? existingByKey.get(inspectKey) : undefined;
@@ -526,38 +639,49 @@ export default function Contribution({
     [inspectRoutes, existingByKey, types]
   );
 
-  // Complete sequence shown below the map
+  // Complete sequence shown below the map. Every point in a route-change
+  // proposal is editable, including original shared points and reused points.
   const routeSequenceEntries = useMemo<RouteSequenceEntry[]>(() => {
     if (isRouteChange) {
       if (routeChangePlacement?.status === "ready") {
         let stopNumber = 0;
 
-        return routeChangePlacement.points.map((item): RouteSequenceEntry => {
+        const activeEntryCount = routeChangePlacement.points.length;
+        const activeEntries = routeChangePlacement.points.map((item, index): RouteSequenceEntry => {
           if (item.source === "base") {
             const point = item.point;
+            const edit = routeChangeEdits[item.key];
             if (point.kind === "stop") stopNumber += 1;
 
             return {
               key: item.key,
               kind: point.kind,
-              name: point.name,
+              name: edit?.name ?? point.name,
               stopNumber: point.kind === "stop" ? stopNumber : null,
               typeLabel: existingPointTypeLabel(point),
               existing: true,
-              editable: false,
-              draftIndex: null,
-              canMove: false,
-              canRemove: false,
-              canUpload: false,
-              photoPreviewUrl: null,
-              photoFileName: null,
+              editable: true,
+              draftIndex: index,
+              canMove: point.kind === "stop",
+              canConvertToStop:
+                point.kind === "terminal" &&
+                selectedExistingRouteVariant?.fare_model === "distance",
+              canConvertToTerminal:
+                point.kind === "stop" &&
+                point.stopType === "road_stop" &&
+                selectedExistingRouteVariant?.fare_model === "distance",
+              canRemove: activeEntryCount > 2,
+              canRestore: false,
+              pendingRemoval: false,
+              canUpload: true,
+              photoPreviewUrl: edit?.photo?.previewUrl ?? null,
+              photoFileName: edit?.photo?.file.name ?? null,
               positionPending: false,
             };
           }
 
           const point = item.point;
           const isExisting = point.existingId !== null;
-          const draftIndex = routePoints.findIndex((draft) => draft.key === point.key);
           if (point.kind === "stop") stopNumber += 1;
 
           return {
@@ -567,42 +691,110 @@ export default function Contribution({
             stopNumber: point.kind === "stop" ? stopNumber : null,
             typeLabel: routePointTypeLabel(point),
             existing: isExisting,
-            editable: !isExisting,
-            draftIndex: draftIndex >= 0 ? draftIndex : null,
-            canMove: false,
-            canRemove: true,
-            canUpload: !isExisting && point.kind === "stop",
-            photoPreviewUrl: isExisting ? null : point.photo?.previewUrl ?? null,
-            photoFileName: isExisting ? null : point.photo?.file.name ?? null,
+            editable: true,
+            draftIndex: index,
+            canMove: point.kind === "stop",
+            canConvertToStop:
+              point.kind === "terminal" &&
+              selectedExistingRouteVariant?.fare_model === "distance",
+            canConvertToTerminal:
+              point.kind === "stop" &&
+              point.stopType === "road_stop" &&
+              selectedExistingRouteVariant?.fare_model === "distance",
+            canRemove: activeEntryCount > 2,
+            canRestore: false,
+            pendingRemoval: false,
+            canUpload: true,
+            photoPreviewUrl: point.photo?.previewUrl ?? null,
+            photoFileName: point.photo?.file.name ?? null,
             positionPending: false,
           };
         });
+        const replacedOriginalKeys = new Set(
+          routePoints.flatMap((point) => point.replacesPointKey ? [point.replacesPointKey] : [])
+        );
+        const pendingRemovalEntries = routeChangeBasePoints.flatMap((point): RouteSequenceEntry[] => {
+          const key = pointKey(point.kind, point.id);
+          if (!routeChangeRemovedKeys.includes(key) || replacedOriginalKeys.has(key)) return [];
+          const edit = routeChangeEdits[key];
+          return [{
+            key,
+            kind: point.kind,
+            name: edit?.name ?? point.name,
+            stopNumber: null,
+            typeLabel: existingPointTypeLabel(point),
+            existing: true,
+            editable: false,
+            draftIndex: null,
+            canMove: false,
+            canConvertToStop: false,
+            canConvertToTerminal: false,
+            canRemove: false,
+            canRestore: true,
+            pendingRemoval: true,
+            canUpload: false,
+            photoPreviewUrl: edit?.photo?.previewUrl ?? null,
+            photoFileName: edit?.photo?.file.name ?? null,
+            positionPending: false,
+          }];
+        });
+        return [...activeEntries, ...pendingRemovalEntries];
       }
 
+      const baseByKey = new Map(routeChangeBasePoints.map((point) => [
+        pointKey(point.kind, point.id),
+        point,
+      ] as const));
+      const removedKeys = new Set(routeChangeRemovedKeys);
+      const fallbackBasePoints = routeChangeOrder?.length
+        ? [
+            ...routeChangeOrder.flatMap((key) => {
+              const point = baseByKey.get(key);
+              return point && !removedKeys.has(key) ? [point] : [];
+            }),
+            ...routeChangeBasePoints.filter((point) => {
+              const key = pointKey(point.kind, point.id);
+              return !removedKeys.has(key) && !routeChangeOrder.includes(key);
+            }),
+          ]
+        : routeChangeBasePoints.filter((point) =>
+            !removedKeys.has(pointKey(point.kind, point.id))
+          );
       let stopNumber = 0;
-      const entries: RouteSequenceEntry[] = routeChangeBasePoints.map((point) => {
+      const entries: RouteSequenceEntry[] = fallbackBasePoints.map((point, index) => {
+        const key = pointKey(point.kind, point.id);
+        const edit = routeChangeEdits[key];
         if (point.kind === "stop") stopNumber += 1;
         return {
-          key: pointKey(point.kind, point.id),
+          key,
           kind: point.kind,
-          name: point.name,
+          name: edit?.name ?? point.name,
           stopNumber: point.kind === "stop" ? stopNumber : null,
           typeLabel: existingPointTypeLabel(point),
           existing: true,
-          editable: false,
-          draftIndex: null,
-          canMove: false,
-          canRemove: false,
-          canUpload: false,
-          photoPreviewUrl: null,
-          photoFileName: null,
+          editable: true,
+          draftIndex: index,
+          canMove: point.kind === "stop",
+          canConvertToStop:
+            point.kind === "terminal" &&
+            selectedExistingRouteVariant?.fare_model === "distance",
+          canConvertToTerminal:
+            point.kind === "stop" &&
+            point.stopType === "road_stop" &&
+            selectedExistingRouteVariant?.fare_model === "distance",
+          canRemove: fallbackBasePoints.length + routePoints.length > 2,
+          canRestore: false,
+          pendingRemoval: false,
+          canUpload: true,
+          photoPreviewUrl: edit?.photo?.previewUrl ?? null,
+          photoFileName: edit?.photo?.file.name ?? null,
           positionPending: false,
         };
       });
 
       for (const point of routePoints) {
         const isExisting = point.existingId !== null;
-        const draftIndex = routePoints.findIndex((draft) => draft.key === point.key);
+        const draftIndex = entries.length;
         entries.push({
           key: point.key,
           kind: point.kind,
@@ -610,18 +802,55 @@ export default function Contribution({
           stopNumber: null,
           typeLabel: routePointTypeLabel(point),
           existing: isExisting,
-          editable: !isExisting,
+          editable: true,
           draftIndex: draftIndex >= 0 ? draftIndex : null,
-          canMove: false,
-          canRemove: true,
-          canUpload: !isExisting && point.kind === "stop",
-          photoPreviewUrl: isExisting ? null : point.photo?.previewUrl ?? null,
-          photoFileName: isExisting ? null : point.photo?.file.name ?? null,
+          canMove: point.kind === "stop",
+          canConvertToStop:
+            point.kind === "terminal" &&
+            selectedExistingRouteVariant?.fare_model === "distance",
+          canConvertToTerminal:
+            point.kind === "stop" &&
+            point.stopType === "road_stop" &&
+            selectedExistingRouteVariant?.fare_model === "distance",
+          canRemove: fallbackBasePoints.length + routePoints.length > 2,
+          canRestore: false,
+          pendingRemoval: false,
+          canUpload: true,
+          photoPreviewUrl: point.photo?.previewUrl ?? null,
+          photoFileName: point.photo?.file.name ?? null,
           positionPending: true,
         });
       }
 
-      return entries;
+      const replacedOriginalKeys = new Set(
+        routePoints.flatMap((point) => point.replacesPointKey ? [point.replacesPointKey] : [])
+      );
+      const pendingRemovalEntries = routeChangeBasePoints.flatMap((point): RouteSequenceEntry[] => {
+        const key = pointKey(point.kind, point.id);
+        if (!routeChangeRemovedKeys.includes(key) || replacedOriginalKeys.has(key)) return [];
+        const edit = routeChangeEdits[key];
+        return [{
+          key,
+          kind: point.kind,
+          name: edit?.name ?? point.name,
+          stopNumber: null,
+          typeLabel: existingPointTypeLabel(point),
+          existing: true,
+          editable: false,
+          draftIndex: null,
+          canMove: false,
+          canConvertToStop: false,
+          canConvertToTerminal: false,
+          canRemove: false,
+          canRestore: true,
+          pendingRemoval: true,
+          canUpload: false,
+          photoPreviewUrl: edit?.photo?.previewUrl ?? null,
+          photoFileName: edit?.photo?.file.name ?? null,
+          positionPending: false,
+        }];
+      });
+      return [...entries, ...pendingRemovalEntries];
     }
 
     return routePoints.map((point, index): RouteSequenceEntry => ({
@@ -633,43 +862,89 @@ export default function Contribution({
       existing: point.existingId !== null,
       editable: point.existingId === null,
       draftIndex: index,
-      canMove: true,
+      canMove: point.kind === "stop",
+      canConvertToStop:
+        point.kind === "terminal" &&
+        (index === 0 || index === routePoints.length - 1) &&
+        selectedVariant?.fare_model === "distance",
+      canConvertToTerminal:
+        point.kind === "stop" &&
+        point.stopType === "road_stop" &&
+        (index === 0 || index === routePoints.length - 1) &&
+        selectedVariant?.fare_model === "distance",
       canRemove: true,
+      canRestore: false,
+      pendingRemoval: false,
       canUpload: point.existingId === null && point.kind === "stop",
       photoPreviewUrl: point.existingId === null ? point.photo?.previewUrl ?? null : null,
       photoFileName: point.existingId === null ? point.photo?.file.name ?? null : null,
       positionPending: false,
     }));
-  }, [isRouteChange, routeChangePlacement, routeChangeBasePoints, routePoints]);
+  }, [
+    isRouteChange,
+    routeChangePlacement,
+    routeChangeBasePoints,
+    routePoints,
+    routeChangeEdits,
+    routeChangeOrder,
+    routeChangeRemovedKeys,
+    selectedExistingRouteVariant,
+  ]);
 
   const routeMarkers = useMemo<ContributionMapMarker[]>(
-    () => routeSequenceEntries.map((entry) => {
-      const point = entry.draftIndex !== null
-        ? routePoints[entry.draftIndex]
-        : existingByKey.get(entry.key);
+    () => routeSequenceEntries.filter((entry) => !entry.pendingRemoval).map((entry) => {
+      const draftPoint = isRouteChange
+        ? routePoints.find((point) => point.key === entry.key)
+        : entry.draftIndex !== null
+          ? routePoints[entry.draftIndex]
+          : undefined;
+      const existingPoint = existingByKey.get(entry.key);
+      const edit = routeChangeEdits[entry.key];
+      const latitude = draftPoint?.latitude ?? edit?.latitude ?? existingPoint?.latitude ?? 0;
+      const longitude = draftPoint?.longitude ?? edit?.longitude ?? existingPoint?.longitude ?? 0;
 
       return {
         key: entry.key,
         kind: entry.kind,
         name: entry.name,
-        latitude: point?.latitude ?? 0,
-        longitude: point?.longitude ?? 0,
+        latitude,
+        longitude,
         stopNumber: entry.stopNumber,
+        // In route-change mode this index represents the complete proposed
+        // sequence (not only the additions array), so original markers can move.
         draftIndex: entry.draftIndex,
-        draggable: entry.draftIndex !== null && !entry.existing,
+        draggable: isRouteChange
+          ? true
+          : entry.draftIndex !== null && !entry.existing,
+        isNewPoint: draftPoint !== undefined && draftPoint.existingId === null,
       };
     }),
-    [routeSequenceEntries, routePoints, existingByKey]
+    [isRouteChange, routeSequenceEntries, routePoints, existingByKey, routeChangeEdits]
   );
 
   const routeLinePositions = useMemo<Coordinates[]>(() => {
-    if (isRouteChange && routeChangePlacement?.status === "ready") {
-      return getCoordinates(routeChangePlacement.points);
+    if (isRouteChange) {
+      return routeSequenceEntries.filter((entry) => !entry.pendingRemoval).flatMap((entry): Coordinates[] => {
+        const draftPoint = routePoints.find((point) => point.key === entry.key);
+        const existingPoint = existingByKey.get(entry.key);
+        const edit = routeChangeEdits[entry.key];
+        const latitude = draftPoint?.latitude ?? edit?.latitude ?? existingPoint?.latitude;
+        const longitude = draftPoint?.longitude ?? edit?.longitude ?? existingPoint?.longitude;
+        return latitude === undefined || longitude === undefined
+          ? []
+          : [[latitude, longitude]];
+      });
     }
-    if (isRouteChange) return getCoordinates(routeChangeBasePoints);
     if (formAction === "route") return getCoordinates(routePoints);
     return [];
-  }, [isRouteChange, routeChangePlacement, routeChangeBasePoints, formAction, routePoints]);
+  }, [
+    isRouteChange,
+    routeSequenceEntries,
+    routePoints,
+    existingByKey,
+    routeChangeEdits,
+    formAction,
+  ]);
 
   const mapCandidates = formAction === "route" ? candidates : [];
   const mapConnectedKeys = formAction === "route" ? connectedKeys : new Set<string>();
@@ -716,8 +991,15 @@ export default function Contribution({
     });
   };
 
+  const revokeRouteChangeEditPhotos = (edits: Record<string, RouteChangePointEdit>) => {
+    Object.values(edits).forEach((edit) => {
+      if (edit.photo) URL.revokeObjectURL(edit.photo.previewUrl);
+    });
+  };
+
   const clearDraft = (nextAction: FormAction) => {
     revokePointPhotos(routePoints);
+    revokeRouteChangeEditPhotos(routeChangeEdits);
     photos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
     catalogRequestId.current += 1;
 
@@ -727,6 +1009,10 @@ export default function Contribution({
     setRouteNameEdited(false);
     setPin(null);
     setRoutePoints([]);
+    setRouteChangeEdits({});
+    setRouteChangeRemovedKeys([]);
+    setRouteChangeRemarks("");
+    setRouteChangeOrder(null);
     setPhotos([]);
     setVehicleTypeId("");
     setVariantId("");
@@ -777,7 +1063,12 @@ export default function Contribution({
     setSelectedPointKey(null);
     setSelectedPreviewRouteId(null);
     revokePointPhotos(routePoints);
+    revokeRouteChangeEditPhotos(routeChangeEdits);
     setRoutePoints([]);
+    setRouteChangeEdits({});
+    setRouteChangeRemovedKeys([]);
+    setRouteChangeRemarks("");
+    setRouteChangeOrder(null);
 
     if (!value) {
       catalogRequestId.current += 1;
@@ -801,6 +1092,11 @@ export default function Contribution({
 
   const handleExistingRouteChange = (value: string) => {
     revokePointPhotos(routePoints);
+    revokeRouteChangeEditPhotos(routeChangeEdits);
+    setRouteChangeEdits({});
+    setRouteChangeRemovedKeys([]);
+    setRouteChangeRemarks("");
+    setRouteChangeOrder(null);
     setSelectedExistingRouteId(value);
     setRoutePoints([]);
     setName("");
@@ -869,11 +1165,7 @@ export default function Contribution({
       return;
     }
 
-    const pointKind: PointKind = isRail || isRouteChange
-      ? "stop"
-      : routePoints.length === 0
-        ? "terminal"
-        : "stop";
+    const pointKind: PointKind = "stop";
 
     const point: RoutePoint = {
       key: crypto.randomUUID(),
@@ -903,7 +1195,9 @@ export default function Contribution({
     );
     let lastAdded: ExistingPoint | null = null;
 
-    for (const key of keys) {
+    for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+      const key = keys[keyIndex];
+      if (!key) continue;
       const point = existingByKey.get(key);
       if (!point || used.has(key)) continue;
 
@@ -912,10 +1206,15 @@ export default function Contribution({
         break;
       }
 
+      // Distance-based routes may begin and/or end with a terminal, but a
+      // terminal must never be inserted between road stops. Stops remain
+      // valid even when the route has no terminal at either endpoint.
+      const terminalIsEndpoint = point.kind === "terminal" &&
+        (next.length === 0 || keyIndex === keys.length - 1);
       const valid = isRail
         ? point.kind === "stop" && point.stopType === "train_station"
-        : next.length === 0
-          ? point.kind === "terminal"
+        : point.kind === "terminal"
+          ? terminalIsEndpoint
           : point.kind === "stop" && point.stopType === "road_stop";
 
       if (!valid) continue;
@@ -940,49 +1239,6 @@ export default function Contribution({
     setSelectedPreviewRouteId(null);
   };
 
-  const addRouteChangeExistingPoint = (point: ExistingPoint) => {
-    if (!selectedExistingRoute) {
-      setFormError("Select an approved route first.");
-      return;
-    }
-    if (point.kind !== "stop") {
-      setFormError("Only existing stops can be added through this workflow. Terminal relocation is handled separately.");
-      return;
-    }
-
-    const key = pointKey(point.kind, point.id);
-    if (routeChangeBaseKeys.has(key)) {
-      setFormError("This stop is already part of the selected route.");
-      return;
-    }
-    if (usedKeys.has(key)) {
-      setFormError("This stop has already been added to your proposal.");
-      return;
-    }
-    if (point.transportTypeId !== selectedExistingRoute.transportTypeId) {
-      setFormError("This stop is not compatible with the selected route's vehicle type.");
-      return;
-    }
-    if (selectedExistingRouteVariant?.fare_model === "matrix" && point.stopType !== "train_station") {
-      setFormError("This route can only use train stations.");
-      return;
-    }
-    if (selectedExistingRouteVariant?.fare_model === "distance" && point.stopType !== "road_stop") {
-      setFormError("This route can only use road stops.");
-      return;
-    }
-    if (routeChangeBasePoints.length + routePoints.length >= MAX_PROPOSED_ROUTE_POINTS) {
-      setFormError("The proposed route cannot contain more than 100 locations.");
-      return;
-    }
-
-    const routePoint = toRoutePoint(point);
-    setRoutePoints((previous) => [...previous, routePoint]);
-    setSelectedPointKey(routePoint.key);
-    setFocus([point.latitude, point.longitude]);
-    setFormError("");
-  };
-
   const updateRoutePoint = (key: string, updates: Partial<RoutePoint>) => {
     setRoutePoints((previous) => previous.map((point) =>
       point.key === key ? { ...point, ...updates } : point
@@ -990,7 +1246,24 @@ export default function Contribution({
   };
 
   const moveRoutePoint = (index: number, direction: -1 | 1) => {
-    if (isRouteChange) return;
+    if (isRouteChange) {
+      const currentEntries = routeSequenceEntries;
+      const target = index + direction;
+      const moving = currentEntries[index];
+      const neighbor = currentEntries[target];
+      // In Modify route, road stops can be reordered; terminal entries keep their current sequence position.
+      if (
+        !moving || !neighbor ||
+        moving.kind !== "stop" || neighbor.kind !== "stop"
+      ) return;
+
+      const nextOrder = currentEntries.map((entry) => entry.key);
+      [nextOrder[index], nextOrder[target]] = [nextOrder[target], nextOrder[index]];
+      setRouteChangeOrder(nextOrder);
+      setSelectedPointKey(moving.key);
+      return;
+    }
+
     setRoutePoints((previous) => {
       const target = index + direction;
       if (target < 0 || target >= previous.length) return previous;
@@ -1000,11 +1273,278 @@ export default function Contribution({
     });
   };
 
+  const moveRoutePointTo = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+
+    if (isRouteChange) {
+      const currentEntries = routeSequenceEntries;
+      const moving = currentEntries[fromIndex];
+      const target = currentEntries[toIndex];
+      // In Modify route, reordering is limited to road stops; terminal entries keep their current sequence position.
+      if (
+        !moving || !target ||
+        moving.kind !== "stop" || target.kind !== "stop"
+      ) return;
+
+      const nextOrder = currentEntries.map((entry) => entry.key);
+      const [movedKey] = nextOrder.splice(fromIndex, 1);
+      if (!movedKey) return;
+      nextOrder.splice(toIndex, 0, movedKey);
+      setRouteChangeOrder(nextOrder);
+      setSelectedPointKey(moving.key);
+      return;
+    }
+
+    if (
+      fromIndex >= routePoints.length ||
+      toIndex >= routePoints.length
+    ) return;
+
+    const movedPoint = routePoints[fromIndex];
+    if (!movedPoint) return;
+
+    setRoutePoints((previous) => {
+      if (
+        fromIndex >= previous.length ||
+        toIndex >= previous.length ||
+        fromIndex === toIndex
+      ) return previous;
+
+      const next = [...previous];
+      const [moved] = next.splice(fromIndex, 1);
+      if (!moved) return previous;
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+    setSelectedPointKey(movedPoint.key);
+  };
+
+  const moveRouteChangePointOnMap = (sequenceIndex: number, position: Coordinates) => {
+    const entry = routeSequenceEntries[sequenceIndex];
+    if (!entry) return;
+
+    setRouteChangeOrder((current) =>
+      current ?? routeSequenceEntries.map((item) => item.key)
+    );
+
+    const draftPoint = routePoints.find((point) => point.key === entry.key);
+    if (draftPoint) {
+      updateRoutePoint(entry.key, {
+        latitude: position[0],
+        longitude: position[1],
+      });
+      return;
+    }
+
+    const original = existingByKey.get(entry.key);
+    if (!original) return;
+
+    setRouteChangeEdits((current) => ({
+      ...current,
+      [entry.key]: {
+        name: current[entry.key]?.name ?? original.name,
+        photo: current[entry.key]?.photo ?? null,
+        latitude: position[0],
+        longitude: position[1],
+      },
+    }));
+    setSelectedPointKey(entry.key);
+    setFormError("");
+  };
+
+  const convertRoutePointKind = (key: string, targetKind: PointKind) => {
+    const sequenceIndex = routeSequenceEntries.findIndex((entry) => entry.key === key);
+    const sequenceEntry = routeSequenceEntries[sequenceIndex];
+    if (!sequenceEntry) return;
+
+    if (isRouteChange) {
+      if (selectedExistingRouteVariant?.fare_model !== "distance") {
+        setFormError("Only distance-based routes can use terminals. Rail routes must use stations.");
+        return;
+      }
+      const draft = routePoints.find((point) => point.key === key);
+      const originalForConversion = existingByKey.get(key);
+      const sourceStopType = draft?.stopType ?? originalForConversion?.stopType;
+      if (
+        targetKind === "terminal" &&
+        sequenceEntry.kind === "stop" &&
+        sourceStopType !== "road_stop"
+      ) {
+        setFormError("Only a road stop on a distance-based route can be converted into a terminal.");
+        return;
+      }
+
+      // Converting a replacement back to its original point type simply
+      // restores the original shared point and preserves its pending edits.
+      if (draft?.replacesPointKey) {
+        const original = existingByKey.get(draft.replacesPointKey);
+        if (original?.kind === targetKind) {
+          const originalKey = draft.replacesPointKey;
+          const originalPoint = existingByKey.get(originalKey);
+          setRouteChangeRemovedKeys((previous) => previous.filter((item) => item !== originalKey));
+          setRouteChangeOrder(routeSequenceEntries.map((entry) =>
+            entry.key === key ? originalKey : entry.key
+          ));
+          setRouteChangeEdits((previous) => ({
+            ...previous,
+            [originalKey]: {
+              name: draft.name || previous[originalKey]?.name || originalPoint?.name || "",
+              latitude: draft.latitude,
+              longitude: draft.longitude,
+              photo: draft.photo ?? previous[originalKey]?.photo ?? null,
+            },
+          }));
+          setRoutePoints((previous) => previous.filter((point) => point.key !== key));
+          setSelectedPointKey(originalKey);
+          setFormError("");
+          return;
+        }
+        if (draft.kind === targetKind) return;
+        updateRoutePoint(key, {
+          kind: targetKind,
+          existingId: null,
+          stopType: "road_stop",
+        });
+        setSelectedPointKey(key);
+        setFormError("");
+        return;
+      }
+
+      // A newly placed or reused point that is not part of the original route
+      // can be represented as a new pending point of the other kind.
+      if (draft) {
+        if (draft.kind === targetKind) return;
+        updateRoutePoint(key, {
+          kind: targetKind,
+          existingId: null,
+          stopType: "road_stop",
+        });
+        setSelectedPointKey(key);
+        setFormError("");
+        return;
+      }
+
+      const original = existingByKey.get(key);
+      if (!original || !routeChangeBaseKeys.has(key)) {
+        setFormError("The selected route location is no longer available.");
+        return;
+      }
+      if (original.kind === targetKind) return;
+      if (routeChangeBasePoints.length + routePoints.length >= MAX_PROPOSED_ROUTE_POINTS) {
+        setFormError("The proposed route cannot contain more than 100 locations.");
+        return;
+      }
+
+      const originalEdit = routeChangeEdits[key];
+      const replacementKey = `replacement-${original.kind}-${original.id}-${crypto.randomUUID()}`;
+      const replacement: RoutePoint = {
+        key: replacementKey,
+        kind: targetKind,
+        existingId: null,
+        name: originalEdit?.name ?? original.name,
+        description: "",
+        stopType: "road_stop",
+        latitude: originalEdit?.latitude ?? original.latitude,
+        longitude: originalEdit?.longitude ?? original.longitude,
+        photo: originalEdit?.photo ?? null,
+        replacesPointKey: key,
+      };
+
+      setRoutePoints((previous) => [...previous, replacement]);
+      setRouteChangeRemovedKeys((previous) =>
+        previous.includes(key) ? previous : [...previous, key]
+      );
+      setRouteChangeEdits((previous) => {
+        if (!previous[key]) return previous;
+        return { ...previous, [key]: { ...previous[key], photo: null } };
+      });
+      const nextOrder = routeSequenceEntries.map((entry) =>
+        entry.key === key ? replacementKey : entry.key
+      );
+      setRouteChangeOrder(nextOrder);
+      setSelectedPointKey(replacementKey);
+      setFocus([replacement.latitude, replacement.longitude]);
+      setFormError("");
+      return;
+    }
+
+    if (formAction !== "route" || selectedVariant?.fare_model !== "distance") {
+      setFormError("Only distance-based route endpoints can be converted to terminals or stops.");
+      return;
+    }
+
+    const draft = routePoints.find((point) => point.key === key);
+    if (targetKind === "terminal" && draft?.kind === "stop" && draft.stopType !== "road_stop") {
+      setFormError("Only a road stop can be converted into a terminal.");
+      return;
+    }
+    if (!draft) return;
+    if (draft.kind === targetKind) return;
+    updateRoutePoint(key, {
+      kind: targetKind,
+      existingId: null,
+      stopType: "road_stop",
+    });
+    setSelectedPointKey(key);
+    setFormError("");
+  };
+
   const removeRoutePoint = (key: string) => {
+    if (isRouteChange && routeChangeBaseKeys.has(key)) {
+      const activeCount = routeSequenceEntries.filter((entry) => !entry.pendingRemoval).length;
+      if (activeCount <= 2) {
+        setFormError("A proposed route must retain at least two locations. You cannot remove another point.");
+        return;
+      }
+      setRouteChangeRemovedKeys((previous) =>
+        previous.includes(key) ? previous : [...previous, key]
+      );
+      if (selectedPointKey === key) setSelectedPointKey(null);
+      setFormError("");
+      return;
+    }
+
     const target = routePoints.find((point) => point.key === key);
-    if (target?.photo) URL.revokeObjectURL(target.photo.previewUrl);
+    const isRoutePointReplacement = isRouteChange && !!target?.replacesPointKey;
+
+    // A converted point's photo is transferred back to the original shared
+    // point when the contributor undoes the conversion.
+    if (target?.photo && !isRoutePointReplacement) {
+      URL.revokeObjectURL(target.photo.previewUrl);
+    }
     if (selectedPointKey === key) setSelectedPointKey(null);
+
+    if (isRoutePointReplacement && target?.replacesPointKey) {
+      const originalKey = target.replacesPointKey;
+      const originalPoint = existingByKey.get(originalKey);
+
+      setRouteChangeRemovedKeys((previous) => previous.filter((item) => item !== originalKey));
+      setRouteChangeOrder(routeSequenceEntries.map((entry) =>
+        entry.key === key ? originalKey : entry.key
+      ));
+      setRouteChangeEdits((previous) => ({
+        ...previous,
+        [originalKey]: {
+          name: target.name || previous[originalKey]?.name || originalPoint?.name || "",
+          latitude: target.latitude,
+          longitude: target.longitude,
+          photo: target.photo ?? previous[originalKey]?.photo ?? null,
+        },
+      }));
+    } else if (isRouteChange) {
+      setRouteChangeOrder((previous) =>
+        previous ? previous.filter((item) => item !== key) : null
+      );
+    }
+
     setRoutePoints((previous) => previous.filter((point) => point.key !== key));
+  };
+
+  const restoreRoutePoint = (key: string) => {
+    if (!isRouteChange || !routeChangeBaseKeys.has(key)) return;
+    setRouteChangeRemovedKeys((previous) => previous.filter((item) => item !== key));
+    setSelectedPointKey(key);
+    setFormError("");
   };
 
   const addTerminalPhotos = (files: File[]) => {
@@ -1035,48 +1575,116 @@ export default function Contribution({
       setFormError(problem);
       return;
     }
-    if (!routePoints.some((point) => point.key === key)) return;
 
-    const previous = routePoints.find((point) => point.key === key)?.photo;
-    if (previous) URL.revokeObjectURL(previous.previewUrl);
-    updateRoutePoint(key, {
-      photo: { file, previewUrl: URL.createObjectURL(file) },
-    });
+    const routePoint = routePoints.find((point) => point.key === key);
+    if (routePoint) {
+      if (routePoint.photo) URL.revokeObjectURL(routePoint.photo.previewUrl);
+      updateRoutePoint(key, {
+        photo: { file, previewUrl: URL.createObjectURL(file) },
+      });
+      setFormError("");
+      return;
+    }
+
+    // Original points are not in routePoints. Keep their proposed photo
+    // separately until the proposal is submitted.
+    const existing = isRouteChange ? existingByKey.get(key) : undefined;
+    if (!existing || !routeChangeBaseKeys.has(key)) return;
+
+    const previous = routeChangeEdits[key];
+    if (previous?.photo) URL.revokeObjectURL(previous.photo.previewUrl);
+    const photo = { file, previewUrl: URL.createObjectURL(file) };
+    setRouteChangeEdits((current) => ({
+      ...current,
+      [key]: {
+        name: current[key]?.name ?? existing.name,
+        photo,
+        latitude: current[key]?.latitude,
+        longitude: current[key]?.longitude,
+      },
+    }));
+    setFormError("");
   };
 
   const removePointPhoto = (key: string) => {
-    const previous = routePoints.find((point) => point.key === key)?.photo;
-    if (previous) URL.revokeObjectURL(previous.previewUrl);
-    updateRoutePoint(key, { photo: null });
+    const routePoint = routePoints.find((point) => point.key === key);
+    if (routePoint) {
+      if (routePoint.photo) URL.revokeObjectURL(routePoint.photo.previewUrl);
+      updateRoutePoint(key, { photo: null });
+      return;
+    }
+
+    const previous = routeChangeEdits[key];
+    if (!previous?.photo) return;
+    URL.revokeObjectURL(previous.photo.previewUrl);
+    const original = existingByKey.get(key);
+    if (!original) return;
+    setRouteChangeEdits((current) => ({
+      ...current,
+      [key]: {
+        name: current[key]?.name ?? original.name,
+        photo: null,
+        latitude: current[key]?.latitude,
+        longitude: current[key]?.longitude,
+      },
+    }));
+  };
+
+  const handleRoutePointNameChange = (key: string, value: string) => {
+    const routePoint = routePoints.find((point) => point.key === key);
+    if (routePoint) {
+      updateRoutePoint(key, { name: value });
+      return;
+    }
+
+    if (!isRouteChange || !routeChangeBaseKeys.has(key)) return;
+    const original = existingByKey.get(key);
+    if (!original) return;
+
+    setRouteChangeEdits((current) => ({
+      ...current,
+      [key]: {
+        name: value,
+        photo: current[key]?.photo ?? null,
+        latitude: current[key]?.latitude,
+        longitude: current[key]?.longitude,
+      },
+    }));
   };
 
   // Validation
   const validateNormalContribution = (): string | null => {
     if (!vehicleTypeId) return "Choose the type of vehicle.";
-    if (!name.trim()) {
-      return kind === "route" ? "Give the route a name." : "Give this terminal a name.";
+
+    if (kind === "terminal") {
+      if (!name.trim()) return "Give this terminal a name.";
+      if (!pin) return "Tap the map to place the terminal pin.";
+      return null;
     }
 
-    if (kind === "terminal") return pin ? null : "Tap the map to place the terminal pin.";
+    if (!name.trim()) return "Give the route a name.";
     if (!variantId) return "Choose the vehicle variant.";
     if (routePoints.length < 2) return "Add at least two route locations.";
-    if (routePoints.some((point) => point.existingId === null && !point.name.trim())) {
-      return "Every new route location needs a name.";
+    if (routePoints.some((point) => !point.name.trim())) {
+      return "Every route location needs a name.";
     }
-    if (isRail && routePoints.some((point) =>
-      point.kind !== "stop" || point.stopType !== "train_station"
-    )) {
-      return "Rail routes can only use train stations.";
-    }
-    if (!isRail) {
-      if (routePoints[0]?.kind !== "terminal") {
-        return "A distance-based route must begin with a terminal.";
-      }
-      if (routePoints.slice(1).some((point) =>
-        point.kind !== "stop" || point.stopType !== "road_stop"
+
+    if (isRail) {
+      if (routePoints.some((point) =>
+        point.kind !== "stop" || point.stopType !== "train_station"
       )) {
-        return "After its starting terminal, a distance-based route must contain road stops.";
+        return "Rail routes can only use train stations.";
       }
+      return null;
+    }
+
+    if (routePoints.some((point) =>
+      point.kind === "stop" && point.stopType !== "road_stop"
+    )) {
+      return "Distance-based routes can only use road locations.";
+    }
+    if (routePoints.slice(1, -1).some((point) => point.kind === "terminal")) {
+      return "Terminals can only appear at the beginning or end of a route.";
     }
     return null;
   };
@@ -1088,47 +1696,64 @@ export default function Contribution({
       return "The selected route could not be loaded completely. Reload the vehicle catalog and try again.";
     }
     if (!selectedExistingRouteVariant) return "The selected route's variant is unavailable.";
-    if (routePoints.length < 1) return "Add at least one location to the proposal.";
+    if (routePoints.length < 1 && routeChangeRemovedKeys.length < 1) {
+      return "Add a new location, convert an existing location, or request removal of a route location.";
+    }
     if (routeChangeBasePoints.length + routePoints.length > MAX_PROPOSED_ROUTE_POINTS) {
       return "A proposed route cannot contain more than 100 locations.";
     }
-    if (routePoints.some((point) => point.existingId === null && !point.name.trim())) {
-      return "Every new stop needs a name.";
+    if (routePoints.some((point) => !point.name.trim())) {
+      return "Every new route location needs a name.";
+    }
+    if (routeChangeRemarks.trim().length > 1000) {
+      return "Contributor remarks cannot exceed 1,000 characters.";
+    }
+
+    const replacementKeys = routePoints
+      .map((point) => point.replacesPointKey)
+      .filter((value): value is string => !!value);
+    if (replacementKeys.some((key) => !routeChangeRemovedKeys.includes(key))) {
+      return "Every converted original route location must be marked for removal before its replacement can be submitted.";
     }
     if (routeChangePlacement?.status !== "ready") {
       return routeChangePlacement?.message ?? "The automatic route position could not be determined.";
     }
+    const unnamedPoint = routeChangePlacement.points.some((item) => {
+      const pointName = item.source === "base"
+        ? routeChangeEdits[item.key]?.name ?? item.point.name
+        : item.point.name;
+      return !pointName.trim();
+    });
+    if (unnamedPoint) return "Every terminal and stop in the proposed route needs a name.";
     if (name.trim().length > 180) return "The proposed route name cannot exceed 180 characters.";
 
     const seen = new Set<string>();
     for (const point of routePoints) {
-      if (point.kind !== "stop") {
-        return "Route modifications can add stops only. Use the terminal relocation workflow when it becomes available.";
-      }
-      if (point.existingId === null) {
-        if (selectedExistingRouteVariant.fare_model === "matrix" && point.stopType !== "train_station") {
-          return "This route can only use new train stations.";
+      if (selectedExistingRouteVariant.fare_model === "matrix") {
+        if (point.kind !== "stop" || point.stopType !== "train_station") {
+          return "Rail route proposals can only contain train stations.";
         }
-        if (selectedExistingRouteVariant.fare_model === "distance" && point.stopType !== "road_stop") {
-          return "This route can only use new road stops.";
-        }
-        continue;
+      } else if (point.kind === "stop" && point.stopType !== "road_stop") {
+        return "This route can only use road stops.";
       }
 
+      if (point.existingId === null) continue;
       const key = pointKey(point.kind, point.existingId);
-      if (routeChangeBaseKeys.has(key)) return "A stop already in the route cannot be added again.";
-      if (seen.has(key)) return "The same existing stop cannot be added more than once.";
+      if (routeChangeBaseKeys.has(key)) return "A location already in the route cannot be added again.";
+      if (seen.has(key)) return "The same existing location cannot be added more than once.";
       seen.add(key);
 
       const existing = existingByKey.get(key);
-      if (!existing) return "One of the selected stops is unavailable. Remove it and select another.";
+      if (!existing) return "One of the selected locations is unavailable. Remove it and select another.";
       if (existing.transportTypeId !== selectedExistingRoute.transportTypeId) {
-        return "An existing stop is incompatible with the selected route.";
+        return "An existing location is incompatible with the selected route.";
       }
-      if (selectedExistingRouteVariant.fare_model === "matrix" && existing.stopType !== "train_station") {
-        return "This route can only use train stations.";
+      if (selectedExistingRouteVariant.fare_model === "matrix" &&
+          (existing.kind !== "stop" || existing.stopType !== "train_station")) {
+        return "This rail route can only use train stations.";
       }
-      if (selectedExistingRouteVariant.fare_model === "distance" && existing.stopType !== "road_stop") {
+      if (selectedExistingRouteVariant.fare_model === "distance" &&
+          existing.kind === "stop" && existing.stopType !== "road_stop") {
         return "This route can only use road stops.";
       }
     }
@@ -1196,24 +1821,106 @@ export default function Contribution({
     };
   };
 
-  const buildRouteChangeInput = (): RouteChangeProposalInput | null => {
-    if (!selectedExistingRoute || routeChangePlacement?.status !== "ready") return null;
+  const buildRouteChangeInput = () => {
+    const canonical = automaticRouteChangePlacement;
+    const proposed = routeChangePlacement;
+    if (
+      !selectedExistingRoute ||
+      canonical?.status !== "ready" ||
+      proposed?.status !== "ready"
+    ) return null;
 
-    const points: RouteChangePointInput[] = routeChangePlacement.points.map((item) => {
+    // Keep the legacy proposal payload in its automatic/original-compatible
+    // order. proposedStopOrder separately captures the contributor's final
+    // manually arranged route sequence.
+    const points: RouteChangePointInput[] = canonical.points.map((item) => {
       if (item.source === "base") {
         return { kind: item.point.kind, existingId: item.point.id };
       }
       return buildRouteChangePoint(item.point);
     });
 
+    const proposedOrderByKey = new Map(
+      proposed.points.map((item, index) => [item.key, index + 1] as const)
+    );
+    const finalPointCount = proposed.points.length;
+    let removedOrderIndex = 0;
+
+    const pointEdits = canonical.points.map((item, index) => {
+      const isRemoved = item.source === "base" && routeChangeRemovedKeys.includes(item.key);
+      const proposedStopOrder = isRemoved
+        ? finalPointCount + (++removedOrderIndex)
+        : proposedOrderByKey.get(item.key);
+
+      if (!proposedStopOrder) {
+        throw new Error("The proposed route sequence is incomplete.");
+      }
+
+      if (isRemoved) {
+        return {
+          stopOrder: index + 1,
+          proposedStopOrder,
+          removeFromRoute: true,
+        };
+      }
+
+      if (item.source === "base") {
+        const original = item.point;
+        const edit = routeChangeEdits[item.key];
+        const proposedName = (edit?.name ?? original.name).trim();
+        const latitude = edit?.latitude ?? original.latitude;
+        const longitude = edit?.longitude ?? original.longitude;
+        const nameChanged = proposedName !== original.name;
+        const coordinatesChanged =
+          latitude !== original.latitude || longitude !== original.longitude;
+
+        return {
+          stopOrder: index + 1,
+          proposedStopOrder,
+          ...(nameChanged ? { proposedName } : {}),
+          ...(coordinatesChanged ? { latitude, longitude } : {}),
+        };
+      }
+
+      if (item.point.existingId === null) {
+        const replacesStopOrder = item.point.replacesPointKey
+          ? canonical.points.findIndex((candidate) => candidate.key === item.point.replacesPointKey) + 1
+          : undefined;
+        return {
+          stopOrder: index + 1,
+          proposedStopOrder,
+          ...(replacesStopOrder && replacesStopOrder > 0 ? { replacesStopOrder } : {}),
+        };
+      }
+
+      const original = existingByKey.get(pointKey(item.point.kind, item.point.existingId));
+      const proposedName = item.point.name.trim();
+      const nameChanged = !!original && proposedName !== original.name;
+      const coordinatesChanged = !!original && (
+        item.point.latitude !== original.latitude ||
+        item.point.longitude !== original.longitude
+      );
+
+      return {
+        stopOrder: index + 1,
+        proposedStopOrder,
+        ...(nameChanged ? { proposedName } : {}),
+        ...(coordinatesChanged
+          ? { latitude: item.point.latitude, longitude: item.point.longitude }
+          : {}),
+      };
+    });
+
     return {
       routeId: selectedExistingRoute.id,
-      proposalType: routeChangePlacement.proposalType,
+      proposalType: canonical.proposalType,
       proposedName:
-        routeChangePlacement.proposalType === "extend_route" && name.trim()
+        canonical.placements.some((placement) => placement.placement === "extend") && name.trim()
           ? name.trim()
           : undefined,
       points,
+      pointEdits,
+      contributorRemarks: routeChangeRemarks.trim(),
     };
   };
 
@@ -1232,18 +1939,44 @@ export default function Contribution({
   };
 
   const uploadRouteProposalImages = async (
-    resultPoints: { kind: PointKind; id: number; isNewPoint: boolean }[],
+    proposalId: number,
     placementPoints: (AutomaticBasePoint | AutomaticAdditionPoint)[]
   ) => {
     let failures = 0;
-    for (let index = 0; index < placementPoints.length; index += 1) {
-      const item = placementPoints[index];
-      const saved = resultPoints[index];
-      if (!item || item.source !== "addition" || !saved) continue;
+    const canonicalPoints =
+      automaticRouteChangePlacement?.status === "ready"
+        ? automaticRouteChangePlacement.points
+        : [];
+    const canonicalOrderByKey = new Map(
+      canonicalPoints.map((item, index) => [item.key, index + 1] as const)
+    );
 
-      const point = item.point;
-      if (point.existingId !== null || !point.photo || !saved.isNewPoint) continue;
-      if (await attachMapImage(saved.kind, saved.id, point.photo.file)) failures += 1;
+    for (const item of placementPoints) {
+      // Photos attached to a point that is being removed are not uploaded or
+      // approved as part of the removal request.
+      if (item.source === "base" && routeChangeRemovedKeys.includes(item.key)) {
+        continue;
+      }
+
+      const photo = item.source === "base"
+        ? routeChangeEdits[item.key]?.photo ?? null
+        : item.point.photo;
+      if (!photo) continue;
+
+      // Proposal image attachments use canonical stop_order, not the
+      // contributor's manually reordered proposed_stop_order.
+      const canonicalStopOrder = canonicalOrderByKey.get(item.key);
+      if (!canonicalStopOrder) {
+        failures += 1;
+        continue;
+      }
+
+      const uploadError = await attachRouteChangeProposalImage(
+        proposalId,
+        canonicalStopOrder,
+        photo.file
+      );
+      if (uploadError) failures += 1;
     }
     return failures;
   };
@@ -1271,9 +2004,9 @@ export default function Contribution({
           throw new Error("Unable to construct the proposed route sequence.");
         }
 
-        const result = await submitRouteChangeProposal(proposalInput);
+        const result = await submitRouteChangeProposalWithEdits(proposalInput);
         const photoFailures = await uploadRouteProposalImages(
-          result.points,
+          result.proposalId,
           placement.points as (AutomaticBasePoint | AutomaticAdditionPoint)[]
         );
 
@@ -1302,7 +2035,7 @@ export default function Contribution({
         photoFailures += await uploadRoutePointImages(result.points, pointFiles);
       } else if (result.points[0]) {
         for (const file of terminalFiles) {
-          if (await attachMapImage("terminal", result.points[0].id, file)) {
+          if (await attachMapImage(result.points[0].kind, result.points[0].id, file)) {
             photoFailures += 1;
           }
         }
@@ -1368,7 +2101,7 @@ export default function Contribution({
               Your Contributions
             </h1>
             <p className="mt-1 max-w-[620px] text-[14px] text-gray-500">
-              Add terminals and routes, or propose changes to an existing approved route.
+              Add terminals and stops, create routes, or propose changes to an existing approved route.
             </p>
           </div>
 
@@ -1470,6 +2203,7 @@ export default function Contribution({
             currentPosition,
             focus,
             locationMessage,
+            routeChangeRemarks,
             routePointCount: routePoints.length,
             terminalPhotos: terminalPhotoPreviews,
           }}
@@ -1482,6 +2216,8 @@ export default function Contribution({
             existingError,
             optionsError,
             selectedExistingRoute,
+            selectedRouteFirstPoint,
+            selectedRouteLastPoint,
             selectedExistingRouteType,
             selectedExistingRouteVariant,
             selectedVehicleTypeName,
@@ -1497,7 +2233,6 @@ export default function Contribution({
             otherTerminals,
             otherStops,
             lastExistingPoint: lastExisting,
-            matchingRouteChangeCandidates,
             inspectKey,
             inspectPoint,
             inspectRoutes,
@@ -1510,13 +2245,17 @@ export default function Contribution({
             onExistingRouteChange: handleExistingRouteChange,
             onLocate: () => locate(),
             onMapPick: handleMapPick,
-            onPickExisting: isRouteChange ? addRouteChangeExistingPoint : addExistingPoint,
+            onPickExisting: addExistingPoint,
             onAddExistingPoint: addExistingPoint,
-            onAddRouteChangeExistingPoint: addRouteChangeExistingPoint,
             onAddExistingKeys: addExistingKeys,
             onSelectPoint: setSelectedPointKey,
             onMovePin: setPin,
             onMoveRoutePoint: (index, position) => {
+              if (isRouteChange) {
+                moveRouteChangePointOnMap(index, position);
+                return;
+              }
+
               const point = routePoints[index];
               if (!point) return;
               updateRoutePoint(point.key, {
@@ -1524,7 +2263,12 @@ export default function Contribution({
                 longitude: position[1],
               });
             },
-            onNameChange: setName,
+            onNameChange: (value) => {
+              setName(value);
+              if (formAction === "route" || isRouteChange) {
+                setRouteNameEdited(true);
+              }
+            },
             onProposedRouteNameChange: (value) => {
               setName(value);
               setRouteNameEdited(true);
@@ -1536,9 +2280,13 @@ export default function Contribution({
               setInspectKey(null);
               setSelectedPreviewRouteId(null);
             },
-            onRoutePointNameChange: (key, value) => updateRoutePoint(key, { name: value }),
+            onRoutePointNameChange: handleRoutePointNameChange,
             onMoveRoutePointInSequence: moveRoutePoint,
+            onMoveRoutePointTo: moveRoutePointTo,
+            onConvertRoutePointKind: convertRoutePointKind,
+            onRouteChangeRemarksChange: setRouteChangeRemarks,
             onRemoveRoutePoint: removeRoutePoint,
+            onRestoreRoutePoint: restoreRoutePoint,
             onPointPhotoFile: addPointPhoto,
             onRemovePointPhoto: removePointPhoto,
             onTerminalPhotosChange: addTerminalPhotos,

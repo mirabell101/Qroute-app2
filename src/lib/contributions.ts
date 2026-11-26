@@ -1,46 +1,36 @@
-
 import { supabase } from "@/lib/supabase";
 import { getPublicMapData } from "@/lib/publicMap";
-
 // ==================================================
 // CORE TYPES
 // ==================================================
-
 export type ContributionKind = "terminal" | "stop" | "route";
 export type PointKind = "terminal" | "stop";
-
 export type ReviewStatus = "pending" | "approved" | "rejected";
-
 export type RouteChangeProposalType =
   | "insert_point"
-  | "extend_route";
-
+  | "extend_route"
+  | "combined"
+  | "remove_points";
 export type RouteChangeProposalStatus =
   | "pending"
   | "approved"
   | "rejected"
   | "conflicted"
   | "withdrawn";
-
 export type MyContributionKind =
   ContributionKind | "route_change";
-
 export type MyContributionStatus =
   | ReviewStatus
   | RouteChangeProposalStatus;
-
 export type StopKind = "road_stop" | "train_station";
-
 // ==================================================
 // TRANSPORT OPTIONS
 // ==================================================
-
 export interface TransportTypeOption {
   id: number;
   name: string;
   color: string;
 }
-
 export interface TransportVariantOption {
   id: number;
   transport_type_id: number;
@@ -48,11 +38,9 @@ export interface TransportVariantOption {
   name: string;
   fare_model: "distance" | "matrix";
 }
-
 // ==================================================
 // NORMAL CONTRIBUTION INPUTS
 // ==================================================
-
 export interface PointInput {
   kind: PointKind;
   existingId?: number | null;
@@ -63,25 +51,19 @@ export interface PointInput {
   latitude: number;
   longitude: number;
 }
-
 /**
- * Standalone stops are intentionally excluded.
- *
- * Stops remain supported inside route submissions.
- * Historical standalone stop records remain supported
- * through MyContribution and ContributionKind.
+ * Individual terminals and stops can be submitted independently.
+ * Route points are submitted as part of a complete route sequence.
  */
 export type ContributionInput =
-  | ({
-      kind: "terminal";
-    } & PointInput)
+  | ({ kind: "terminal" } & PointInput)
+  | ({ kind: "stop" } & PointInput)
   | {
       kind: "route";
       name: string;
       variantId: number;
       points: PointInput[];
     };
-
 export interface SubmitResult {
   routeId: number | null;
   points: {
@@ -90,11 +72,9 @@ export interface SubmitResult {
   }[];
   moderationStatus: "pending" | "approved";
 }
-
 // ==================================================
 // ROUTE-CHANGE PROPOSAL INPUTS
 // ==================================================
-
 /**
  * A previously approved location already in the catalog.
  *
@@ -105,7 +85,6 @@ export interface ExistingRouteChangePointInput {
   kind: PointKind;
   existingId: number;
 }
-
 /**
  * A new terminal proposed as part of a route modification.
  */
@@ -116,7 +95,6 @@ export interface NewRouteChangeTerminalInput {
   latitude: number;
   longitude: number;
 }
-
 /**
  * A new stop proposed as part of a route modification.
  */
@@ -129,16 +107,13 @@ export interface NewRouteChangeStopInput {
   latitude: number;
   longitude: number;
 }
-
 export type RouteChangePointInput =
   | ExistingRouteChangePointInput
   | NewRouteChangeTerminalInput
   | NewRouteChangeStopInput;
-
 export interface RouteChangeProposalInput {
   routeId: number;
   proposalType: RouteChangeProposalType;
-
   /**
    * Optional proposed replacement name for the existing route.
    *
@@ -146,20 +121,17 @@ export interface RouteChangeProposalInput {
    * unchanged.
    */
   proposedName?: string | null;
-
   /**
    * Complete proposed route sequence, including every original
    * location and any new locations.
    */
   points: RouteChangePointInput[];
 }
-
 export interface RouteChangeSubmitPoint {
   kind: PointKind;
   id: number;
   isNewPoint: boolean;
 }
-
 export interface RouteChangeProposalSubmitResult {
   proposalId: number;
   routeId: number;
@@ -169,11 +141,9 @@ export interface RouteChangeProposalSubmitResult {
   createdPointCount: number;
   points: RouteChangeSubmitPoint[];
 }
-
 // ==================================================
 // USER CONTRIBUTIONS
 // ==================================================
-
 export interface MyContribution {
   key: string;
   kind: MyContributionKind;
@@ -183,11 +153,9 @@ export interface MyContribution {
   note: string | null;
   createdAt: string;
 }
-
 // ==================================================
 // EXISTING APPROVED TRANSIT POINTS
 // ==================================================
-
 /**
  * An approved, publicly visible terminal or stop that
  * a route can reuse.
@@ -202,7 +170,6 @@ export interface ExistingPoint {
   transportTypeId: number | null;
   routeIds: number[];
 }
-
 /**
  * An approved route with its ordered points as pointKey strings.
  *
@@ -217,21 +184,17 @@ export interface ExistingRoute {
   variantId: number;
   keys: string[];
 }
-
 export interface TransitCatalog {
   points: ExistingPoint[];
   routes: ExistingRoute[];
 }
-
 // ==================================================
 // GENERAL HELPERS
 // ==================================================
-
 export const pointKey = (
   kind: PointKind,
   id: number
 ) => `${kind}-${id}`;
-
 function isRecord(
   value: unknown
 ): value is Record<string, unknown> {
@@ -241,7 +204,6 @@ function isRecord(
     !Array.isArray(value)
   );
 }
-
 function isPositiveSafeInteger(
   value: unknown
 ): value is number {
@@ -251,11 +213,9 @@ function isPositiveSafeInteger(
     value > 0
   );
 }
-
 // ==================================================
 // NORMAL CONTRIBUTION RESPONSE VALIDATION
 // ==================================================
-
 function isSubmitPoint(
   value: unknown
 ): value is {
@@ -269,7 +229,6 @@ function isSubmitPoint(
     isPositiveSafeInteger(value.id)
   );
 }
-
 function isSubmitResult(
   value: unknown
 ): value is {
@@ -294,11 +253,9 @@ function isSubmitResult(
     value.points.every(isSubmitPoint)
   );
 }
-
 // ==================================================
 // ROUTE-CHANGE PROPOSAL RESPONSE VALIDATION
 // ==================================================
-
 function isRouteChangeSubmitPoint(
   value: unknown
 ): value is {
@@ -314,7 +271,6 @@ function isRouteChangeSubmitPoint(
     typeof value.is_new_point === "boolean"
   );
 }
-
 function isRouteChangeProposalSubmitResult(
   value: unknown
 ): value is {
@@ -336,7 +292,9 @@ function isRouteChangeProposalSubmitResult(
     isPositiveSafeInteger(value.route_id) &&
     (
       value.proposal_type === "insert_point" ||
-      value.proposal_type === "extend_route"
+      value.proposal_type === "extend_route" ||
+      value.proposal_type === "combined" ||
+      value.proposal_type === "remove_points"
     ) &&
     value.moderation_status === "pending" &&
     typeof value.point_count === "number" &&
@@ -344,17 +302,18 @@ function isRouteChangeProposalSubmitResult(
     value.point_count >= 2 &&
     typeof value.created_point_count === "number" &&
     Number.isSafeInteger(value.created_point_count) &&
-    value.created_point_count >= 1 &&
+    value.created_point_count >= 0 &&
+    (value.proposal_type === "remove_points"
+      ? value.created_point_count === 0
+      : value.created_point_count >= 1) &&
     Array.isArray(value.points) &&
     value.points.every(isRouteChangeSubmitPoint) &&
     value.points.length === value.point_count
   );
 }
-
 // ==================================================
 // TRANSPORT OPTIONS
 // ==================================================
-
 export async function getTransportOptions(
   currentUserId: string | null | undefined = undefined
 ): Promise<{
@@ -363,19 +322,16 @@ export async function getTransportOptions(
 }> {
   if (currentUserId === null) {
     const publicData = await getPublicMapData();
-
     return {
       types: publicData.transportTypes,
       variants: publicData.transportVariants,
     };
   }
-
   const [types, variants] = await Promise.all([
     supabase
       .from("transport_types")
       .select("id, name, color")
       .order("name"),
-
     supabase
       .from("transport_variants")
       .select(
@@ -384,25 +340,20 @@ export async function getTransportOptions(
       .eq("is_active", true)
       .order("name"),
   ]);
-
   if (types.error) {
     throw new Error(types.error.message);
   }
-
   if (variants.error) {
     throw new Error(variants.error.message);
   }
-
   return {
     types: (types.data ?? []) as TransportTypeOption[],
     variants: (variants.data ?? []) as TransportVariantOption[],
   };
 }
-
 // ==================================================
 // TRANSIT CATALOG RAW TYPES
 // ==================================================
-
 interface RawTerminal {
   id: number;
   name: string;
@@ -410,11 +361,9 @@ interface RawTerminal {
   longitude: number;
   transport_type_id: number | null;
 }
-
 interface RawStop extends RawTerminal {
   stop_type: StopKind;
 }
-
 interface RawRoute {
   id: number;
   name: string;
@@ -426,11 +375,9 @@ interface RawRoute {
     stop_id: number | null;
   }[];
 }
-
 // ==================================================
 // TRANSIT CATALOG
 // ==================================================
-
 /**
  * Loads approved terminals, stops and routes.
  *
@@ -456,16 +403,12 @@ export async function getTransitCatalog(
   ) {
     throw new Error("Invalid transport type filter.");
   }
-
   // --------------------------------------------------
   // PUBLIC CATALOG PATH
   // --------------------------------------------------
-
   if (currentUserId === null) {
     const publicData = await getPublicMapData();
-
     const points = new Map<string, ExistingPoint>();
-
     for (const terminal of publicData.terminals) {
       points.set(
         pointKey("terminal", terminal.id),
@@ -481,7 +424,6 @@ export async function getTransitCatalog(
         }
       );
     }
-
     for (const stop of publicData.stops) {
       points.set(
         pointKey("stop", stop.id),
@@ -497,9 +439,7 @@ export async function getTransitCatalog(
         }
       );
     }
-
     const routes: ExistingRoute[] = [];
-
     for (const route of publicData.routes) {
       if (
         transportTypeId !== undefined &&
@@ -507,25 +447,20 @@ export async function getTransitCatalog(
       ) {
         continue;
       }
-
       const keys = route.route_stops.flatMap((row) => {
         if (row.terminals) {
           return [
             pointKey("terminal", row.terminals.id),
           ];
         }
-
         if (row.stops) {
           return [
             pointKey("stop", row.stops.id),
           ];
         }
-
         return [];
       });
-
       if (keys.length < 2) continue;
-
       routes.push({
         id: route.id,
         name: route.name,
@@ -533,10 +468,8 @@ export async function getTransitCatalog(
         variantId: route.transport_variants.id,
         keys,
       });
-
       for (const key of keys) {
         const point = points.get(key);
-
         if (
           point &&
           !point.routeIds.includes(route.id)
@@ -545,7 +478,6 @@ export async function getTransitCatalog(
         }
       }
     }
-
     /**
      * The public-map data helper currently supplies a complete
      * public catalog rather than accepting transport filters.
@@ -554,7 +486,6 @@ export async function getTransitCatalog(
      * to routes of that transport type.
      */
     const publicPoints = [...points.values()];
-
     return {
       points:
         transportTypeId === undefined
@@ -565,11 +496,9 @@ export async function getTransitCatalog(
       routes,
     };
   }
-
   // --------------------------------------------------
   // AUTHENTICATED CATALOG PATH
   // --------------------------------------------------
-
   let terminalQuery = supabase
     .from("terminals")
     .select(
@@ -580,7 +509,6 @@ export async function getTransitCatalog(
     .eq("is_active", true)
     .eq("is_deleted", false)
     .eq("is_banned", false);
-
   let stopQuery = supabase
     .from("stops")
     .select(
@@ -591,7 +519,6 @@ export async function getTransitCatalog(
     .eq("is_active", true)
     .eq("is_deleted", false)
     .eq("is_banned", false);
-
   let routeQuery = supabase
     .from("routes")
     .select(
@@ -602,49 +529,39 @@ export async function getTransitCatalog(
     .eq("is_active", true)
     .eq("is_deleted", false)
     .eq("is_banned", false);
-
   // Apply transport filtering directly in the database.
   if (transportTypeId !== undefined) {
     terminalQuery = terminalQuery.eq(
       "transport_type_id",
       transportTypeId
     );
-
     stopQuery = stopQuery.eq(
       "transport_type_id",
       transportTypeId
     );
-
     routeQuery = routeQuery.eq(
       "transport_type_id",
       transportTypeId
     );
   }
-
   const [terminals, stops, routes] = await Promise.all([
     terminalQuery.order("name"),
     stopQuery.order("name"),
     routeQuery.order("name"),
   ]);
-
   if (terminals.error) {
     throw new Error(terminals.error.message);
   }
-
   if (stops.error) {
     throw new Error(stops.error.message);
   }
-
   if (routes.error) {
     throw new Error(routes.error.message);
   }
-
   // --------------------------------------------------
   // BUILD THE POINT LOOKUP
   // --------------------------------------------------
-
   const points = new Map<string, ExistingPoint>();
-
   for (
     const row of (terminals.data ?? []) as RawTerminal[]
   ) {
@@ -659,7 +576,6 @@ export async function getTransitCatalog(
       routeIds: [],
     });
   }
-
   for (const row of (stops.data ?? []) as RawStop[]) {
     points.set(pointKey("stop", row.id), {
       kind: "stop",
@@ -672,23 +588,18 @@ export async function getTransitCatalog(
       routeIds: [],
     });
   }
-
   // --------------------------------------------------
   // BUILD THE ORDERED ROUTE CATALOG
   // --------------------------------------------------
-
   const catalogRoutes: ExistingRoute[] = [];
-
   for (
     const route of (routes.data ?? []) as unknown as RawRoute[]
   ) {
     const ordered = [...route.route_stops].sort(
       (a, b) => a.stop_order - b.stop_order
     );
-
     const keys: string[] = [];
     let complete = ordered.length >= 2;
-
     for (const row of ordered) {
       const key =
         row.terminal_id !== null
@@ -696,17 +607,13 @@ export async function getTransitCatalog(
           : row.stop_id !== null
             ? pointKey("stop", row.stop_id)
             : null;
-
       if (!key || !points.has(key)) {
         complete = false;
         break;
       }
-
       keys.push(key);
     }
-
     if (!complete) continue;
-
     catalogRoutes.push({
       id: route.id,
       name: route.name,
@@ -714,10 +621,8 @@ export async function getTransitCatalog(
       variantId: route.variant_id,
       keys,
     });
-
     for (const key of keys) {
       const point = points.get(key);
-
       if (
         point &&
         !point.routeIds.includes(route.id)
@@ -726,17 +631,14 @@ export async function getTransitCatalog(
       }
     }
   }
-
   return {
     points: [...points.values()],
     routes: catalogRoutes,
   };
 }
-
 // ==================================================
 // NORMAL CONTRIBUTION SUBMISSION
 // ==================================================
-
 const pointPayload = (point: PointInput) => ({
   kind: point.kind,
   existing_id: point.existingId ?? null,
@@ -747,15 +649,13 @@ const pointPayload = (point: PointInput) => ({
   latitude: point.latitude,
   longitude: point.longitude,
 });
-
 /**
  * Normal contribution workflow.
  *
  * Supported submissions:
- * - New standalone terminals.
+ * - New standalone terminals and stops.
  * - Completely separate new routes containing terminals/stops.
  *
- * Standalone stops are rejected by the database.
  * Existing-route modifications must use
  * submitRouteChangeProposal().
  *
@@ -772,7 +672,6 @@ export async function submitContribution(
           points: input.points.map(pointPayload),
         }
       : pointPayload(input);
-
   const { data, error } = await supabase.rpc(
     "submit_contribution",
     {
@@ -780,28 +679,23 @@ export async function submitContribution(
       p_payload: payload,
     }
   );
-
   if (error) {
     throw new Error(error.message);
   }
-
   if (!isSubmitResult(data)) {
     throw new Error(
       "Contribution service returned an invalid response."
     );
   }
-
   return {
     routeId: data.route_id,
     points: data.points,
     moderationStatus: data.moderation_status,
   };
 }
-
 // ==================================================
 // ROUTE-CHANGE PROPOSAL SUBMISSION
 // ==================================================
-
 /**
  * Converts typed route-change points into the exact JSON
  * expected by public.submit_route_change_proposal().
@@ -835,7 +729,6 @@ function routeChangePointPayload(
       existing_id: point.existingId,
     };
   }
-
   if (point.kind === "terminal") {
     return {
       kind: "terminal",
@@ -845,7 +738,6 @@ function routeChangePointPayload(
       longitude: point.longitude,
     };
   }
-
   return {
     kind: "stop",
     existing_id: null,
@@ -856,7 +748,6 @@ function routeChangePointPayload(
     longitude: point.longitude,
   };
 }
-
 /**
  * Submits a proposal to insert locations into or extend
  * an existing approved route.
@@ -874,14 +765,18 @@ export async function submitRouteChangeProposal(
   if (!isPositiveSafeInteger(input.routeId)) {
     throw new Error("Invalid target route.");
   }
-
+  if (input.proposalType === "remove_points") {
+    throw new Error(
+      "Removal requests must use the route-change proposal service so the removed locations are recorded for moderator approval."
+    );
+  }
   if (
     input.proposalType !== "insert_point" &&
-    input.proposalType !== "extend_route"
+    input.proposalType !== "extend_route" &&
+    input.proposalType !== "combined"
   ) {
     throw new Error("Invalid route-change proposal type.");
   }
-
   if (
     !Array.isArray(input.points) ||
     input.points.length < 2 ||
@@ -891,23 +786,18 @@ export async function submitRouteChangeProposal(
       "A proposed route must contain between 2 and 100 locations."
     );
   }
-
   const payload: Record<string, unknown> = {
     points: input.points.map(routeChangePointPayload),
   };
-
   const proposedName = input.proposedName?.trim();
-
   if (proposedName) {
     if (proposedName.length > 180) {
       throw new Error(
         "The proposed route name cannot exceed 180 characters."
       );
     }
-
     payload.proposed_name = proposedName;
   }
-
   const { data, error } = await supabase.rpc(
     "submit_route_change_proposal",
     {
@@ -916,17 +806,14 @@ export async function submitRouteChangeProposal(
       p_payload: payload,
     }
   );
-
   if (error) {
     throw new Error(error.message);
   }
-
   if (!isRouteChangeProposalSubmitResult(data)) {
     throw new Error(
       "Route-change proposal service returned an invalid response."
     );
   }
-
   // Ensure the RPC response corresponds to the submitted request.
   if (
     data.route_id !== input.routeId ||
@@ -936,7 +823,6 @@ export async function submitRouteChangeProposal(
       "Route-change proposal service returned an unexpected result."
     );
   }
-
   return {
     proposalId: data.proposal_id,
     routeId: data.route_id,
@@ -951,11 +837,9 @@ export async function submitRouteChangeProposal(
     })),
   };
 }
-
 // ==================================================
 // USER CONTRIBUTION HISTORY
 // ==================================================
-
 interface OwnRow {
   id: number;
   name: string;
@@ -963,7 +847,6 @@ interface OwnRow {
   moderation_note: string | null;
   created_at: string;
 }
-
 interface OwnRouteChangeProposalRow {
   id: number;
   route_id: number;
@@ -973,12 +856,10 @@ interface OwnRouteChangeProposalRow {
   moderation_note: string | null;
   created_at: string;
 }
-
 interface OwnRouteChangeProposalPointRow {
   terminal_id: number | null;
   stop_id: number | null;
 }
-
 /**
  * Loads the current user's:
  * - Terminal submissions.
@@ -998,7 +879,6 @@ export async function getMyContributions(
   // --------------------------------------------------
   // 1. LOAD ORDINARY CONTRIBUTIONS AND OWN PROPOSALS
   // --------------------------------------------------
-
   const load = async (
     table: "terminals" | "stops" | "routes"
   ) => {
@@ -1009,14 +889,11 @@ export async function getMyContributions(
       )
       .eq("created_by", userId)
       .eq("is_deleted", false);
-
     if (error) {
       throw new Error(error.message);
     }
-
     return (data ?? []) as OwnRow[];
   };
-
   const [
     terminals,
     stops,
@@ -1026,7 +903,6 @@ export async function getMyContributions(
     load("terminals"),
     load("stops"),
     load("routes"),
-
     supabase
       .from("route_change_proposals")
       .select(
@@ -1034,65 +910,51 @@ export async function getMyContributions(
       )
       .eq("contributor_id", userId),
   ]);
-
   if (routeChangeProposalsResult.error) {
     throw new Error(
       routeChangeProposalsResult.error.message
     );
   }
-
   const routeChangeProposals = (
     routeChangeProposalsResult.data ?? []
   ) as OwnRouteChangeProposalRow[];
-
   // --------------------------------------------------
   // 2. LOAD NEW POINTS CREATED BY THOSE PROPOSALS
   // --------------------------------------------------
-
   const proposalIds = routeChangeProposals.map(
     (proposal) => proposal.id
   );
-
   let proposalCreatedPoints:
     OwnRouteChangeProposalPointRow[] = [];
-
   if (proposalIds.length > 0) {
     const { data, error } = await supabase
       .from("route_change_proposal_points")
       .select("terminal_id, stop_id")
       .eq("is_new_point", true)
       .in("proposal_id", proposalIds);
-
     if (error) {
       throw new Error(error.message);
     }
-
     proposalCreatedPoints = (
       data ?? []
     ) as OwnRouteChangeProposalPointRow[];
   }
-
   // --------------------------------------------------
   // 3. BUILD SETS OF PROPOSAL-OWNED LOCATION IDS
   // --------------------------------------------------
-
   const proposalCreatedTerminalIds = new Set<number>();
   const proposalCreatedStopIds = new Set<number>();
-
   for (const point of proposalCreatedPoints) {
     if (point.terminal_id !== null) {
       proposalCreatedTerminalIds.add(point.terminal_id);
     }
-
     if (point.stop_id !== null) {
       proposalCreatedStopIds.add(point.stop_id);
     }
   }
-
   // --------------------------------------------------
   // 4. BUILD NORMAL CONTRIBUTION HISTORY
   // --------------------------------------------------
-
   const toItem =
     (kind: ContributionKind) =>
     (row: OwnRow): MyContribution => ({
@@ -1104,7 +966,6 @@ export async function getMyContributions(
       note: row.moderation_note,
       createdAt: row.created_at,
     });
-
   const normalContributions: MyContribution[] = [
     ...terminals
       .filter(
@@ -1112,28 +973,27 @@ export async function getMyContributions(
           !proposalCreatedTerminalIds.has(row.id)
       )
       .map(toItem("terminal")),
-
     ...stops
       .filter(
         (row) =>
           !proposalCreatedStopIds.has(row.id)
       )
       .map(toItem("stop")),
-
     ...routes.map(toItem("route")),
   ];
-
   // --------------------------------------------------
   // 5. BUILD ROUTE-CHANGE PROPOSAL HISTORY
   // --------------------------------------------------
-
   const proposalContributions: MyContribution[] =
     routeChangeProposals.map((row) => {
       const proposalLabel =
-        row.proposal_type === "insert_point"
-          ? "Route insertion proposal"
-          : "Route extension proposal";
-
+        row.proposal_type === "remove_points"
+          ? "Route location removal proposal"
+          : row.proposal_type === "combined"
+            ? "Combined route-change proposal"
+            : row.proposal_type === "insert_point"
+              ? "Route insertion proposal"
+              : "Route extension proposal";
       return {
         key: `route-change-${row.id}`,
         kind: "route_change",
@@ -1146,11 +1006,9 @@ export async function getMyContributions(
         createdAt: row.created_at,
       };
     });
-
   // --------------------------------------------------
   // 6. COMBINE AND SORT
   // --------------------------------------------------
-
   return [
     ...normalContributions,
     ...proposalContributions,
