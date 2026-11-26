@@ -97,45 +97,49 @@ function createSuggestedJourneyName(
 function PlacePhotoGallery({
   placeName,
   images,
+  onOpenGallery,
 }: {
   placeName: string;
   images: SelectedMapImage[];
+  onOpenGallery: () => void;
 }) {
   if (images.length === 0) {
     return null;
   }
+
+  // Keep the map information panel compact. The dedicated gallery
+  // page is responsible for displaying the complete approved set.
+  const previewImages = images.slice(0, 2);
 
   return (
     <section
       aria-label={`${placeName} community photos`}
       className="mt-3"
     >
-      <h3 className="mb-2 text-xs font-semibold text-gray-800">
-        {placeName}
-      </h3>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold text-gray-800">
+          {placeName}
+        </h3>
+        <span className="text-[10px] text-gray-400">
+          {images.length} approved {images.length === 1 ? "photo" : "photos"}
+        </span>
+      </div>
 
       <div
-        className={`grid gap-2 ${
-          images.length === 1
-            ? "grid-cols-1"
-            : "grid-cols-2"
-        }`}
+        className={`grid gap-2 ${previewImages.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}
         role="group"
-        aria-label={`Community photos of ${placeName}`}
+        aria-label={`Community photo previews of ${placeName}`}
       >
-        {images.map((image, index) => {
-          const isThirdPhoto =
-            images.length === 3 && index === 2;
-
-          const isFullWidth =
-            images.length === 1 || isThirdPhoto;
-
-          return (
-            <figure
-              key={image.id}
-              className={`min-w-0 overflow-hidden rounded-lg border border-gray-200 bg-gray-50 ${
-                isThirdPhoto ? "col-span-2" : ""
-              }`}
+        {previewImages.map((image, index) => (
+          <figure
+            key={image.id}
+            className="min-w-0 overflow-hidden rounded-lg border border-gray-200 bg-gray-50"
+          >
+            <button
+              type="button"
+              onClick={onOpenGallery}
+              aria-label={`See all ${images.length} photos of ${placeName}`}
+              className="group relative block w-full overflow-hidden text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#12395A]"
             >
               <img
                 src={image.url}
@@ -145,28 +149,20 @@ function PlacePhotoGallery({
                     : `Photo ${index + 1} of ${placeName}`
                 }
                 loading="lazy"
-                className={`w-full object-cover ${
-                  isFullWidth
-                    ? "aspect-[16/9]"
-                    : "aspect-[4/3]"
-                }`}
+                className="aspect-[4/3] w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
               />
 
-              <figcaption className="truncate border-t border-gray-100 px-2 py-1.5 text-[10px] text-gray-600">
-                {image.caption?.trim() ||
-                  `Community photo ${index + 1}`}
-              </figcaption>
-            </figure>
-          );
-        })}
-      </div>
+              <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/50 text-xs font-semibold text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
+                See photos
+              </span>
+            </button>
 
-      <p className="mt-1.5 text-right text-[10px] text-gray-400">
-        {images.length} approved{" "}
-        {images.length === 1
-          ? "community photo"
-          : "community photos"}
-      </p>
+            <figcaption className="truncate border-t border-gray-100 px-2 py-1.5 text-[10px] text-gray-600">
+              {image.caption?.trim() || `Community photo ${index + 1}`}
+            </figcaption>
+          </figure>
+        ))}
+      </div>
     </section>
   );
 }
@@ -806,6 +802,11 @@ export function TransitMapPanel({
               placeName={place.name}
               images={
                 pointImages[`${place.kind}-${place.ref_id}`] ?? []
+              }
+              onOpenGallery={() =>
+                navigate(`/photos/${place.kind}/${place.ref_id}`, {
+                  state: { placeName: place.name },
+                })
               }
             />
           ))}

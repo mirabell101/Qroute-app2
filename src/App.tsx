@@ -1,4 +1,3 @@
-
 import {
   useEffect,
   useState,
@@ -59,6 +58,12 @@ import ResetOTP from "./pages/visitor/ResetOTP/ResetOTP";
 
 import TermsAndConditions from "./pages/visitor/Legal/TermsAndCondition";
 import PrivacyPolicy from "./pages/visitor/Legal/PrivacyPolicy";
+
+// ============================================================
+// PUBLIC PHOTO GALLERY
+// ============================================================
+
+import PhotoGalleryPage from "./pages/PhotoGalleryPage";
 
 // ============================================================
 // AUTHENTICATION PAGES
@@ -324,7 +329,6 @@ function hasOAuthCallbackPayload(): boolean {
   );
 }
 
-
 // ============================================================
 // SHARED UI
 // ============================================================
@@ -399,7 +403,6 @@ function App() {
   // 1. CENTRAL SESSION COORDINATOR
   // ==========================================================
 
-  
   const sessionSnapshot = useSyncExternalStore(
     subscribeSessionState,
     getSessionSnapshot,
@@ -1101,6 +1104,16 @@ function App() {
             {/* =================================================
                 PUBLIC ROUTES
             ================================================== */}
+
+            {/*
+              Public location photo gallery.
+              This route intentionally does not use protectedPage,
+              adminPage, or any authentication redirect.
+            */}
+            <Route
+              path="/photos/:kind/:id"
+              element={<PhotoGalleryPage />}
+            />
 
             <Route
               path="/"
