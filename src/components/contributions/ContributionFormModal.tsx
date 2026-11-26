@@ -80,6 +80,7 @@ interface ContributionFormModalData {
   otherTerminals: ExistingPoint[];
   otherStops: ExistingPoint[];
   lastExistingPoint: ExistingPoint | undefined;
+  matchingRouteChangeCandidates: ExistingPoint[];
   inspectKey: string | null;
   inspectPoint: ExistingPoint | undefined;
   inspectRoutes: ExistingRoute[];
@@ -95,6 +96,7 @@ interface ContributionFormModalActions {
   onMapPick: (position: Coordinates) => void;
   onPickExisting: (point: ExistingPoint) => void;
   onAddExistingPoint: (point: ExistingPoint) => void;
+  onAddRouteChangeExistingPoint: (point: ExistingPoint) => void;
   onAddExistingKeys: (keys: string[]) => void;
   onSelectPoint: (key: string | null) => void;
   onMovePin: (position: Coordinates) => void;
@@ -111,9 +113,9 @@ interface ContributionFormModalActions {
   onConvertRoutePointKind: (key: string, kind: "terminal" | "stop") => void;
   onRouteChangeRemarksChange: (value: string) => void;
   onRemoveRoutePoint: (key: string) => void;
-  onRestoreRoutePoint: (key: string) => void;
-  onPointPhotoFile: (key: string, file: File) => void;
-  onRemovePointPhoto: (key: string) => void;
+  onRestoreRoutePoint?: (key: string) => void;
+  onPointPhotoFiles: (key: string, files: File[]) => void;
+  onRemovePointPhoto: (key: string, photoIndex: number) => void;
   onTerminalPhotosChange: (files: File[]) => void;
   onRemoveTerminalPhoto: (index: number) => void;
   onSubmit: () => void;
@@ -203,12 +205,12 @@ export default function ContributionFormModal({
   const handlePointPhotoInput = (
     event: ChangeEvent<HTMLInputElement>
   ) => {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files ?? []) as File[];
     event.target.value = "";
     const target = pointPhotoTargetRef.current;
     pointPhotoTargetRef.current = null;
-    if (file && target) {
-      actions.onPointPhotoFile(target, file);
+    if (files.length > 0 && target) {
+      actions.onPointPhotoFiles(target, files);
     }
   };
 
@@ -1028,6 +1030,7 @@ export default function ContributionFormModal({
               ref={pointPhotoInputRef}
               type="file"
               accept="image/png,image/jpeg,image/webp"
+              multiple
               className="hidden"
               onChange={handlePointPhotoInput}
             />

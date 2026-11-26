@@ -5,12 +5,12 @@ import {
   ArrowRightLeft,
   ArrowUp,
   GripVertical,
-  ImagePlus,
   Trash2,
-  Undo2,
-  X,
+  RotateCcw,
 } from "lucide-react";
 
+import PhotoUploadGrid from "@/components/contributions/PhotoUploadGrid";
+import type { PhotoPreview } from "@/components/contributions/PhotoUploadGrid";
 import type { PointKind } from "@/lib/contributions";
 
 export interface RouteSequenceEntry {
@@ -26,11 +26,10 @@ export interface RouteSequenceEntry {
   canConvertToStop: boolean;
   canConvertToTerminal: boolean;
   canRemove: boolean;
-  canRestore: boolean;
-  pendingRemoval: boolean;
   canUpload: boolean;
-  photoPreviewUrl: string | null;
-  photoFileName: string | null;
+  pendingRemoval?: boolean;
+  photos: PhotoPreview[];
+  photoLimit: number;
   positionPending: boolean;
 }
 
@@ -47,9 +46,9 @@ interface RouteSequencePanelProps {
   onMoveTo: (fromIndex: number, toIndex: number) => void;
   onConvertToKind: (key: string, kind: PointKind) => void;
   onRemove: (key: string) => void;
-  onRestore: (key: string) => void;
+  onRestore?: (key: string) => void;
   onChoosePhoto: (key: string) => void;
-  onRemovePhoto: (key: string) => void;
+  onRemovePhoto: (key: string, photoIndex: number) => void;
 }
 
 export default function RouteSequencePanel({
@@ -132,13 +131,11 @@ export default function RouteSequencePanel({
               onDragOver={(event) => handleDragOver(index, event)}
               onDrop={(event) => handleDrop(index, event)}
               className={`rounded-lg border p-2.5 transition-colors ${
-                entry.pendingRemoval
-                  ? "border-red-200 bg-red-50/70 opacity-80"
-                  : rowIsDragging
-                    ? "border-dashed border-[#12395A] bg-blue-50 opacity-50"
-                    : selected
-                      ? "border-[#12395A] bg-blue-50/60"
-                      : "border-gray-200 bg-gray-50 hover:border-gray-300"
+                rowIsDragging
+                  ? "border-dashed border-[#12395A] bg-blue-50 opacity-50"
+                  : selected
+                    ? "border-[#12395A] bg-blue-50/60"
+                    : "border-gray-200 bg-gray-50 hover:border-gray-300"
               }`}
             >
               <div className="flex min-w-0 items-start gap-2">
@@ -191,6 +188,11 @@ export default function RouteSequencePanel({
                         Proposed point
                       </span>
                     )}
+                    {entry.pendingRemoval && (
+                      <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-800">
+                        Removal requested
+                      </span>
+                    )}
                     {entry.canConvertToStop && (
                       <button
                         type="button"
@@ -212,7 +214,7 @@ export default function RouteSequencePanel({
                           event.stopPropagation();
                           onConvertToKind(entry.key, "terminal");
                         }}
-                        title="Convert this road stop into a terminal at its current position in the proposed route"
+                        title="Convert this endpoint road stop into a terminal in the proposed route"
                         className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-800 hover:bg-blue-100"
                       >
                         <ArrowRightLeft size={12} />
@@ -221,7 +223,7 @@ export default function RouteSequencePanel({
                     )}
                   </div>
 
-                  {entry.editable && !entry.pendingRemoval ? (
+                  {entry.editable ? (
                     <input
                       value={entry.name}
                       maxLength={120}
@@ -236,7 +238,7 @@ export default function RouteSequencePanel({
                       }`}
                     />
                   ) : (
-                    <p className={`truncate py-1.5 text-sm font-medium ${entry.pendingRemoval ? "text-red-800 line-through" : "text-gray-900"}`}>
+                    <p className="truncate py-1.5 text-sm font-medium text-gray-900">
                       {entry.name || "Unnamed location"}
                     </p>
                   )}
@@ -247,30 +249,19 @@ export default function RouteSequencePanel({
                     </p>
                   )}
 
-                  {entry.photoFileName && (
-                    <div className="mt-2 flex min-w-0 items-center gap-2 text-[11px] text-gray-600">
-                      {entry.photoPreviewUrl && (
-                        <img
-                          src={entry.photoPreviewUrl}
-                          alt={`Preview for ${entry.name || entry.typeLabel}`}
-                          className="h-9 w-9 shrink-0 rounded-md object-cover"
-                        />
-                      )}
-                      <span className="min-w-0 flex-1 truncate">
-                        {entry.photoFileName}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onRemovePhoto(entry.key);
-                        }}
-                        title="Remove photo"
-                        aria-label={`Remove photo from ${entry.name || entry.typeLabel}`}
-                        className="rounded p-1 text-gray-500 hover:bg-white hover:text-red-600"
-                      >
-                        <X size={14} />
-                      </button>
+                  {entry.canUpload && (
+                    <div
+                      className="mt-3"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <PhotoUploadGrid
+                        photos={entry.photos}
+                        maximum={entry.photoLimit}
+                        onAdd={() => onChoosePhoto(entry.key)}
+                        onRemove={(photoIndex) =>
+                          onRemovePhoto(entry.key, photoIndex)
+                        }
+                      />
                     </div>
                   )}
                 </div>
@@ -307,20 +298,20 @@ export default function RouteSequencePanel({
                     </div>
                   )}
 
-                  {entry.canUpload && (
+
+
+                  {entry.pendingRemoval && onRestore && (
                     <button
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation();
-                        onChoosePhoto(entry.key);
+                        onRestore(entry.key);
                       }}
-                      title="Add or change photo"
-                      aria-label={`Add a photo to ${entry.name || entry.typeLabel}`}
-                      className={`rounded p-1.5 hover:bg-white ${
-                        entry.photoPreviewUrl ? "text-[#12395A]" : "text-gray-500"
-                      }`}
+                      title="Restore this location to the proposed route"
+                      aria-label={`Restore ${entry.name || entry.typeLabel} to route`}
+                      className="rounded p-1.5 text-gray-500 hover:bg-white hover:text-[#12395A]"
                     >
-                      <ImagePlus size={16} />
+                      <RotateCcw size={16} />
                     </button>
                   )}
 
@@ -331,25 +322,11 @@ export default function RouteSequencePanel({
                         event.stopPropagation();
                         onRemove(entry.key);
                       }}
-                      title={entry.existing ? "Request removal from this route" : "Remove proposed point"}
-                      aria-label={`${entry.existing ? "Request removal of" : "Remove"} ${entry.name || entry.typeLabel}`}
+                      title="Remove from proposed route"
+                      aria-label={`Remove ${entry.name || entry.typeLabel} from route`}
                       className="rounded p-1.5 text-gray-500 hover:bg-white hover:text-red-600"
                     >
                       <Trash2 size={16} />
-                    </button>
-                  )}
-                  {entry.canRestore && (
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onRestore(entry.key);
-                      }}
-                      title="Restore this location to the proposed route"
-                      aria-label={`Restore ${entry.name || entry.typeLabel} to route`}
-                      className="rounded p-1.5 text-red-700 hover:bg-white hover:text-green-700"
-                    >
-                      <Undo2 size={16} />
                     </button>
                   )}
                 </div>
@@ -361,12 +338,7 @@ export default function RouteSequencePanel({
 
       {entries.some((entry) => entry.canMove) && (
         <p className="mt-2 text-[11px] text-gray-500">
-          Drag a road stop using the grip handle, or use the arrows to move it. Reordering affects only this proposed route sequence.
-        </p>
-      )}
-      {entries.some((entry) => entry.pendingRemoval) && (
-        <p className="mt-2 text-[11px] text-red-700">
-          Requested removals are not applied unless a moderator approves the proposal. A shared location is soft-deleted only when no other route still uses it.
+          Drag a stop using the grip handle, or use the arrows to move it. For distance-based routes, either endpoint can be converted between a terminal and a road stop.
         </p>
       )}
     </section>

@@ -1,4 +1,3 @@
-
 import {
   Plus,
   X,
@@ -16,7 +15,6 @@ export interface PhotoPreview {
 interface PhotoUploadGridProps {
   photos: PhotoPreview[];
   maximum: number;
-
   onAdd: () => void;
   onRemove: (index: number) => void;
 }
@@ -76,10 +74,7 @@ export default function PhotoUploadGrid({
             onClick={onAdd}
             className="flex min-h-[96px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 px-3 py-3 text-center transition-colors hover:border-[#12395A] hover:bg-gray-100"
           >
-            <Plus
-              size={22}
-              className="mb-1 text-gray-500"
-            />
+            <Plus size={22} className="mb-1 text-gray-500" />
 
             <span className="text-sm font-medium text-gray-700">
               Add photo
