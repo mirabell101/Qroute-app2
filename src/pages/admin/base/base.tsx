@@ -152,7 +152,13 @@ export default function Base({
         <TransitMapSearch map={map} />
 
         {/* VEHICLE FILTERS: DISABLED FOR ADMIN */}
-        <VehicleFilterBar disabled />
+        <VehicleFilterBar
+          transportTypes={map.transportTypes}
+          activeVehicleTypeId={map.activeTransportTypeId}
+          onSelect={map.handleVehicleFilterSelect}
+          onClear={map.clearVehicleFilter}
+          disabled={map.transportTypesLoading}
+        />
 
         {/* ADMIN NOTIFICATION + PROFILE */}
         <div className="relative ml-[300px] flex h-[55px] items-center gap-[20px]">

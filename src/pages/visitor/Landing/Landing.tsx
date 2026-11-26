@@ -200,7 +200,11 @@ map.handleSavedItemSelect(savedSelection);
 
         {/* VEHICLE FILTERS */}
         <VehicleFilterBar
-          onSelect={(vehicle) => handleClick(vehicle)}
+          transportTypes={map.transportTypes}
+          activeVehicleTypeId={map.activeTransportTypeId}
+          onSelect={map.handleVehicleFilterSelect}
+          onClear={map.clearVehicleFilter}
+          disabled={map.transportTypesLoading}
         />
 
         {/* NOTIFICATION + PROFILE */}

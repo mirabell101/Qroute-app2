@@ -279,7 +279,9 @@ export function TransitMapCanvas({
     boardingIndex,
     destinationIndex,
     routeColor,
-    mapPoints,
+    displayedMapPoints,
+    transportTypes,
+    activeTransportTypeId,
     pointIcon,
 
     // Actions
@@ -483,7 +485,7 @@ export function TransitMapCanvas({
             destination icons through pointIcon().
         ================================================== */}
 
-        {mapPoints.flatMap((point) => {
+        {displayedMapPoints.flatMap((point) => {
           const routeStopIndex = selectedRoute
             ? findRouteStopIndex(
                 selectedRouteStops,
@@ -528,6 +530,13 @@ export function TransitMapCanvas({
           >();
 
           point.routes.forEach(({ route }) => {
+            if (
+              activeTransportTypeId !== null &&
+              route.transport_type_id !== activeTransportTypeId
+            ) {
+              return;
+            }
+
             routeModes.set(
               route.transport_type_id,
               {
@@ -543,7 +552,24 @@ export function TransitMapCanvas({
             ...routeModes.values(),
           ];
 
-          // Unassociated stops remain visible.
+          // Independent locations use their own transport type.
+          // During filtering, use the selected catalog type so a
+          // standalone point still receives the matching vehicle icon.
+          if (modes.length === 0 && activeTransportTypeId !== null) {
+            const activeType = transportTypes.find(
+              (type) => type.id === activeTransportTypeId,
+            );
+
+            if (activeType) {
+              modes.push({
+                vehicleType: getMapVehicleType(activeType.name),
+                color: activeType.color,
+              });
+            }
+          }
+
+          // Unfiltered independent stops retain their station/road
+          // fallback icons. Independent terminals keep a neutral glyph.
           if (
             modes.length === 0 &&
             point.kind === "stop"
@@ -557,8 +583,6 @@ export function TransitMapCanvas({
             });
           }
 
-          // Terminals without an associated route also remain
-          // visible, but use a neutral vehicle glyph instead of T.
           if (
             modes.length === 0 &&
             point.kind === "terminal"

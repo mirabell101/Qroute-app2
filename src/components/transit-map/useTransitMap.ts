@@ -7,6 +7,8 @@ import {
 } from "react";
 import type { KeyboardEvent } from "react";
 
+import { supabase } from "@/lib/supabase";
+
 // ============================================================
 // DATA SERVICES
 // ============================================================
@@ -149,6 +151,21 @@ export type Coordinates = [
 export interface PinnedMapLocation {
   coordinates: Coordinates;
   label: string;
+}
+
+export interface MapTransportType {
+  id: number;
+  name: string;
+  color: string;
+}
+
+interface PointTransportMetadata {
+  id: number;
+  transport_type_id?: number | null;
+  transport_types?: {
+    name: string;
+    color: string;
+  } | null;
 }
 
 export interface RouteLayerState {
@@ -312,6 +329,19 @@ export function useTransitMap(
     useState<string | null>(null);
 
   // ==========================================================
+  // VEHICLE FILTER
+  // ==========================================================
+
+  const [transportTypes, setTransportTypes] =
+    useState<MapTransportType[]>([]);
+
+  const [transportTypesLoading, setTransportTypesLoading] =
+    useState(true);
+
+  const [activeTransportTypeId, setActiveTransportTypeId] =
+    useState<number | null>(null);
+
+  // ==========================================================
   // SELECTED ROUTE
   // ==========================================================
 
@@ -426,9 +456,56 @@ export function useTransitMap(
    * Locations without route associations are still included
    * and remain available for map discovery and bookmarking.
    */
-  const mapPoints = useMemo(
-    () => mergeMapLocations(routeMapIndex, stops, terminals),
-    [routeMapIndex, stops, terminals],
+  const mapPoints = useMemo(() => {
+    // The merged route-map point intentionally keeps its route
+    // associations. Add each source record's transport_type_id so
+    // independent stops and terminals can also be filtered.
+    const stopTransportTypeIds = new Map(
+      (stops as unknown as PointTransportMetadata[]).map((stop) => [
+        stop.id,
+        stop.transport_type_id ?? null,
+      ]),
+    );
+
+    const terminalTransportTypeIds = new Map(
+      (terminals as unknown as PointTransportMetadata[]).map((terminal) => [
+        terminal.id,
+        terminal.transport_type_id ?? null,
+      ]),
+    );
+
+    return mergeMapLocations(routeMapIndex, stops, terminals).map((point) => ({
+      ...point,
+      transport_type_id:
+        point.kind === "stop"
+          ? stopTransportTypeIds.get(point.ref_id) ?? null
+          : terminalTransportTypeIds.get(point.ref_id) ?? null,
+    }));
+  }, [routeMapIndex, stops, terminals]);
+
+  /**
+   * When a point belongs to one or more routes, its route
+   * associations determine which vehicle filters should show it.
+   * Independent points fall back to their own transport_type_id.
+   */
+  const displayedMapPoints = useMemo(
+    () => {
+      if (activeTransportTypeId === null) {
+        return mapPoints;
+      }
+
+      return mapPoints.filter((point) => {
+        const associatedTypeIds = new Set(
+          point.routes.map(({ route }) => route.transport_type_id),
+        );
+
+        if (associatedTypeIds.size > 0) {
+          return associatedTypeIds.has(activeTransportTypeId);
+        }
+
+        return point.transport_type_id === activeTransportTypeId;
+      });
+    }, [mapPoints, activeTransportTypeId],
   );
 
   const selectedPlace = useMemo(
@@ -443,14 +520,25 @@ export function useTransitMap(
     [mapPoints, selectedPlacePoint],
   );
 
+  const displayedRoutesForSearch = useMemo(
+    () =>
+      activeTransportTypeId === null
+        ? routeMapIndex.routes
+        : routeMapIndex.routes.filter(
+            (route) =>
+              route.transport_type_id === activeTransportTypeId,
+          ),
+    [routeMapIndex.routes, activeTransportTypeId],
+  );
+
   const searchResults = useMemo(
     () =>
       searchRouteMapItems(
-        routeMapIndex.routes,
-        mapPoints,
+        displayedRoutesForSearch,
+        displayedMapPoints,
         searchQuery,
       ),
-    [routeMapIndex.routes, mapPoints, searchQuery],
+    [displayedRoutesForSearch, displayedMapPoints, searchQuery],
   );
 
   // ==========================================================
@@ -508,7 +596,14 @@ export function useTransitMap(
       displayedRouteIds.flatMap((routeId) => {
         const layer = routeLayers[routeId];
 
-        if (!layer?.route || !layer.geometry) {
+        if (
+          !layer?.route ||
+          !layer.geometry ||
+          (
+            activeTransportTypeId !== null &&
+            layer.route.transport_type_id !== activeTransportTypeId
+          )
+        ) {
           return [];
         }
 
@@ -523,6 +618,7 @@ export function useTransitMap(
     [
       displayedRouteIds,
       routeLayers,
+      activeTransportTypeId,
     ],
   );
 
@@ -836,6 +932,100 @@ export function useTransitMap(
       active = false;
     };
   }, [currentUserId]);
+
+  // ==========================================================
+  // LOAD VEHICLE FILTER OPTIONS FROM transport_types
+  // ==========================================================
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadTransportTypes() {
+      setTransportTypesLoading(true);
+
+      try {
+        const { data, error } = await supabase
+          .from("transport_types")
+          .select("id, name, color")
+          .order("name", { ascending: true });
+
+        if (error) {
+          throw error;
+        }
+
+        if (active) {
+          setTransportTypes(
+            (data ?? []).map((type) => ({
+              id: type.id,
+              name: type.name,
+              color: type.color,
+            })),
+          );
+        }
+      } catch (error: unknown) {
+        // The map should remain usable if the catalog lookup fails.
+        // Distinct types from the already-loaded public routes provide
+        // a safe fallback for any transport currently represented.
+        console.error(
+          "Unable to load vehicle filter options:",
+          error,
+        );
+
+        if (active) {
+          const fallback = new Map<number, MapTransportType>();
+
+          routeMapIndex.routes.forEach((route) => {
+            fallback.set(route.transport_type_id, {
+              id: route.transport_type_id,
+              name: route.transport_types.name,
+              color: route.transport_types.color,
+            });
+          });
+
+          const addPointFallbackType = (record: PointTransportMetadata) => {
+            const transportTypeId = record.transport_type_id;
+            const transportType = record.transport_types;
+
+            if (
+              transportTypeId !== null &&
+              transportTypeId !== undefined &&
+              transportType &&
+              !fallback.has(transportTypeId)
+            ) {
+              fallback.set(transportTypeId, {
+                id: transportTypeId,
+                name: transportType.name,
+                color: transportType.color,
+              });
+            }
+          };
+
+          (stops as unknown as PointTransportMetadata[]).forEach(
+            addPointFallbackType,
+          );
+          (terminals as unknown as PointTransportMetadata[]).forEach(
+            addPointFallbackType,
+          );
+
+          setTransportTypes(
+            [...fallback.values()].sort((left, right) =>
+              left.name.localeCompare(right.name),
+            ),
+          );
+        }
+      } finally {
+        if (active) {
+          setTransportTypesLoading(false);
+        }
+      }
+    }
+
+    void loadTransportTypes();
+
+    return () => {
+      active = false;
+    };
+  }, [routeMapIndex.routes, stops, terminals]);
 
   // ==========================================================
   // LOAD ROUTE LAYER
@@ -1509,6 +1699,76 @@ export function useTransitMap(
   };
 
   // ==========================================================
+  // VEHICLE FILTER ACTIONS
+  // ==========================================================
+
+  const handleVehicleFilterSelect = (transportTypeId: number) => {
+    if (
+      !Number.isSafeInteger(transportTypeId) ||
+      !transportTypes.some((type) => type.id === transportTypeId)
+    ) {
+      return;
+    }
+
+    setActiveTransportTypeId(transportTypeId);
+    setSelectionError(null);
+
+    // A journey can remain active only when its selected route
+    // belongs to the newly selected transport type.
+    const selectedRouteCatalogEntry = routeMapIndex.routes.find(
+      (route) => route.id === Number(selectedRouteId),
+    );
+    const selectedRouteTypeId =
+      selectedRouteCatalogEntry?.transport_type_id ?? null;
+
+    if (
+      selectedRouteId &&
+      selectedRouteTypeId !== null &&
+      selectedRouteTypeId !== transportTypeId
+    ) {
+      pendingBoardingPoint.current = null;
+      pendingSavedJourney.current = null;
+      setBoardingIndex(null);
+      setDestinationIndex(null);
+      setVisibleRouteIds([]);
+      setRouteLinesVisible(false);
+      setSelectedRouteId("");
+    }
+
+    // Keep the selected place card only if that location is still
+    // served by the chosen vehicle type (or is an independent point
+    // whose own transport_type_id matches it).
+    if (selectedPlacePoint) {
+      const selectedPoint = mapPoints.find(
+        (point) =>
+          point.kind === selectedPlacePoint.kind &&
+          point.ref_id === selectedPlacePoint.ref_id,
+      );
+
+      const associatedTypeIds = new Set(
+        selectedPoint?.routes.map(
+          ({ route }) => route.transport_type_id,
+        ) ?? [],
+      );
+
+      const selectedPointMatches = selectedPoint
+        ? associatedTypeIds.size > 0
+          ? associatedTypeIds.has(transportTypeId)
+          : selectedPoint.transport_type_id === transportTypeId
+        : false;
+
+      if (!selectedPointMatches) {
+        clearPhotoSession();
+        setSelectedPlacePoint(null);
+      }
+    }
+  };
+
+  const clearVehicleFilter = () => {
+    setActiveTransportTypeId(null);
+  };
+
+  // ==========================================================
   // SELECT MAP PLACE
   // ==========================================================
 
@@ -2011,6 +2271,10 @@ export function useTransitMap(
     // --------------------------------------------------------
 
     mapPoints,
+    displayedMapPoints,
+    transportTypes,
+    transportTypesLoading,
+    activeTransportTypeId,
     selectedPlace,
     selectedPlaceImages,
     selectedPlaceImage,
@@ -2095,6 +2359,8 @@ export function useTransitMap(
 
     pointIcon,
     handlePlaceSelect,
+    handleVehicleFilterSelect,
+    clearVehicleFilter,
     handleRouteListPick,
     handleCommunityMapLocation,
     clearPinnedMapLocation,
