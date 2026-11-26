@@ -1,4 +1,3 @@
-
 import { Router, type Request, type Response } from "express";
 
 import requireAdmin from "../middleware/requireAdmin.ts";
@@ -27,6 +26,11 @@ import {
   type AdminUserRole,
 } from "../admin.ts";
 
+import {
+  getAdminMapImagesForLocation,
+  getAdminMapImagesForProposal,
+} from "../adminMapImages.ts";
+
 import { writeAdminAuditLog } from "../adminAudit.ts";
 
 import {
@@ -43,6 +47,8 @@ import {
   getSupabaseAdminClient,
   getSupabaseClientForAccessToken,
 } from "../supabaseClient.ts";
+
+import { publishApprovedMapImageById } from "../mapImagePublishing.ts";
 
 import {
   downloadCommunityPhoto,
@@ -255,6 +261,99 @@ function sendAdminError(
 }
 
 // -----------------------------------------------------------------------------
+// Map-image moderation error handling
+// -----------------------------------------------------------------------------
+
+/**
+ * Handles SQL errors returned by public.moderate_map_image().
+ *
+ * The database function remains responsible for authorization,
+ * image eligibility, parent eligibility and transactional auditing.
+ */
+function sendMapImageModerationError(
+  res: Response,
+  error: unknown,
+): void {
+  const errorRecord = getRequestBody(error);
+
+  const code = errorRecord?.code;
+  const message = errorRecord?.message;
+
+  if (code === "42501") {
+    // These two cases are valid administrator requests,
+    // but their parent records are not yet eligible for
+    // individual image approval.
+    if (
+      message ===
+        "Approve the associated route-change proposal before approving its photographs." ||
+      message ===
+        "The associated stop or terminal is not approved and publicly available."
+    ) {
+      res.status(409).json({
+        success: false,
+        message:
+          typeof message === "string"
+            ? message
+            : "The associated location is not yet eligible for image approval.",
+      });
+
+      return;
+    }
+
+    res.status(403).json({
+      success: false,
+      message:
+        "You are not authorized to perform this image moderation action.",
+    });
+
+    return;
+  }
+
+  if (code === "P0002") {
+    res.status(404).json({
+      success: false,
+      message:
+        typeof message === "string"
+          ? message
+          : "The requested image was not found or is no longer available.",
+    });
+
+    return;
+  }
+
+  if (code === "40001") {
+    res.status(409).json({
+      success: false,
+      message:
+        "The image or its associated location changed during moderation. Refresh the review and try again.",
+    });
+
+    return;
+  }
+
+  if (
+    code === "22023" ||
+    code === "23514"
+  ) {
+    res.status(400).json({
+      success: false,
+      message:
+        typeof message === "string"
+          ? message
+          : "The requested image moderation action is invalid.",
+    });
+
+    return;
+  }
+
+  sendAdminError(
+    res,
+    error,
+    "Unable to moderate the map image.",
+  );
+}
+
+// -----------------------------------------------------------------------------
 // Verified administrator context
 // -----------------------------------------------------------------------------
 
@@ -317,9 +416,10 @@ function getVerifiedAdminContext(
 // Do NOT use it for:
 // - admin_set_user_role
 // - admin_set_user_restriction
+// - moderate_map_image
 //
-// Both RPCs already insert their corresponding audit records
-// inside the same database transaction as the administrative action.
+// These operations already write their audit records inside the
+// same database transaction as the corresponding action.
 
 async function recordAdminAudit(
   input: Parameters<typeof writeAdminAuditLog>[0],
@@ -505,10 +605,6 @@ router.delete(
 );
 
 // -----------------------------------------------------------------------------
-// User Management: account listing
-// -----------------------------------------------------------------------------
-
-// -----------------------------------------------------------------------------
 // User Management: paginated account listing
 // -----------------------------------------------------------------------------
 //
@@ -546,10 +642,6 @@ router.get(
 
     if (!context) return;
 
-    // --------------------------------------------------------
-    // Page
-    // --------------------------------------------------------
-
     const rawPage = req.query.page;
 
     const page =
@@ -565,10 +657,6 @@ router.get(
 
       return;
     }
-
-    // --------------------------------------------------------
-    // Page size
-    // --------------------------------------------------------
 
     const rawPageSize = req.query.pageSize;
 
@@ -589,10 +677,6 @@ router.get(
 
       return;
     }
-
-    // --------------------------------------------------------
-    // Search
-    // --------------------------------------------------------
 
     const rawSearch = req.query.search;
 
@@ -623,10 +707,6 @@ router.get(
       return;
     }
 
-    // --------------------------------------------------------
-    // Status filter
-    // --------------------------------------------------------
-
     const status = parseAdminUserStatus(
       req.query.status,
     );
@@ -640,10 +720,6 @@ router.get(
 
       return;
     }
-
-    // --------------------------------------------------------
-    // Retrieve the requested page
-    // --------------------------------------------------------
 
     try {
       const usersPage = await getAdminUsersPage(
@@ -913,6 +989,303 @@ router.get(
 );
 
 // -----------------------------------------------------------------------------
+// Map Images: standalone stop / terminal photographs
+// -----------------------------------------------------------------------------
+//
+// GET /api/admin/map-images/locations/:entityType/:id
+//
+// The returned records contain:
+// - Image metadata.
+// - Moderation state.
+// - Contributor ID.
+// - A short-lived signed URL from private Storage.
+//
+// Proposal-associated photographs are deliberately excluded.
+//
+// The authenticated administrator client is used so the existing
+// map_images and Storage RLS policies remain active.
+//
+// Deleted images are omitted from this review response.
+//
+
+router.get(
+  "/map-images/locations/:entityType/:id",
+  async (req: Request, res: Response) => {
+    const locationType = req.params.entityType;
+    const id = parseRouteId(req.params.id);
+
+    if (
+      id === null ||
+      (
+        locationType !== "terminal" &&
+        locationType !== "stop"
+      )
+    ) {
+      res.status(400).json({
+        success: false,
+        message:
+          "A valid location type and ID are required.",
+      });
+
+      return;
+    }
+
+    const context = getVerifiedAdminContext(res);
+
+    if (!context) return;
+
+    res.setHeader("Cache-Control", "no-store");
+
+    try {
+      const images = await getAdminMapImagesForLocation(
+        getSupabaseClientForAccessToken(
+          context.accessToken,
+        ),
+        locationType,
+        id,
+      );
+
+      res.json({
+        success: true,
+        images,
+      });
+    } catch (error: unknown) {
+      sendAdminError(
+        res,
+        error,
+        "Unable to load the location photographs.",
+      );
+    }
+  },
+);
+
+// -----------------------------------------------------------------------------
+// Map Images: route-change proposal photographs
+// -----------------------------------------------------------------------------
+//
+// GET /api/admin/map-images/proposals/:id
+//
+// Returns photographs specifically attached to the selected
+// route-change proposal.
+//
+// Proposal point order is preserved in the response so the
+// frontend can group photographs under their corresponding
+// proposed route locations.
+//
+// Independent photographs attached to existing stops or
+// terminals are never included.
+//
+
+router.get(
+  "/map-images/proposals/:id",
+  async (req: Request, res: Response) => {
+    const proposalId = parseRouteId(req.params.id);
+
+    if (proposalId === null) {
+      res.status(400).json({
+        success: false,
+        message:
+          "A valid route-change proposal ID is required.",
+      });
+
+      return;
+    }
+
+    const context = getVerifiedAdminContext(res);
+
+    if (!context) return;
+
+    res.setHeader("Cache-Control", "no-store");
+
+    try {
+      const images = await getAdminMapImagesForProposal(
+        getSupabaseClientForAccessToken(
+          context.accessToken,
+        ),
+        proposalId,
+      );
+
+      res.json({
+        success: true,
+        images,
+      });
+    } catch (error: unknown) {
+      sendAdminError(
+        res,
+        error,
+        "Unable to load route proposal photographs.",
+      );
+    }
+  },
+);
+
+// -----------------------------------------------------------------------------
+// Map Images: individual image moderation
+// -----------------------------------------------------------------------------
+//
+// POST /api/admin/map-images/:id/moderation
+//
+// Request:
+//
+// {
+//   "action": "approve" | "reject",
+//   "moderation_note": "Optional note"
+// }
+//
+// The database RPC is authoritative for:
+// - Administrator authorization.
+// - Image ownership and parent association.
+// - Pending-image eligibility.
+// - Location eligibility.
+// - Proposal eligibility.
+// - Moderation state updates.
+// - Reviewer identity and timestamp.
+// - Transactional audit insertion.
+//
+// Do NOT use the service-role client for this RPC.
+// Do NOT insert a separate audit event here.
+//
+// Public Storage publication is handled separately after
+// a successful database approval.
+//
+
+router.post(
+  "/map-images/:id/moderation",
+  async (req: Request, res: Response) => {
+    const imageId = parseRouteId(req.params.id);
+    const body = getRequestBody(req.body);
+
+    const action = body?.action;
+    const moderationNote = body?.moderation_note;
+
+    if (
+      imageId === null ||
+      !body ||
+      (
+        action !== "approve" &&
+        action !== "reject"
+      ) ||
+      Object.keys(body).some(
+        (key) =>
+          !["action", "moderation_note"].includes(key),
+      ) ||
+      (
+        moderationNote !== undefined &&
+        moderationNote !== null &&
+        (
+          typeof moderationNote !== "string" ||
+          moderationNote.length > 500
+        )
+      )
+    ) {
+      res.status(400).json({
+        success: false,
+        message:
+          "A valid image ID, moderation action, and optional moderation note are required.",
+      });
+
+      return;
+    }
+
+    const context = getVerifiedAdminContext(res);
+
+    if (!context) return;
+
+    try {
+      const { data, error } =
+        await getSupabaseClientForAccessToken(
+          context.accessToken,
+        ).rpc("moderate_map_image", {
+          p_image_id: imageId,
+          p_action: action,
+          p_moderation_note:
+            typeof moderationNote === "string"
+              ? moderationNote.trim()
+              : null,
+        });
+
+      if (error) throw error;
+
+      // The authenticated moderation RPC remains authoritative for approval,
+      // parent eligibility, reviewer identity, and transactional auditing.
+      // Only after it succeeds do we use the privileged server client to copy
+      // an approved image to the public bucket and finalize its public path.
+      const publication =
+        action === "approve"
+          ? await publishApprovedMapImageById(
+              getSupabaseAdminClient(),
+              imageId,
+            )
+          : null;
+
+      res.setHeader("Cache-Control", "no-store");
+
+      res.json({
+        success: true,
+        result: data,
+        ...(publication ? { publication } : {}),
+      });
+    } catch (error: unknown) {
+      sendMapImageModerationError(res, error);
+    }
+  },
+);
+
+// -----------------------------------------------------------------------------
+// Map Images: retry public publication
+// -----------------------------------------------------------------------------
+//
+// POST /api/admin/map-images/:id/publication/retry
+//
+// This endpoint is protected by the router-wide requireAuth and
+// requireAdmin middleware. The publication helper only selects
+// already-approved, active images that have not yet been published.
+// The database publication RPC revalidates the image and its parent
+// before writing public_storage_path.
+//
+// This is intended for retrying a transient Storage-copy or
+// publication-finalization failure. It does not change moderation
+// state and does not create another moderation audit event.
+
+router.post(
+  "/map-images/:id/publication/retry",
+  async (req: Request, res: Response) => {
+    const imageId = parseRouteId(req.params.id);
+    const context = getVerifiedAdminContext(res);
+
+    if (!context) return;
+
+    if (imageId === null) {
+      res.status(400).json({
+        success: false,
+        message: "A valid map-image ID is required.",
+      });
+      return;
+    }
+
+    res.setHeader("Cache-Control", "no-store");
+
+    try {
+      const publication = await publishApprovedMapImageById(
+        getSupabaseAdminClient(),
+        imageId,
+      );
+
+      res.json({
+        success: true,
+        publication,
+      });
+    } catch (error: unknown) {
+      sendAdminError(
+        res,
+        error,
+        "Unable to retry map-image publication.",
+      );
+    }
+  },
+);
+
+// -----------------------------------------------------------------------------
 // Community posts
 // -----------------------------------------------------------------------------
 
@@ -1008,7 +1381,6 @@ router.patch(
         status,
       );
 
-      // Retain existing best-effort audit behavior for report updates.
       await recordAdminAudit({
         adminUserId: context.adminUserId,
         categoryKey: "report_management",

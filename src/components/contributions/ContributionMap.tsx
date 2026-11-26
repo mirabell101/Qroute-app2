@@ -224,7 +224,6 @@ function MapFitHandler({
 
 function StandalonePinMarker({
   position,
-  mode,
   icon,
   name,
   openPopup,
@@ -234,7 +233,6 @@ function StandalonePinMarker({
   onMove,
 }: {
   position: MapCoordinates;
-  mode: "terminal";
   icon: L.Icon | L.DivIcon;
   name: string;
   openPopup: boolean;
@@ -453,7 +451,6 @@ export default function ContributionMap({
       {mode === "terminal" && pin && (
         <StandalonePinMarker
           position={pin}
-          mode="terminal"
           icon={vehicleIcon}
           name={pinName}
           openPopup={selectedPointKey === pinKey}

@@ -58,7 +58,6 @@ import type {
   ExistingPoint,
   ExistingRoute,
   MyContribution,
-  MyContributionStatus,
   PointInput,
   PointKind,
   RouteChangePointInput,

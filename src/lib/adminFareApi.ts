@@ -117,7 +117,6 @@ export interface RailFareInput {
   effectiveTo: string | null;
 }
 
-
 // =====================================================
 // RESPONSE VALIDATION
 // =====================================================
@@ -132,7 +131,13 @@ function isRecord(
   );
 }
 
-function isPositiveInteger(value: unknown): boolean {
+/**
+ * Narrows an unknown value to a positive, safe integer.
+ *
+ * Returning a type predicate (rather than plain boolean) lets
+ * TypeScript safely use the validated value as a number.
+ */
+function isPositiveInteger(value: unknown): value is number {
   return (
     typeof value === "number" &&
     Number.isSafeInteger(value) &&
@@ -140,14 +145,14 @@ function isPositiveInteger(value: unknown): boolean {
   );
 }
 
-function isFiniteNumber(value: unknown): boolean {
+function isFiniteNumber(value: unknown): value is number {
   return (
     typeof value === "number" &&
     Number.isFinite(value)
   );
 }
 
-function isNullableNumber(value: unknown): boolean {
+function isNullableNumber(value: unknown): value is number | null {
   return value === null || isFiniteNumber(value);
 }
 
@@ -155,7 +160,7 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
-function isNullableString(value: unknown): boolean {
+function isNullableString(value: unknown): value is string | null {
   return value === null || isString(value);
 }
 
@@ -311,7 +316,6 @@ function parseFareManagementData(
   };
 }
 
-
 // =====================================================
 // AUTHENTICATED API REQUEST
 // =====================================================
@@ -351,7 +355,6 @@ async function requestFareManagement(
 
   const method = options.method ?? "GET";
   const hasBody = options.body !== undefined;
-
   const baseUrl = API_BASE_URL.replace(/\/$/, "");
 
   const response = await fetch(
@@ -422,7 +425,6 @@ function parseSavedId(
   return payload.id;
 }
 
-
 // =====================================================
 // LOAD MANAGEMENT DATA
 // =====================================================
@@ -437,7 +439,6 @@ export async function getAdminFareManagementData(
 
   return parseFareManagementData(payload.data);
 }
-
 
 // =====================================================
 // ROAD FARE RULES
@@ -489,7 +490,6 @@ export async function archiveAdminRoadFareRule(
   );
 }
 
-
 // =====================================================
 // FARE DISCOUNTS
 // =====================================================
@@ -539,7 +539,6 @@ export async function archiveAdminFareDiscount(
     },
   );
 }
-
 
 // =====================================================
 // TRAIN FARE MATRIX

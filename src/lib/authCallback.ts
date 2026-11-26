@@ -40,7 +40,6 @@ interface TokenPairResult {
  */
 function toSearchParams(value: string): URLSearchParams {
   const normalized = value.trim().replace(/^[?#]/, "");
-
   return new URLSearchParams(normalized);
 }
 
@@ -82,24 +81,6 @@ function resolveUniqueValue(
     value: uniqueValues[0] ?? null,
     ambiguous: false,
   };
-}
-
-/**
- * Resolves a parameter across the query and fragment.
- *
- * Query and fragment values are not combined when they conflict.
- */
-function firstValue(
-  searchParams: URLSearchParams,
-  hashParams: URLSearchParams,
-  key: string,
-): string | null {
-  const result = resolveUniqueValue([
-    ...getNonEmptyValues(searchParams, key),
-    ...getNonEmptyValues(hashParams, key),
-  ]);
-
-  return result.ambiguous ? null : result.value;
 }
 
 function hasAnyParameter(

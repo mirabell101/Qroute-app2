@@ -470,6 +470,52 @@ export interface AdminRouteChangeProposalModerationResult {
 }
 
 
+/* -------------------------------------------------------------------------- */
+/*                           MAP IMAGE REVIEW TYPES                          */
+/* -------------------------------------------------------------------------- */
+
+export type AdminMapImageModerationStatus =
+  | "pending"
+  | "approved"
+  | "rejected";
+
+export type AdminMapImageLocationType =
+  | "stop"
+  | "terminal";
+
+export type AdminMapImageModerationAction =
+  | "approve"
+  | "reject";
+
+export interface AdminMapImage {
+  id: number;
+
+  terminalId: number | null;
+  stopId: number | null;
+
+  caption: string | null;
+
+  createdBy: string | null;
+  createdAt: string;
+
+  isApproved: boolean;
+  moderationStatus: AdminMapImageModerationStatus;
+
+  moderationNote: string | null;
+  moderatedBy: string | null;
+  moderatedAt: string | null;
+
+  isBanned: boolean;
+  isDeleted: boolean;
+
+  proposalId: number | null;
+  proposalStopOrder: number | null;
+
+  /** Short-lived signed URL for an administrator-only image preview. */
+  imageUrl: string | null;
+}
+
+
 
 /* -------------------------------------------------------------------------- */
 
@@ -960,54 +1006,119 @@ function isValidDateString(
  */
 
 function isNullableHttpsUrl(
-
   value: unknown,
-
 ): value is string | null {
-
   if (value === null) {
-
     return true;
-
   }
-
-
 
   if (typeof value !== "string" || !value.trim()) {
-
     return false;
-
   }
-
-
 
   try {
-
     const url = new URL(value);
 
-
-
     return (
-
       url.protocol === "https:" &&
-
       Boolean(url.hostname) &&
-
       !url.username &&
-
       !url.password
-
     );
-
   } catch {
-
     return false;
-
   }
-
 }
 
+/* -------------------------------------------------------------------------- */
+/*                         MAP IMAGE VALIDATORS                              */
+/* -------------------------------------------------------------------------- */
 
+/**
+ * Validates a signed image-preview URL.
+ *
+ * HTTPS is expected in production. HTTP is also accepted for local
+ * Supabase development environments. The URL is supplied by our backend,
+ * not directly by a user-controlled form field.
+ */
+function isNullableImagePreviewUrl(
+  value: unknown,
+): value is string | null {
+  if (value === null) {
+    return true;
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      Boolean(url.hostname) &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isAdminMapImageModerationStatus(
+  value: unknown,
+): value is AdminMapImageModerationStatus {
+  return (
+    value === "pending" ||
+    value === "approved" ||
+    value === "rejected"
+  );
+}
+
+function isAdminMapImage(
+  value: unknown,
+): value is AdminMapImage {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.id) ||
+    !(value.terminalId === null || isPositiveInteger(value.terminalId)) ||
+    !(value.stopId === null || isPositiveInteger(value.stopId)) ||
+    !isNullableString(value.caption) ||
+    !isNullableString(value.createdBy) ||
+    !isValidDateString(value.createdAt) ||
+    typeof value.isApproved !== "boolean" ||
+    !isAdminMapImageModerationStatus(value.moderationStatus) ||
+    !isNullableString(value.moderationNote) ||
+    !isNullableString(value.moderatedBy) ||
+    !(value.moderatedAt === null || isValidDateString(value.moderatedAt)) ||
+    typeof value.isBanned !== "boolean" ||
+    typeof value.isDeleted !== "boolean" ||
+    !(value.proposalId === null || isPositiveInteger(value.proposalId)) ||
+    !(value.proposalStopOrder === null || isPositiveInteger(value.proposalStopOrder)) ||
+    !isNullableImagePreviewUrl(value.imageUrl)
+  ) {
+    return false;
+  }
+
+  // Every image must belong to exactly one location.
+  const hasTerminal = value.terminalId !== null;
+  const hasStop = value.stopId !== null;
+
+  if (hasTerminal === hasStop) {
+    return false;
+  }
+
+  // Proposal ID and proposed point order must either both exist or both be null.
+  const hasProposalId = value.proposalId !== null;
+  const hasProposalStopOrder = value.proposalStopOrder !== null;
+
+  if (hasProposalId !== hasProposalStopOrder) {
+    return false;
+  }
+
+  return true;
+}
 
 function isAdminUserPageSize(
 
@@ -2850,6 +2961,156 @@ export async function getRouteManagementData(
 
 
 /* -------------------------------------------------------------------------- */
+/*                         ADMIN MAP IMAGE REVIEW                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Retrieves photographs attached directly to an existing stop or terminal.
+ * Proposal-associated photographs are deliberately excluded.
+ *
+ * GET /api/admin/map-images/locations/:entityType/:id
+ */
+export async function getAdminMapImagesForLocation(
+  expectedUserId: string,
+  entityType: AdminMapImageLocationType,
+  entityId: number,
+): Promise<AdminMapImage[]> {
+  if (entityType !== "stop" && entityType !== "terminal") {
+    throw new Error("A valid map location type is required.");
+  }
+
+  if (!isPositiveInteger(entityId)) {
+    throw new Error("A valid location ID is required.");
+  }
+
+  const payload = await requestAdmin(
+    `/map-images/locations/${entityType}/${entityId}`,
+    expectedUserId,
+  );
+
+  if (
+    !Array.isArray(payload.images) ||
+    !payload.images.every(isAdminMapImage)
+  ) {
+    throw new Error("Admin service returned invalid map image data.");
+  }
+
+  const images = payload.images as AdminMapImage[];
+
+  const containsUnexpectedImage = images.some((image) => {
+    if (image.proposalId !== null) {
+      return true;
+    }
+
+    if (entityType === "terminal") {
+      return image.terminalId !== entityId || image.stopId !== null;
+    }
+
+    return image.stopId !== entityId || image.terminalId !== null;
+  });
+
+  if (containsUnexpectedImage) {
+    throw new Error(
+      "Admin service returned images associated with another location.",
+    );
+  }
+
+  return images;
+}
+
+/**
+ * Retrieves photographs associated with one route-change proposal.
+ * The response retains each photograph's proposed point order.
+ *
+ * GET /api/admin/map-images/proposals/:id
+ */
+export async function getAdminMapImagesForProposal(
+  expectedUserId: string,
+  proposalId: number,
+): Promise<AdminMapImage[]> {
+  if (!isPositiveInteger(proposalId)) {
+    throw new Error("A valid route-change proposal ID is required.");
+  }
+
+  const payload = await requestAdmin(
+    `/map-images/proposals/${proposalId}`,
+    expectedUserId,
+  );
+
+  if (
+    !Array.isArray(payload.images) ||
+    !payload.images.every(isAdminMapImage)
+  ) {
+    throw new Error("Admin service returned invalid proposal image data.");
+  }
+
+  const images = payload.images as AdminMapImage[];
+
+  if (
+    images.some(
+      (image) =>
+        image.proposalId !== proposalId ||
+        image.proposalStopOrder === null,
+    )
+  ) {
+    throw new Error(
+      "Admin service returned images associated with another proposal.",
+    );
+  }
+
+  return images;
+}
+
+/**
+ * Individually approves or rejects a map photograph.
+ * The database remains authoritative for association and eligibility checks.
+ *
+ * POST /api/admin/map-images/:id/moderation
+ */
+export async function moderateAdminMapImage(
+  expectedUserId: string,
+  imageId: number,
+  action: AdminMapImageModerationAction,
+  moderationNote?: string,
+): Promise<void> {
+  if (!isPositiveInteger(imageId)) {
+    throw new Error("A valid map image ID is required.");
+  }
+
+  if (action !== "approve" && action !== "reject") {
+    throw new Error("A valid image moderation action is required.");
+  }
+
+  if (
+    moderationNote !== undefined &&
+    (typeof moderationNote !== "string" || moderationNote.length > 500)
+  ) {
+    throw new Error("Moderation notes cannot exceed 500 characters.");
+  }
+
+  const payload = await requestAdmin(
+    `/map-images/${imageId}/moderation`,
+    expectedUserId,
+    {
+      method: "POST",
+      body: {
+        action,
+        ...(moderationNote !== undefined
+          ? { moderation_note: moderationNote }
+          : {}),
+      },
+    },
+  );
+
+  if (!isRecord(payload.result)) {
+    throw new Error(
+      "Admin service returned an invalid image moderation result.",
+    );
+  }
+}
+
+
+/* -------------------------------------------------------------------------- */
 
 /*                         ROUTE MANAGEMENT ACTIONS                           */
 
@@ -3393,6 +3654,49 @@ export async function getAdminUsersPage(
 
   );
 
+}
+
+
+
+/**
+ * Retrieves every administrator-managed account.
+ *
+ * This compatibility helper preserves the older array-based API used by
+ * existing callers and tests. New screens should use getAdminUsersPage()
+ * so they can keep server-side pagination instead of loading every account.
+ */
+export async function getAdminUsers(
+  expectedUserId: string,
+): Promise<AdminUserRecord[]> {
+  const firstPage = await getAdminUsersPage(
+    expectedUserId,
+    {
+      page: 1,
+      pageSize: 100,
+      status: "all",
+    },
+  );
+
+  const users = [...firstPage.users];
+
+  for (
+    let page = 2;
+    page <= firstPage.totalPages;
+    page += 1
+  ) {
+    const nextPage = await getAdminUsersPage(
+      expectedUserId,
+      {
+        page,
+        pageSize: 100,
+        status: "all",
+      },
+    );
+
+    users.push(...nextPage.users);
+  }
+
+  return users;
 }
 
 

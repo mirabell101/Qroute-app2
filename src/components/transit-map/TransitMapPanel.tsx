@@ -1,5 +1,4 @@
-
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import {
@@ -30,6 +29,34 @@ import { stopTypeLabel } from "./useTransitMap";
 import type { TransitMapController } from "./useTransitMap";
 
 // ============================================================
+// TYPES
+// ============================================================
+
+type SelectedMapPlace =
+  NonNullable<TransitMapController["selectedPlace"]>;
+
+type SelectedMapImage =
+  TransitMapController["selectedPlaceImages"][number];
+
+type PhotoGalleryPlace = Pick<
+  SelectedMapPlace,
+  "kind" | "ref_id" | "name"
+>;
+
+type PhotoGalleryEntry = {
+  place: PhotoGalleryPlace;
+  // Map selections remain in the viewing history. Route-list
+  // selections represent journey endpoints and can be replaced.
+  source: "history" | "endpoint";
+};
+
+function photoPlaceKey(
+  place: PhotoGalleryPlace | null | undefined,
+): string | null {
+  return place ? `${place.kind}-${place.ref_id}` : null;
+}
+
+// ============================================================
 // CONSTANTS
 // ============================================================
 
@@ -58,6 +85,90 @@ function createSuggestedJourneyName(
   return Array.from(suggestedName)
     .slice(0, SAVED_JOURNEY_NAME_MAX_LENGTH)
     .join("");
+}
+
+/**
+ * Displays all approved public photographs belonging to
+ * one specific terminal or stop.
+ *
+ * Terminal and stop photographs are deliberately rendered
+ * in separate gallery sections.
+ */
+function PlacePhotoGallery({
+  placeName,
+  images,
+}: {
+  placeName: string;
+  images: SelectedMapImage[];
+}) {
+  if (images.length === 0) {
+    return null;
+  }
+
+  return (
+    <section
+      aria-label={`${placeName} community photos`}
+      className="mt-3"
+    >
+      <h3 className="mb-2 text-xs font-semibold text-gray-800">
+        {placeName}
+      </h3>
+
+      <div
+        className={`grid gap-2 ${
+          images.length === 1
+            ? "grid-cols-1"
+            : "grid-cols-2"
+        }`}
+        role="group"
+        aria-label={`Community photos of ${placeName}`}
+      >
+        {images.map((image, index) => {
+          const isThirdPhoto =
+            images.length === 3 && index === 2;
+
+          const isFullWidth =
+            images.length === 1 || isThirdPhoto;
+
+          return (
+            <figure
+              key={image.id}
+              className={`min-w-0 overflow-hidden rounded-lg border border-gray-200 bg-gray-50 ${
+                isThirdPhoto ? "col-span-2" : ""
+              }`}
+            >
+              <img
+                src={image.url}
+                alt={
+                  image.caption?.trim()
+                    ? `${placeName}: ${image.caption.trim()}`
+                    : `Photo ${index + 1} of ${placeName}`
+                }
+                loading="lazy"
+                className={`w-full object-cover ${
+                  isFullWidth
+                    ? "aspect-[16/9]"
+                    : "aspect-[4/3]"
+                }`}
+              />
+
+              <figcaption className="truncate border-t border-gray-100 px-2 py-1.5 text-[10px] text-gray-600">
+                {image.caption?.trim() ||
+                  `Community photo ${index + 1}`}
+              </figcaption>
+            </figure>
+          );
+        })}
+      </div>
+
+      <p className="mt-1.5 text-right text-[10px] text-gray-400">
+        {images.length} approved{" "}
+        {images.length === 1
+          ? "community photo"
+          : "community photos"}
+      </p>
+    </section>
+  );
 }
 
 // ============================================================
@@ -123,12 +234,30 @@ export function TransitMapPanel({
     useState(false);
 
   // ==========================================================
+  // SELECTED PHOTO GALLERY COLLECTION
+  // ==========================================================
+
+  const [photoGalleryEntries, setPhotoGalleryEntries] =
+    useState<PhotoGalleryEntry[]>([]);
+
+  const previousJourneyEndpoints = useRef<{
+    boarding: string | null;
+    destination: string | null;
+  }>({
+    boarding: null,
+    destination: null,
+  });
+
+  const handledPhotoSelectionSequence = useRef(0);
+
+  // ==========================================================
   // MAP CONTROLLER
   // ==========================================================
 
   const {
     selectedPlace,
-    selectedPlaceImage,
+    pointImages,
+    photoSelectionEvent,
     selectedRoute,
     selectedRouteStops,
     routesLoading,
@@ -166,11 +295,127 @@ export function TransitMapPanel({
 
     fareCards,
 
-    handleListPick,
+    handleRouteListPick,
     clearTrip,
     clearSelectedRoute,
     closePlace,
   } = map;
+
+  // ==========================================================
+  // UPDATE THE ORDERED PHOTO GALLERY COLLECTION
+  // ==========================================================
+
+  const currentBoardingPhotoKey = photoPlaceKey(boardingStop);
+  const currentDestinationPhotoKey = photoPlaceKey(destinationStop);
+
+  useEffect(() => {
+    const currentEndpoints = {
+      boarding: currentBoardingPhotoKey,
+      destination: currentDestinationPhotoKey,
+    };
+
+    if (!selectedPlace) {
+      // Closing the place details starts a fresh gallery session.
+      setPhotoGalleryEntries([]);
+      previousJourneyEndpoints.current = currentEndpoints;
+      handledPhotoSelectionSequence.current =
+        photoSelectionEvent?.sequence ??
+        handledPhotoSelectionSequence.current;
+      return;
+    }
+
+    const event = photoSelectionEvent;
+
+    if (
+      !event ||
+      event.sequence === handledPhotoSelectionSequence.current
+    ) {
+      previousJourneyEndpoints.current = currentEndpoints;
+      return;
+    }
+
+    const previousEndpoints = previousJourneyEndpoints.current;
+    const selectedPlaceKey = photoPlaceKey(event.place);
+
+    setPhotoGalleryEntries((current) => {
+      let next = [...current];
+
+      // A route-list click explicitly changes the journey endpoint.
+      // Remove the old endpoint-only gallery when that endpoint is
+      // replaced, but keep locations that were separately selected
+      // from the map as part of the user's viewing history.
+      if (event.source === "route-list") {
+        if (
+          previousEndpoints.boarding &&
+          currentEndpoints.boarding &&
+          previousEndpoints.boarding !== currentEndpoints.boarding &&
+          previousEndpoints.boarding !== currentEndpoints.destination
+        ) {
+          next = next.filter((entry) =>
+            photoPlaceKey(entry.place) !== previousEndpoints.boarding ||
+            entry.source === "history"
+          );
+        }
+
+        if (
+          previousEndpoints.destination &&
+          currentEndpoints.destination &&
+          previousEndpoints.destination !== currentEndpoints.destination &&
+          previousEndpoints.destination !== currentEndpoints.boarding
+        ) {
+          next = next.filter((entry) =>
+            photoPlaceKey(entry.place) !== previousEndpoints.destination ||
+            entry.source === "history"
+          );
+        }
+      }
+
+      if (!selectedPlaceKey) {
+        return next;
+      }
+
+      const existingIndex = next.findIndex(
+        (entry) => photoPlaceKey(entry.place) === selectedPlaceKey,
+      );
+
+      const nextSource =
+        event.source === "map" ? "history" : "endpoint";
+      const selectedGalleryPlace: PhotoGalleryPlace = {
+        kind: event.place.kind,
+        ref_id: event.place.ref_id,
+        name: event.place.name,
+      };
+
+      if (existingIndex >= 0) {
+        const existing = next[existingIndex];
+        next[existingIndex] = {
+          place: selectedGalleryPlace,
+          // Once a location was independently selected on the map,
+          // replacing a journey endpoint must not remove its gallery.
+          source:
+            existing.source === "history" || nextSource === "history"
+              ? "history"
+              : "endpoint",
+        };
+      } else {
+        next.push({
+          place: selectedGalleryPlace,
+          source: nextSource,
+        });
+      }
+
+      return next;
+    });
+
+    previousJourneyEndpoints.current = currentEndpoints;
+    handledPhotoSelectionSequence.current = event.sequence;
+  }, [
+    selectedPlace?.kind,
+    selectedPlace?.ref_id,
+    photoSelectionEvent?.sequence,
+    currentBoardingPhotoKey,
+    currentDestinationPhotoKey,
+  ]);
 
   // ==========================================================
   // JOURNEY ENDPOINTS
@@ -269,14 +514,14 @@ export function TransitMapPanel({
       : undefined;
 
   // ==========================================================
-  // WHOLE-ROUTE / STOP / TERMINAL BOOKMARKING
+  // STOP / TERMINAL BOOKMARKING
   // ==========================================================
 
-const toggleBookmark = async (
-  kind: "stop" | "terminal",
-  targetId: number,
-  isSaved: boolean,
-) => {
+  const toggleBookmark = async (
+    kind: "stop" | "terminal",
+    targetId: number,
+    isSaved: boolean,
+  ) => {
     if (!userId) {
       setShowLoginPrompt(true);
       return;
@@ -305,21 +550,14 @@ const toggleBookmark = async (
   };
 
   /**
-   * This remains the existing independent bookmark control.
-   *
-   * kind="route" refers only to a whole-route bookmark.
-   * It does not create or remove a passenger journey.
+   * This control handles independent stop and terminal bookmarks.
+   * Passenger journeys are identified and managed separately.
    */
-const bookmarkButton = (
-  kind: "stop" | "terminal",
-  targetId: number,
-) => {
-    const label =
-      kind === "route"
-        ? "Route"
-        : kind === "stop"
-          ? "Stop"
-          : "Terminal";
+  const bookmarkButton = (
+    kind: "stop" | "terminal",
+    targetId: number,
+  ) => {
+    const label = kind === "stop" ? "Stop" : "Terminal";
 
     const isSaved = hasSavedBookmark(
       bookmarkIds,
@@ -558,22 +796,19 @@ const bookmarkButton = (
             </button>
           </div>
 
-          {selectedPlaceImage && (
-            <div className="mt-3">
-              <img
-                src={selectedPlaceImage.url}
-                alt={selectedPlace.name}
-                loading="lazy"
-                className="h-36 w-full rounded-lg object-cover"
-              />
+          {/* ------------------------------------------------ */}
+          {/* SELECTED LOCATION PHOTO GALLERIES                */}
+          {/* ------------------------------------------------ */}
 
-              {!selectedPlaceImage.is_approved && (
-                <p className="mt-1 text-[10px] text-amber-700">
-                  Photo pending admin review
-                </p>
-              )}
-            </div>
-          )}
+          {photoGalleryEntries.map(({ place }) => (
+            <PlacePhotoGallery
+              key={`${place.kind}-${place.ref_id}`}
+              placeName={place.name}
+              images={
+                pointImages[`${place.kind}-${place.ref_id}`] ?? []
+              }
+            />
+          ))}
 
           {selectedPlace.description && (
             <p className="mt-3 text-sm text-gray-700">
@@ -582,7 +817,7 @@ const bookmarkButton = (
           )}
 
           <p className="mt-2 text-[11px] text-gray-500">
-            {selectedPlace.latitude.toFixed(5)},{" "}
+            {selectedPlace.latitude.toFixed(5)}, {" "}
             {selectedPlace.longitude.toFixed(5)}
           </p>
 
@@ -720,8 +955,6 @@ const bookmarkButton = (
           {/* ------------------------------------------------ */}
           {/* WHOLE-ROUTE BOOKMARK */}
           {/* ------------------------------------------------ */}
-
-
 
           {/* ================================================= */}
           {/* TRIP + FARE */}
@@ -898,7 +1131,7 @@ const bookmarkButton = (
                                       >
                                         {amount.label && (
                                           <span className="font-normal text-gray-500">
-                                            {amount.label}:{" "}
+                                            {amount.label}: {" "}
                                           </span>
                                         )}
 
@@ -966,8 +1199,9 @@ const bookmarkButton = (
                     id="saved-journey-name"
                     type="text"
                     value={
-                      existingJourneyBookmark?.journeyName ??
-                      journeyName
+                      existingJourneyBookmark?.bookmarkType === "journey"
+                        ? existingJourneyBookmark.journeyName
+                        : journeyName
                     }
                     disabled={Boolean(existingJourneyBookmark)}
                     onChange={(event) => {
@@ -1101,7 +1335,9 @@ const bookmarkButton = (
             className="mt-3 max-h-[30vh] overflow-y-auto pr-1"
           >
             {selectedRouteStops.map((stop, index) => {
-              const isBoarding = index === boardingIndex;
+              const isBoarding =
+                index === boardingIndex;
+
               const isDestination =
                 index === destinationIndex;
 
@@ -1122,7 +1358,7 @@ const bookmarkButton = (
 
                   <button
                     type="button"
-                    onClick={() => handleListPick(index)}
+                    onClick={() => handleRouteListPick(index)}
                     className="flex w-full items-center gap-3 text-left"
                   >
                     <span

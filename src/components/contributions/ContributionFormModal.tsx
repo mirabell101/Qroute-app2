@@ -139,11 +139,6 @@ function existingLabel(point: ExistingPoint) {
     : point.name;
 }
 
-function existingPointTypeLabel(point: ExistingPoint) {
-  if (point.kind === "terminal") return "Terminal";
-  return point.stopType === "train_station" ? "Station" : "Stop";
-}
-
 function getSegmentKeys(
   route: ExistingRoute,
   anchor: string,

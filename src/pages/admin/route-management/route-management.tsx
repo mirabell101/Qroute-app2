@@ -30,8 +30,13 @@ import {
   getRouteManagementData,
   moderateRouteChangeProposal,
   moderateRouteManagementRecord,
+  getAdminMapImagesForLocation,
+  getAdminMapImagesForProposal,
+  moderateAdminMapImage,
   updateAdminTransportType,
   updateRouteManagementRecord,
+  type AdminMapImage,
+  type AdminMapImageLocationType,
   type AdminRouteManagementData,
   type AdminRouteRecord,
   type AdminRouteChangeProposalPointRecord,
@@ -195,6 +200,15 @@ function isTransportTypeRecord(
   );
 }
 
+function isTransitPointRecord(
+  record: RecordData,
+): record is AdminTransitPointRecord {
+  return (
+    !isRouteRecord(record) &&
+    !isTransportTypeRecord(record)
+  );
+}
+
 function pointKindLabel(point: ExistingPoint): string {
   if (point.kind === "terminal") {
     return "Terminal";
@@ -277,7 +291,7 @@ function routeStopsSummary(
 function routeMapPoints(
   route: AdminRouteRecord,
 ): RouteManagementMapPoint[] {
-  return route.route_stops.flatMap((routeStop) => {
+  return route.route_stops.flatMap<RouteManagementMapPoint>((routeStop) => {
     if (routeStop.terminals) {
       return [
         {
@@ -351,7 +365,7 @@ function editorMapPoints(
             (record) => record.id === editor.id,
           );
 
-    return editor.stops.flatMap(
+    return editor.stops.flatMap<RouteManagementMapPoint>(
       (selectedStop, index) => {
         const catalogPoint = availablePoints.find(
           (point) =>
@@ -633,6 +647,186 @@ function Detail({
         {value}
       </span>
     </div>
+  );
+}
+
+
+// ============================================================
+// SHARED PENDING REVIEW CARD
+// ============================================================
+
+function PendingReviewCard({
+  category,
+  title,
+  description,
+  metadata,
+  onView,
+}: {
+  category: string;
+  title: string;
+  description: string;
+  metadata: string;
+  onView: () => void;
+}) {
+  return (
+    <article className="flex flex-col justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center">
+      <div className="flex min-w-0 items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EAF1F8] text-[#102E4D]">
+          {category === "Route change proposal" ? (
+            <GitBranch size={19} />
+          ) : (
+            <MapPin size={19} />
+          )}
+        </div>
+
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full bg-[#EAF1F8] px-2.5 py-1 text-[11px] font-semibold text-[#102E4D]">
+              {category}
+            </span>
+            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
+              Pending review
+            </span>
+          </div>
+
+          <h4 className="mt-2 break-words text-base font-bold text-slate-900">
+            {title}
+          </h4>
+          <p className="mt-1 text-sm text-slate-600">{description}</p>
+          <p className="mt-1 text-xs text-slate-400">{metadata}</p>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={onView}
+        className="inline-flex shrink-0 items-center justify-center gap-2 self-start rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#19476D] sm:self-center"
+      >
+        <Eye size={15} />
+        View &amp; review
+      </button>
+    </article>
+  );
+}
+
+// ============================================================
+// MAP IMAGE REVIEW CARD
+// ============================================================
+
+function MapImageReviewCard({
+  image,
+  canModerate,
+  canApprove,
+  isMutating,
+  onModerate,
+}: {
+  image: AdminMapImage;
+  canModerate: boolean;
+  canApprove: boolean;
+  isMutating: boolean;
+  onModerate: (
+    image: AdminMapImage,
+    action: "approve" | "reject",
+  ) => void;
+}) {
+  const statusLabel = image.isBanned
+    ? "Banned"
+    : image.isDeleted
+      ? "Deleted"
+      : image.moderationStatus === "pending"
+        ? "Pending"
+        : image.moderationStatus === "approved"
+          ? "Approved"
+          : "Rejected";
+
+  const statusStyle = image.isBanned || image.isDeleted
+    ? "bg-red-100 text-red-700"
+    : image.moderationStatus === "approved"
+      ? "bg-green-100 text-green-700"
+      : image.moderationStatus === "rejected"
+        ? "bg-red-100 text-red-700"
+        : "bg-amber-100 text-amber-700";
+
+  const isPending =
+    image.moderationStatus === "pending" &&
+    !image.isBanned &&
+    !image.isDeleted;
+
+  return (
+    <article className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="aspect-[4/3] bg-slate-100">
+        {image.imageUrl ? (
+          <img
+            src={image.imageUrl}
+            alt={image.caption?.trim() || `Submitted map photograph ${image.id}`}
+            loading="lazy"
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center px-4 text-center text-xs text-slate-500">
+            The secure preview could not be generated for this photograph.
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-3 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-slate-500">
+            Image #{image.id}
+          </span>
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusStyle}`}>
+            {statusLabel}
+          </span>
+        </div>
+
+        {image.caption?.trim() ? (
+          <p className="whitespace-pre-wrap break-words text-sm text-slate-700">
+            {image.caption}
+          </p>
+        ) : (
+          <p className="text-xs italic text-slate-400">No caption provided</p>
+        )}
+
+        <p className="text-[11px] text-slate-400">
+          Submitted {formatProposalDate(image.createdAt)}
+        </p>
+
+        {image.moderationNote && (
+          <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            Moderation note: {image.moderationNote}
+          </p>
+        )}
+
+        {isPending && canModerate && (
+          <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+            {canApprove && (
+              <button
+                type="button"
+                disabled={isMutating}
+                onClick={() => onModerate(image, "approve")}
+                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-green-50 px-3 py-2 text-xs font-semibold text-green-700 hover:bg-green-100 disabled:opacity-50"
+              >
+                <Check size={13} /> Approve photo
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={isMutating}
+              onClick={() => onModerate(image, "reject")}
+              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+            >
+              <Ban size={13} /> Reject photo
+            </button>
+          </div>
+        )}
+
+        {isPending && !canApprove && (
+          <p className="border-t border-slate-100 pt-3 text-[11px] leading-relaxed text-slate-500">
+            This photo cannot be approved until its parent location or proposal is eligible. Remaining pending photographs are automatically approved with an approved parent submission.
+          </p>
+        )}
+      </div>
+    </article>
   );
 }
 
@@ -1071,6 +1265,21 @@ export default function RouteManagement() {
   const [selectedRow, setSelectedRow] =
     useState<ManagementRow | null>(null);
 
+  const [selectedProposal, setSelectedProposal] =
+    useState<AdminRouteChangeProposalRecord | null>(null);
+
+  const [reviewImages, setReviewImages] =
+    useState<AdminMapImage[]>([]);
+
+  const [reviewImagesLoading, setReviewImagesLoading] =
+    useState(false);
+
+  const [reviewImagesError, setReviewImagesError] =
+    useState<string | null>(null);
+
+  const [imageRefreshVersion, setImageRefreshVersion] =
+    useState(0);
+
   const [editor, setEditor] =
     useState<EditorState | null>(null);
 
@@ -1304,7 +1513,83 @@ export default function RouteManagement() {
   ]);
 
   // ==========================================================
-  // 3. DATA REFRESH
+  // 3. LOAD ADMIN IMAGE PREVIEWS FOR THE OPEN REVIEW DIALOG
+  // ==========================================================
+
+  useEffect(() => {
+    let active = true;
+
+    const identity = sessionIdentity;
+
+    const hasLocationTarget = Boolean(
+      selectedRow &&
+      (selectedRow.entityType === "stop" ||
+        selectedRow.entityType === "terminal"),
+    );
+
+    if (
+      !userId ||
+      !identity ||
+      identity.userId !== userId ||
+      !isCurrentAuthenticatedSession(identity) ||
+      (!selectedProposal && !hasLocationTarget)
+    ) {
+      setReviewImages([]);
+      setReviewImagesLoading(false);
+      setReviewImagesError(null);
+
+      return () => {
+        active = false;
+      };
+    }
+
+    const imageRequest = selectedProposal
+      ? getAdminMapImagesForProposal(userId, selectedProposal.id)
+      : getAdminMapImagesForLocation(
+          userId,
+          selectedRow!.entityType as AdminMapImageLocationType,
+          selectedRow!.id,
+        );
+
+    setReviewImages([]);
+    setReviewImagesLoading(true);
+    setReviewImagesError(null);
+
+    void imageRequest
+      .then((images) => {
+        if (active && isCurrentAuthenticatedSession(identity)) {
+          setReviewImages(images);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active && isCurrentAuthenticatedSession(identity)) {
+          setReviewImagesError(
+            error instanceof Error
+              ? error.message
+              : "Unable to load map photographs.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setReviewImagesLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    userId,
+    sessionIdentity?.generation,
+    sessionSnapshot.status,
+    selectedRow,
+    selectedProposal,
+    imageRefreshVersion,
+  ]);
+
+  // ==========================================================
+  // 4. DATA REFRESH
   // ==========================================================
 
   const refreshData = () => {
@@ -1383,9 +1668,9 @@ export default function RouteManagement() {
               "Unavailable"),
         status: recordStatus(record),
         moderationStatus: record.moderation_status,
-        isActive: record.is_active,
+        isActive: record.is_active === true,
         isBanned: record.is_banned === true,
-        isDeleted: record.is_deleted,
+        isDeleted: record.is_deleted === true,
         record,
       }));
 
@@ -1534,11 +1819,35 @@ export default function RouteManagement() {
   ).length;
 
   // ==========================================================
-  // 9. PENDING ROUTE CHANGE PROPOSAL COUNT
+  // 9. UNIFIED PENDING REVIEW ITEMS
   // ==========================================================
 
-  const pendingRouteChangeProposalCount =
-    data.routeChangeProposals.length;
+  const pendingLocationRows = useMemo(
+    () =>
+      rows.filter(
+        (row) =>
+          (row.entityType === "stop" || row.entityType === "terminal") &&
+          row.moderationStatus === "pending" &&
+          !row.isDeleted &&
+          !row.isBanned,
+      ),
+    [rows],
+  );
+
+  // Keep route-change proposals as a distinct review category while
+  // displaying them inside the same unified Pending Contributions card.
+  // The API already returns pending proposals, but we filter defensively so
+  // an accidentally stale/non-pending record is never shown as awaiting review.
+  const pendingRouteChangeProposals = useMemo(
+    () =>
+      data.routeChangeProposals.filter(
+        (proposal) => proposal.status === "pending",
+      ),
+    [data.routeChangeProposals],
+  );
+
+  const pendingReviewCount =
+    pendingLocationRows.length + pendingRouteChangeProposals.length;
 
   // ==========================================================
   // 10. CENTRALIZED LOGOUT
@@ -1836,7 +2145,64 @@ export default function RouteManagement() {
   };
 
   // ==========================================================
-  // 15. ORDINARY RECORD MODERATION
+  // 15. INDIVIDUAL MAP IMAGE MODERATION
+  // ==========================================================
+
+  const handleMapImageModeration = async (
+    image: AdminMapImage,
+    action: "approve" | "reject",
+  ) => {
+    if (!userId || !isAdmin || isMutating) {
+      return;
+    }
+
+    let moderationNote: string | undefined;
+
+    if (action === "reject") {
+      const enteredNote = window.prompt(
+        "Optional photo rejection note (500 characters maximum):",
+        "",
+      );
+
+      if (enteredNote === null) {
+        return;
+      }
+
+      moderationNote = enteredNote;
+
+      if (moderationNote.length > 500) {
+        setReviewImagesError(
+          "Photo moderation notes must be 500 characters or fewer.",
+        );
+        return;
+      }
+    }
+
+    setIsMutating(true);
+    setReviewImagesError(null);
+
+    try {
+      await moderateAdminMapImage(
+        userId,
+        image.id,
+        action,
+        moderationNote,
+      );
+
+      setImageRefreshVersion((version) => version + 1);
+    } catch (error: unknown) {
+      setReviewImagesError(
+        error instanceof Error
+          ? error.message
+          : "Unable to moderate this photograph.",
+      );
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  // ==========================================================
+  // 16. ORDINARY RECORD MODERATION
   // ==========================================================
 
   const handleModeration = async (
@@ -1886,6 +2252,7 @@ export default function RouteManagement() {
         moderationNote,
       );
 
+      setSelectedRow(null);
       refreshData();
     } catch (error: unknown) {
       setErrorMessage(
@@ -1997,6 +2364,7 @@ export default function RouteManagement() {
         );
       }
 
+      setSelectedProposal(null);
       refreshData();
     } catch (error: unknown) {
       setErrorMessage(
@@ -2372,7 +2740,7 @@ export default function RouteManagement() {
           )}
 
           {/* =================================================
-              PENDING ROUTE CHANGE PROPOSALS
+              UNIFIED PENDING CONTRIBUTION REVIEW
           ================================================== */}
 
           <section className="mb-8 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_3px_14px_rgba(15,23,42,0.035)] sm:p-6">
@@ -2380,83 +2748,156 @@ export default function RouteManagement() {
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-lg font-bold text-slate-900">
-                    Pending Route Change Proposals
+                    Pending Contributions for Review
                   </h3>
 
                   <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
-                    {pendingRouteChangeProposalCount} pending
+                    {pendingReviewCount} pending
                   </span>
                 </div>
 
                 <p className="mt-1 max-w-3xl text-sm text-slate-500">
-                  Review insertions, extensions, conversions, reordering, and
-                  removal requests for existing routes. Approved
-                  proposals update the existing route rather than
-                  creating a duplicate route.
+                  Review newly submitted stops, terminals, and proposed changes to existing routes in one place. Open a submission to inspect its details and attached photographs before deciding.
                 </p>
               </div>
 
               <div className="flex items-center gap-2 text-xs text-slate-500">
-                <GitBranch size={15} />
-                Separate from new route submissions
+                <Eye size={15} />
+                Details and photos are reviewed together
               </div>
             </div>
 
-            <div className="mt-5 space-y-4">
-              {isLoading &&
-              pendingRouteChangeProposalCount === 0 ? (
+            <div className="mt-5 space-y-5">
+              {isLoading && pendingReviewCount === 0 ? (
                 <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
                   <p className="text-sm font-semibold text-slate-700">
-                    Loading route change proposals...
-                  </p>
-
-                  <p className="mt-1 text-xs text-slate-500">
-                    Pending proposals will appear here.
+                    Loading pending contributions...
                   </p>
                 </div>
-              ) : pendingRouteChangeProposalCount > 0 ? (
-                data.routeChangeProposals.map((proposal) => {
-                  const route = data.routes.find(
-                    (record) =>
-                      record.id === proposal.route_id,
-                  );
+              ) : pendingReviewCount > 0 ? (
+                <>
+                  {/* MODIFY AN EXISTING ROUTE */}
+                  <section className="rounded-xl border border-violet-100 bg-violet-50/40 p-4 sm:p-5">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-100 text-violet-800">
+                          <GitBranch size={17} />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900">
+                            Modify an Existing Route
+                          </h4>
+                          <p className="mt-0.5 text-xs text-slate-500">
+                            Insertions, extensions, replacements, reordering, and removal requests
+                          </p>
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold text-violet-800">
+                        {pendingRouteChangeProposals.length} pending
+                      </span>
+                    </div>
 
-                  return (
-                    <RouteChangeProposalCard
-                      key={proposal.id}
-                      proposal={proposal}
-                      route={route}
-                      canModerate={role !== null}
-                      isMutating={isMutating}
-                      onModerate={
-                        handleRouteChangeProposalModeration
-                      }
-                    />
-                  );
-                })
+                    {pendingRouteChangeProposals.length > 0 ? (
+                      <div className="space-y-3">
+                        {pendingRouteChangeProposals.map((proposal) => {
+                          const route = data.routes.find(
+                            (record) => record.id === proposal.route_id,
+                          );
+                          const activeCount = proposal.route_change_proposal_points.filter(
+                            (point) => !point.is_removed_from_route,
+                          ).length;
+                          const removalCount = proposal.route_change_proposal_points.filter(
+                            (point) => point.is_removed_from_route,
+                          ).length;
+
+                          return (
+                            <PendingReviewCard
+                              key={`proposal-${proposal.id}`}
+                              category="Route modification proposal"
+                              title={
+                                proposal.proposed_name?.trim() ||
+                                route?.name ||
+                                `Route #${proposal.route_id}`
+                              }
+                              description={`${proposalTypeLabel(proposal)} · ${activeCount} proposed active ${activeCount === 1 ? "point" : "points"}${removalCount ? ` · ${removalCount} removal${removalCount === 1 ? "" : "s"}` : ""}`}
+                              metadata={`Proposal #${proposal.id} · Existing route #${proposal.route_id} · Submitted by ${proposal.contributor_display_name} · ${formatProposalDate(proposal.created_at)}`}
+                              onView={() => {
+                                setSelectedRow(null);
+                                setSelectedProposal(proposal);
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="rounded-lg border border-dashed border-violet-200 bg-white/80 px-4 py-4 text-center text-xs text-slate-500">
+                        No pending route modification proposals. New proposals to modify existing routes will appear here.
+                      </p>
+                    )}
+                  </section>
+
+                  {/* NEW STOPS AND TERMINALS */}
+                  <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 sm:p-5">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#EAF1F8] text-[#102E4D]">
+                          <MapPin size={17} />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900">
+                            New Stops and Terminals
+                          </h4>
+                          <p className="mt-0.5 text-xs text-slate-500">
+                            Newly submitted standalone map locations
+                          </p>
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
+                        {pendingLocationRows.length} pending
+                      </span>
+                    </div>
+
+                    {pendingLocationRows.length > 0 ? (
+                      <div className="space-y-3">
+                        {pendingLocationRows.map((row) => (
+                          <PendingReviewCard
+                            key={row.key}
+                            category={
+                              row.entityType === "terminal"
+                                ? "Terminal submission"
+                                : "Stop submission"
+                            }
+                            title={row.name}
+                            description={row.transportTypeName}
+                            metadata={`Record #${row.id} · ${row.entityType === "terminal" ? "Terminal" : "Stop"}`}
+                            onView={() => {
+                              setSelectedProposal(null);
+                              setSelectedRow(row);
+                            }}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="rounded-lg border border-dashed border-slate-200 bg-white px-4 py-4 text-center text-xs text-slate-500">
+                        No pending standalone stops or terminals.
+                      </p>
+                    )}
+                  </section>
+                </>
               ) : (
                 <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-[#EAF1F8] text-[#102E4D]">
-                    <GitBranch size={22} />
+                    <Check size={22} />
                   </div>
-
                   <p className="mt-3 text-sm font-semibold text-slate-800">
-                    No pending route change proposals
+                    No pending contributions
                   </p>
-
                   <p className="mx-auto mt-1 max-w-md text-xs text-slate-500">
-                    Route modifications and removal requests submitted by
-                    contributors will appear here for review.
+                    New standalone stops, terminals, and proposals to modify existing routes will appear here when submitted.
                   </p>
                 </div>
               )}
             </div>
-
-            <p className="mt-4 border-t border-slate-100 pt-4 text-xs text-slate-400">
-              New standalone routes continue to use the normal
-              Contributions review workflow. This section is only
-              for changes to existing approved routes.
-            </p>
           </section>
 
           {/* RECORD MANAGEMENT PANEL */}
@@ -2649,9 +3090,8 @@ export default function RouteManagement() {
                           ? row.record
                           : null;
 
-                        const point =
-                          !route &&
-                          !isTransportTypeRecord(row.record)
+                        const point: AdminTransitPointRecord | null =
+                          isTransitPointRecord(row.record)
                             ? row.record
                             : null;
 
@@ -2727,18 +3167,20 @@ export default function RouteManagement() {
                               <div className="flex flex-wrap justify-center gap-2">
                                 <button
                                   type="button"
-                                  onClick={() =>
-                                    setSelectedRow(row)
-                                  }
+                                  onClick={() => {
+                                    setSelectedProposal(null);
+                                    setSelectedRow(row);
+                                  }}
                                   className="inline-flex items-center gap-1.5 rounded-lg bg-[#EAF1F8] px-3 py-2 text-xs font-semibold text-[#102E4D] hover:bg-[#DCE9F7]"
                                 >
                                   <Eye size={13} />
                                   View
                                 </button>
 
+                                {/* Pending stop and terminal approvals live in the unified review queue above. */}
                                 {role &&
-                                  row.moderationStatus ===
-                                    "pending" &&
+                                  row.entityType === "route" &&
+                                  row.moderationStatus === "pending" &&
                                   !row.isDeleted &&
                                   !row.isBanned && (
                                     <>
@@ -2746,32 +3188,19 @@ export default function RouteManagement() {
                                         <button
                                           type="button"
                                           disabled={isMutating}
-                                          onClick={() =>
-                                            void handleModeration(
-                                              row,
-                                              "approve",
-                                            )
-                                          }
+                                          onClick={() => void handleModeration(row, "approve")}
                                           className="inline-flex items-center gap-1 rounded-lg bg-green-50 px-2.5 py-2 text-xs font-semibold text-green-700 hover:bg-green-100 disabled:opacity-50"
                                         >
-                                          <Check size={13} />
-                                          Approve
+                                          <Check size={13} /> Approve
                                         </button>
                                       )}
-
                                       <button
                                         type="button"
                                         disabled={isMutating}
-                                        onClick={() =>
-                                          void handleModeration(
-                                            row,
-                                            "reject",
-                                          )
-                                        }
+                                        onClick={() => void handleModeration(row, "reject")}
                                         className="inline-flex items-center gap-1 rounded-lg bg-red-50 px-2.5 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
                                       >
-                                        <Ban size={13} />
-                                        Reject
+                                        <Ban size={13} /> Reject
                                       </button>
                                     </>
                                   )}
@@ -3009,7 +3438,7 @@ export default function RouteManagement() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="record-details-title"
-            className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
           >
             <div className="mb-6 flex items-start justify-between">
               <div>
@@ -3125,6 +3554,92 @@ export default function RouteManagement() {
                   </>
                 )}
 
+              {(selectedRow.entityType === "stop" ||
+                selectedRow.entityType === "terminal") && (
+                <section className="border-t border-slate-200 pt-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">
+                        Submitted photographs
+                      </h3>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Review each photograph attached directly to this {selectedRow.entityType}.
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                      {reviewImages.length} {reviewImages.length === 1 ? "photo" : "photos"}
+                    </span>
+                  </div>
+
+                  {reviewImagesError && (
+                    <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      {reviewImagesError}
+                    </p>
+                  )}
+
+                  {reviewImagesLoading ? (
+                    <p role="status" className="mt-4 rounded-lg bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                      Loading photographs and secure previews...
+                    </p>
+                  ) : reviewImages.length > 0 ? (
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      {reviewImages.map((image) => {
+                        const pointRecord = isTransitPointRecord(selectedRow.record)
+                          ? selectedRow.record
+                          : null;
+                        const parentAllowsImageApproval = Boolean(
+                          pointRecord &&
+                          pointRecord.moderation_status === "approved" &&
+                          pointRecord.is_approved === true &&
+                          pointRecord.is_active === true &&
+                          pointRecord.is_banned !== true &&
+                          pointRecord.is_deleted !== true,
+                        );
+
+                        return (
+                          <MapImageReviewCard
+                            key={image.id}
+                            image={image}
+                            canModerate={isAdmin}
+                            canApprove={parentAllowsImageApproval}
+                            isMutating={isMutating}
+                            onModerate={handleMapImageModeration}
+                          />
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-7 text-center text-sm text-slate-500">
+                      No photographs have been submitted for this location.
+                    </p>
+                  )}
+
+                  {role && selectedRow.moderationStatus === "pending" &&
+                    !selectedRow.isDeleted && !selectedRow.isBanned && (
+                    <div className="mt-5 flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+                      <button
+                        type="button"
+                        disabled={isMutating}
+                        onClick={() => void handleModeration(selectedRow, "reject")}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                      >
+                        <Ban size={15} /> Reject submission
+                      </button>
+                      {selectedRow.isActive && (
+                        <button
+                          type="button"
+                          disabled={isMutating}
+                          onClick={() => void handleModeration(selectedRow, "approve")}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                        >
+                          <Check size={15} /> Approve submission
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </section>
+              )}
+
               <button
                 type="button"
                 onClick={() => setSelectedRow(null)}
@@ -3132,6 +3647,151 @@ export default function RouteManagement() {
               >
                 Close
               </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* =====================================================
+          ROUTE CHANGE PROPOSAL REVIEW DIALOG
+      ====================================================== */}
+
+      {selectedProposal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-3 backdrop-blur-[2px] sm:p-5">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="proposal-review-title"
+            className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-2xl"
+          >
+            <header className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 sm:px-6">
+              <div>
+                <h2 id="proposal-review-title" className="text-lg font-bold text-[#102E4D]">
+                  Review route-change proposal #{selectedProposal.id}
+                </h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  Inspect the complete proposed route sequence and photographs attached to each proposed point.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedProposal(null)}
+                aria-label="Close proposal review"
+                className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
+              >
+                <X size={19} />
+              </button>
+            </header>
+
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 sm:p-6">
+              <RouteChangeProposalCard
+                proposal={selectedProposal}
+                route={data.routes.find((route) => route.id === selectedProposal.route_id)}
+                canModerate={role !== null}
+                isMutating={isMutating}
+                onModerate={handleRouteChangeProposalModeration}
+              />
+
+              <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">
+                      Photographs by proposed route point
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Each image group is matched using its proposed sequence position, not the original route position.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    {reviewImages.length} {reviewImages.length === 1 ? "photo" : "photos"}
+                  </span>
+                </div>
+
+                {reviewImagesError && (
+                  <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {reviewImagesError}
+                  </p>
+                )}
+
+                {reviewImagesLoading ? (
+                  <p role="status" className="mt-4 rounded-lg bg-slate-50 px-4 py-7 text-center text-sm text-slate-500">
+                    Loading proposal photographs and secure previews...
+                  </p>
+                ) : (
+                  reviewImages.length > 0 ? (
+                    <div className="mt-4 space-y-5">
+                      {proposalPoints(selectedProposal)
+                      .filter((point) => !point.is_removed_from_route && point.proposed_stop_order > 0)
+                      .map((point) => {
+                        const pointImages = reviewImages.filter(
+                          (image) => image.proposalStopOrder === point.proposed_stop_order,
+                        );
+
+                        return (
+                          <section key={`${selectedProposal.id}-photos-${point.proposed_stop_order}`} className="rounded-xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                  Proposed point #{point.proposed_stop_order}
+                                </p>
+                                <h4 className="mt-1 text-sm font-bold text-slate-800">
+                                  {proposalPointName(point)}
+                                </h4>
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                  {proposalPointType(point)}
+                                </p>
+                              </div>
+                              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                {pointImages.length} {pointImages.length === 1 ? "photo" : "photos"}
+                              </span>
+                            </div>
+
+                            {pointImages.length > 0 ? (
+                              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                                {pointImages.map((image) => (
+                                  <MapImageReviewCard
+                                    key={image.id}
+                                    image={image}
+                                    canModerate={isAdmin}
+                                    canApprove={false}
+                                    isMutating={isMutating}
+                                    onModerate={handleMapImageModeration}
+                                  />
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-5 text-center text-xs text-slate-500">
+                                No photographs were submitted for this proposed point.
+                              </p>
+                            )}
+                          </section>
+                        );
+                      })}
+
+                    {reviewImages.some((image) =>
+                      !proposalPoints(selectedProposal).some(
+                        (point) =>
+                          !point.is_removed_from_route &&
+                          point.proposed_stop_order === image.proposalStopOrder,
+                      ),
+                    ) && (
+                      <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Some photographs could not be matched to an active proposed point. Review the proposal data before approving it.
+                      </p>
+                    )}
+
+                    </div>
+                  ) : (
+                    <p className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-7 text-center text-sm text-slate-500">
+                      No photographs were submitted with this route-change proposal.
+                    </p>
+                  )
+                )}
+
+                <p className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-500">
+                  Pending proposal photographs may be rejected individually. Remaining pending photographs are automatically approved or rejected with the parent proposal decision.
+                </p>
+              </section>
             </div>
           </section>
         </div>

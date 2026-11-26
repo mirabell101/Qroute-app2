@@ -4,7 +4,15 @@ import { getAdminRouteManagementData } from "../admin.ts";
 import requireAdmin from "../middleware/requireAdmin.ts";
 import requireAuth from "../middleware/requireAuth.ts";
 import requireRouteReviewer from "../middleware/requireRouteReviewer.ts";
-import { getSupabaseClientForAccessToken } from "../supabaseClient.ts";
+import {
+  getSupabaseAdminClient,
+  getSupabaseClientForAccessToken,
+} from "../supabaseClient.ts";
+
+import {
+  publishApprovedMapImagesForLocation,
+  publishApprovedMapImagesForProposal,
+} from "../mapImagePublishing.ts";
 
 const router = Router();
 
@@ -309,10 +317,26 @@ router.post(
         },
       );
 
+      // A stop/terminal approval can automatically approve its directly
+      // attached pending photographs through the existing database trigger.
+      // Publish those photographs only after the moderation transaction has
+      // succeeded. Proposal-specific photographs are published by the
+      // proposal moderation handler below, not by this location handler.
+      const publication =
+        action === "approve" &&
+        (entityType === "stop" || entityType === "terminal")
+          ? await publishApprovedMapImagesForLocation(
+              getSupabaseAdminClient(),
+              entityType,
+              id,
+            )
+          : null;
+
       if (!res.headersSent) {
         res.json({
           success: true,
           result,
+          ...(publication ? { publication } : {}),
         });
       }
     } catch (error: unknown) {
@@ -382,9 +406,28 @@ router.post(
 
       if (error) throw error;
 
+      // The proposal RPC and its triggers approve/reject proposal-owned
+      // photographs transactionally. Only after it returns an approved
+      // proposal do we copy those approved files into the public bucket.
+      const proposalWasApproved =
+        data !== null &&
+        typeof data === "object" &&
+        !Array.isArray(data) &&
+        "status" in data &&
+        data.status === "approved";
+
+      const publication =
+        action === "approve" && proposalWasApproved
+          ? await publishApprovedMapImagesForProposal(
+              getSupabaseAdminClient(),
+              proposalId,
+            )
+          : null;
+
       res.json({
         success: true,
         result: data,
+        ...(publication ? { publication } : {}),
       });
     } catch (error: unknown) {
       sendError(
