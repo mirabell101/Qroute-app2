@@ -1,1191 +1,42 @@
-
-import {
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import qrouteWhiteLogo from "@/assets/White Qroute Logo.png";
-
 import AccountAvatar from "@/components/account/AccountAvatar";
 import AdminNotificationBell from "@/components/admin/AdminNotificationBell";
 import { RouteManagementMap } from "@/components/map/RouteManagementMap";
-import type { RouteManagementMapPoint } from "@/components/map/RouteManagementMap";
-
 import { useAccountProfile } from "@/components/account/accountProfileStore";
-
 import { logoutCurrentDevice } from "@/lib/authLogout";
-
 import {
-  getSessionSnapshot,
-  isCurrentAuthenticatedSession,
-  subscribeSessionState,
-} from "@/lib/sessionCoordinator";
-
-import {
-  archiveRouteManagementRecord,
   createAdminTransportType,
-  getRouteManagementData,
-  moderateRouteChangeProposal,
-  moderateRouteManagementRecord,
-  getAdminMapImagesForLocation,
-  getAdminMapImagesForProposal,
-  moderateAdminMapImage,
   updateAdminTransportType,
   updateRouteManagementRecord,
-  type AdminMapImage,
-  type AdminMapImageLocationType,
-  type AdminRouteManagementData,
-  type AdminRouteRecord,
-  type AdminRouteChangeProposalPointRecord,
   type AdminRouteChangeProposalRecord,
   type AdminTransitPointRecord,
-  type AdminTransportTypeRecord,
-  type RouteManagementEntityType,
 } from "@/lib/adminApi";
-
-import {
-  getTransitCatalog,
-  getTransportOptions,
-  pointKey,
-  type ExistingPoint,
-  type TransportVariantOption,
-} from "@/lib/contributions";
-
-import { getUserRole } from "@/lib/authSession";
-
+import { getTransitCatalog, getTransportOptions, pointKey } from "@/lib/contributions";
+import type { ExistingPoint, TransportVariantOption } from "@/lib/contributions";
 import { getAdminNavigationDestination } from "@/pages/admin/adminNavigation";
-
 import {
-  LayoutDashboard,
-  Receipt,
-  Route as RouteIcon,
-  FileText,
-  Flag,
-  Users,
-  Settings,
-  Search,
-  UserRound,
-  Eye,
-  X,
-  Bus,
-  TrainFront,
-  CarFront,
-  Pencil,
-  Archive,
-  ChevronUp,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  LogOut,
-  Check,
-  Ban,
-  Plus,
-  GitBranch,
-  MapPin,
-  Clock3,
-  ArrowRight,
-  AlertTriangle,
+  Route as RouteIcon, Users, Search, UserRound, Eye, X, Pencil, Archive,
+  ChevronUp, ChevronDown, ChevronLeft, ChevronRight, LogOut, Check, Ban, Plus,
+  GitBranch, MapPin, RotateCcw, CheckCircle2,
 } from "lucide-react";
 
-// ============================================================
-// CONSTANTS
-// ============================================================
-
-const navigationItems = [
-  { label: "Dashboard", icon: LayoutDashboard },
-  { label: "Route Management", icon: RouteIcon },
-  { label: "Fare Management", icon: Receipt },
-  { label: "Post Management", icon: FileText },
-  { label: "Reports", icon: Flag },
-  { label: "User Management", icon: Users },
-  { label: "Settings", icon: Settings },
-];
-
-const ROUTES_PER_PAGE = 10;
-
-const TABS = [
-  "All",
-  "Stops",
-  "Routes",
-  "Terminals",
-  "Transport Types",
-] as const;
-
-const STATUSES = [
-  "All current records",
-  "Pending",
-  "Approved",
-  "Rejected",
-  "Inactive",
-  "Banned",
-  "Archived",
-];
-
-// ============================================================
-// TYPES
-// ============================================================
-
-type ManagementTab = (typeof TABS)[number];
-
-type ManagementEntity =
-  | RouteManagementEntityType
-  | "transport_type";
-
-type RecordData =
-  | AdminRouteRecord
-  | AdminTransitPointRecord
-  | AdminTransportTypeRecord;
-
-interface ManagementRow {
-  key: string;
-  entityType: ManagementEntity;
-  id: number;
-  name: string;
-  transportTypeId: number | null;
-  transportTypeName: string;
-  status: string;
-  moderationStatus:
-    | "pending"
-    | "approved"
-    | "rejected"
-    | null;
-  isActive: boolean;
-  isBanned: boolean;
-  isDeleted: boolean;
-  record: RecordData;
-}
-
-interface EditableRouteStop {
-  kind: "terminal" | "stop";
-  id: number;
-  name: string;
-  kindLabel: string;
-  unresolved: boolean;
-}
-
-interface EditorState {
-  entityType: ManagementEntity;
-  id: number | null;
-  name: string;
-  color: string;
-  transportTypeId: number | null;
-  variantId: number | null;
-  isActive: boolean;
-  latitude: string;
-  longitude: string;
-  description: string;
-  stopType: "road_stop" | "train_station";
-  stops: EditableRouteStop[];
-}
-
-// ============================================================
-// RECORD HELPERS
-// ============================================================
-
-function isRouteRecord(
-  record: RecordData,
-): record is AdminRouteRecord {
-  return "route_stops" in record;
-}
-
-function isTransportTypeRecord(
-  record: RecordData,
-): record is AdminTransportTypeRecord {
-  return (
-    !("route_stops" in record) &&
-    !("latitude" in record)
-  );
-}
-
-function isTransitPointRecord(
-  record: RecordData,
-): record is AdminTransitPointRecord {
-  return (
-    !isRouteRecord(record) &&
-    !isTransportTypeRecord(record)
-  );
-}
-
-function pointKindLabel(point: ExistingPoint): string {
-  if (point.kind === "terminal") {
-    return "Terminal";
-  }
-
-  return point.stopType === "train_station"
-    ? "Train station"
-    : "Road stop";
-}
-
-function recordStatus(
-  record: AdminRouteRecord | AdminTransitPointRecord,
-): string {
-  if (record.is_deleted) return "Archived";
-  if (record.is_banned) return "Banned";
-  if (record.moderation_status === "pending") return "Pending";
-  if (record.moderation_status === "rejected") return "Rejected";
-  if (!record.is_active) return "Inactive";
-
-  return "Approved";
-}
-
-function statusClass(status: string): string {
-  switch (status) {
-    case "Approved":
-      return "bg-green-100 text-green-700";
-
-    case "Pending":
-      return "bg-amber-100 text-amber-700";
-
-    case "Rejected":
-      return "bg-red-100 text-red-700";
-
-    case "Banned":
-      return "bg-red-100 text-red-800";
-
-    case "Archived":
-      return "bg-slate-200 text-slate-500";
-
-    default:
-      return "bg-slate-100 text-slate-600";
-  }
-}
-
-function transportIcon(type: string) {
-  const normalized = type.toLowerCase();
-
-  if (normalized.includes("bus")) {
-    return <Bus size={16} />;
-  }
-
-  if (normalized.includes("train")) {
-    return <TrainFront size={16} />;
-  }
-
-  if (normalized.includes("jeep")) {
-    return <CarFront size={16} />;
-  }
-
-  return <RouteIcon size={16} />;
-}
-
-// ============================================================
-// ROUTE MAP HELPERS
-// ============================================================
-
-function routeStopsSummary(
-  route: AdminRouteRecord,
-): string {
-  return route.route_stops
-    .map(
-      (stop) =>
-        stop.terminals?.name ??
-        stop.stops?.name ??
-        "Point unavailable",
-    )
-    .join(" → ");
-}
-
-function routeMapPoints(
-  route: AdminRouteRecord,
-): RouteManagementMapPoint[] {
-  return route.route_stops.flatMap<RouteManagementMapPoint>((routeStop) => {
-    if (routeStop.terminals) {
-      return [
-        {
-          key: `route-${route.id}-terminal-${routeStop.stop_order}`,
-          name: routeStop.terminals.name,
-          kind: "terminal" as const,
-          latitude: routeStop.terminals.latitude,
-          longitude: routeStop.terminals.longitude,
-        },
-      ];
-    }
-
-    if (routeStop.stops) {
-      return [
-        {
-          key: `route-${route.id}-stop-${routeStop.stop_order}`,
-          name: routeStop.stops.name,
-          kind: "stop" as const,
-          stopType: routeStop.stops.stop_type,
-          latitude: routeStop.stops.latitude,
-          longitude: routeStop.stops.longitude,
-        },
-      ];
-    }
-
-    return [];
-  });
-}
-
-function recordMapPoints(
-  row: ManagementRow,
-): RouteManagementMapPoint[] {
-  const record = row.record;
-
-  if (isRouteRecord(record)) {
-    return routeMapPoints(record);
-  }
-
-  if (
-    row.entityType === "transport_type" ||
-    isTransportTypeRecord(record)
-  ) {
-    return [];
-  }
-
-  return [
-    {
-      key: `${row.entityType}-${record.id}`,
-      name: record.name,
-      kind:
-        row.entityType === "terminal"
-          ? "terminal"
-          : "stop",
-      stopType: record.stop_type,
-      latitude: record.latitude,
-      longitude: record.longitude,
-    },
-  ];
-}
-
-function editorMapPoints(
-  editor: EditorState,
-  data: AdminRouteManagementData,
-  availablePoints: ExistingPoint[],
-): RouteManagementMapPoint[] {
-  if (editor.entityType === "route") {
-    const route =
-      editor.id === null
-        ? undefined
-        : data.routes.find(
-            (record) => record.id === editor.id,
-          );
-
-    return editor.stops.flatMap<RouteManagementMapPoint>(
-      (selectedStop, index) => {
-        const catalogPoint = availablePoints.find(
-          (point) =>
-            point.kind === selectedStop.kind &&
-            point.id === selectedStop.id,
-        );
-
-        if (catalogPoint) {
-          return [
-            {
-              key: `route-editor-${index}-${selectedStop.kind}-${selectedStop.id}`,
-              name: catalogPoint.name,
-              kind: catalogPoint.kind,
-              stopType:
-                catalogPoint.stopType === "train_station"
-                  ? ("train_station" as const)
-                  : null,
-              latitude: catalogPoint.latitude,
-              longitude: catalogPoint.longitude,
-            },
-          ];
-        }
-
-        const routeStop = route?.route_stops.find(
-          (record) =>
-            selectedStop.kind === "terminal"
-              ? record.terminals?.id === selectedStop.id
-              : record.stops?.id === selectedStop.id,
-        );
-
-        if (routeStop?.terminals) {
-          return [
-            {
-              key: `route-editor-${index}-terminal-${routeStop.terminals.id}`,
-              name: routeStop.terminals.name,
-              kind: "terminal" as const,
-              latitude: routeStop.terminals.latitude,
-              longitude: routeStop.terminals.longitude,
-            },
-          ];
-        }
-
-        if (routeStop?.stops) {
-          return [
-            {
-              key: `route-editor-${index}-stop-${routeStop.stops.id}`,
-              name: routeStop.stops.name,
-              kind: "stop" as const,
-              stopType: routeStop.stops.stop_type,
-              latitude: routeStop.stops.latitude,
-              longitude: routeStop.stops.longitude,
-            },
-          ];
-        }
-
-        return [];
-      },
-    );
-  }
-
-  if (
-    editor.entityType !== "stop" &&
-    editor.entityType !== "terminal"
-  ) {
-    return [];
-  }
-
-  const record =
-    editor.entityType === "stop"
-      ? data.stops.find(
-          (point) => point.id === editor.id,
-        )
-      : data.terminals.find(
-          (point) => point.id === editor.id,
-        );
-
-  if (!record) {
-    return [];
-  }
-
-  return [
-    {
-      key: `${editor.entityType}-${record.id}`,
-      name: record.name,
-      kind: editor.entityType,
-      stopType: record.stop_type,
-      latitude: record.latitude,
-      longitude: record.longitude,
-    },
-  ];
-}
-
-// ============================================================
-// ROUTE CHANGE PROPOSAL HELPERS
-// ============================================================
-
-function proposalTypeLabel(
-  proposal: AdminRouteChangeProposalRecord,
-): string {
-  switch (proposal.proposal_type) {
-    case "insert_point":
-      return "Insert points into route";
-    case "extend_route":
-      return "Extend existing route";
-    case "combined":
-      return "Combined route changes";
-    case "remove_points":
-      return "Remove route locations";
-    default:
-      return "Route modification";
-  }
-}
-
-function proposalPointName(
-  point: AdminRouteChangeProposalPointRecord,
-): string {
-  return (
-    point.proposed_name?.trim() ||
-    point.terminals?.name ||
-    point.stops?.name ||
-    "Point unavailable"
-  );
-}
-
-function proposalPointType(
-  point: AdminRouteChangeProposalPointRecord,
-): string {
-  if (point.terminals) {
-    return "Terminal";
-  }
-
-  if (point.stops) {
-    return point.stops.stop_type === "train_station"
-      ? "Train station"
-      : "Road stop";
-  }
-
-  return point.terminal_id !== null ? "Terminal" : "Stop";
-}
-
-function proposalPointCoordinates(
-  latitude: number | null,
-  longitude: number | null,
-): string | null {
-  if (latitude === null || longitude === null) {
-    return null;
-  }
-
-  return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-}
-
-function formatProposalDate(value: string): string {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "Date unavailable";
-  }
-
-  return date.toLocaleString();
-}
-
-function proposalPoints(
-  proposal: AdminRouteChangeProposalRecord,
-): AdminRouteChangeProposalPointRecord[] {
-  return [...proposal.route_change_proposal_points].sort((left, right) => {
-    if (left.is_removed_from_route !== right.is_removed_from_route) {
-      return left.is_removed_from_route ? 1 : -1;
-    }
-
-    if (left.is_removed_from_route && right.is_removed_from_route) {
-      return left.stop_order - right.stop_order;
-    }
-
-    return left.proposed_stop_order - right.proposed_stop_order;
-  });
-}
-
-// ============================================================
-// EDITOR HELPERS
-// ============================================================
-
-function createEditorState(
-  row: ManagementRow,
-): EditorState {
-  const base: EditorState = {
-    entityType: row.entityType,
-    id: row.id,
-    name: row.name,
-    color: "#123456",
-    transportTypeId: null,
-    variantId: null,
-    isActive: row.isActive,
-    latitude: "",
-    longitude: "",
-    description: "",
-    stopType: "road_stop",
-    stops: [],
-  };
-
-  if (isRouteRecord(row.record)) {
-    return {
-      ...base,
-      transportTypeId:
-        row.record.transport_type_id,
-      variantId:
-        row.record.transport_variants?.id ?? null,
-      stops: row.record.route_stops.map((stop) => {
-        if (stop.terminals) {
-          return {
-            kind: "terminal",
-            id: stop.terminals.id,
-            name: stop.terminals.name,
-            kindLabel: "Terminal",
-            unresolved: false,
-          };
-        }
-
-        if (stop.stops) {
-          return {
-            kind: "stop",
-            id: stop.stops.id,
-            name: stop.stops.name,
-            kindLabel:
-              stop.stops.stop_type === "train_station"
-                ? "Train station"
-                : "Road stop",
-            unresolved: false,
-          };
-        }
-
-        return {
-          kind: "terminal",
-          id: 0,
-          name: "Point unavailable",
-          kindLabel: "Point unavailable",
-          unresolved: true,
-        };
-      }),
-    };
-  }
-
-  if (isTransportTypeRecord(row.record)) {
-    return {
-      ...base,
-      color: row.record.color,
-    };
-  }
-
-  return {
-    ...base,
-    transportTypeId:
-      row.record.transport_type_id,
-    latitude: String(row.record.latitude),
-    longitude: String(row.record.longitude),
-    description: row.record.description ?? "",
-    stopType:
-      row.record.stop_type ?? "road_stop",
-  };
-}
-
-// ============================================================
-// DETAIL COMPONENT
-// ============================================================
-
-function Detail({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3 text-sm">
-      <span className="text-slate-500">
-        {label}
-      </span>
-
-      <span className="max-w-[65%] text-right font-medium text-slate-800">
-        {value}
-      </span>
-    </div>
-  );
-}
-
-
-// ============================================================
-// SHARED PENDING REVIEW CARD
-// ============================================================
-
-function PendingReviewCard({
-  category,
-  title,
-  description,
-  metadata,
-  onView,
-}: {
-  category: string;
-  title: string;
-  description: string;
-  metadata: string;
-  onView: () => void;
-}) {
-  return (
-    <article className="flex flex-col justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center">
-      <div className="flex min-w-0 items-start gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EAF1F8] text-[#102E4D]">
-          {category === "Route change proposal" ? (
-            <GitBranch size={19} />
-          ) : (
-            <MapPin size={19} />
-          )}
-        </div>
-
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-[#EAF1F8] px-2.5 py-1 text-[11px] font-semibold text-[#102E4D]">
-              {category}
-            </span>
-            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
-              Pending review
-            </span>
-          </div>
-
-          <h4 className="mt-2 break-words text-base font-bold text-slate-900">
-            {title}
-          </h4>
-          <p className="mt-1 text-sm text-slate-600">{description}</p>
-          <p className="mt-1 text-xs text-slate-400">{metadata}</p>
-        </div>
-      </div>
-
-      <button
-        type="button"
-        onClick={onView}
-        className="inline-flex shrink-0 items-center justify-center gap-2 self-start rounded-lg bg-[#102E4D] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#19476D] sm:self-center"
-      >
-        <Eye size={15} />
-        View &amp; review
-      </button>
-    </article>
-  );
-}
-
-// ============================================================
-// MAP IMAGE REVIEW CARD
-// ============================================================
-
-function MapImageReviewCard({
-  image,
-  canModerate,
-  canApprove,
-  isMutating,
-  onModerate,
-}: {
-  image: AdminMapImage;
-  canModerate: boolean;
-  canApprove: boolean;
-  isMutating: boolean;
-  onModerate: (
-    image: AdminMapImage,
-    action: "approve" | "reject",
-  ) => void;
-}) {
-  const statusLabel = image.isBanned
-    ? "Banned"
-    : image.isDeleted
-      ? "Deleted"
-      : image.moderationStatus === "pending"
-        ? "Pending"
-        : image.moderationStatus === "approved"
-          ? "Approved"
-          : "Rejected";
-
-  const statusStyle = image.isBanned || image.isDeleted
-    ? "bg-red-100 text-red-700"
-    : image.moderationStatus === "approved"
-      ? "bg-green-100 text-green-700"
-      : image.moderationStatus === "rejected"
-        ? "bg-red-100 text-red-700"
-        : "bg-amber-100 text-amber-700";
-
-  const isPending =
-    image.moderationStatus === "pending" &&
-    !image.isBanned &&
-    !image.isDeleted;
-
-  return (
-    <article className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="aspect-[4/3] bg-slate-100">
-        {image.imageUrl ? (
-          <img
-            src={image.imageUrl}
-            alt={image.caption?.trim() || `Submitted map photograph ${image.id}`}
-            loading="lazy"
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center px-4 text-center text-xs text-slate-500">
-            The secure preview could not be generated for this photograph.
-          </div>
-        )}
-      </div>
-
-      <div className="space-y-3 p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-slate-500">
-            Image #{image.id}
-          </span>
-          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusStyle}`}>
-            {statusLabel}
-          </span>
-        </div>
-
-        {image.caption?.trim() ? (
-          <p className="whitespace-pre-wrap break-words text-sm text-slate-700">
-            {image.caption}
-          </p>
-        ) : (
-          <p className="text-xs italic text-slate-400">No caption provided</p>
-        )}
-
-        <p className="text-[11px] text-slate-400">
-          Submitted {formatProposalDate(image.createdAt)}
-        </p>
-
-        {image.moderationNote && (
-          <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            Moderation note: {image.moderationNote}
-          </p>
-        )}
-
-        {isPending && canModerate && (
-          <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-            {canApprove && (
-              <button
-                type="button"
-                disabled={isMutating}
-                onClick={() => onModerate(image, "approve")}
-                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-green-50 px-3 py-2 text-xs font-semibold text-green-700 hover:bg-green-100 disabled:opacity-50"
-              >
-                <Check size={13} /> Approve photo
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={isMutating}
-              onClick={() => onModerate(image, "reject")}
-              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
-            >
-              <Ban size={13} /> Reject photo
-            </button>
-          </div>
-        )}
-
-        {isPending && !canApprove && (
-          <p className="border-t border-slate-100 pt-3 text-[11px] leading-relaxed text-slate-500">
-            This photo cannot be approved until its parent location or proposal is eligible. Remaining pending photographs are automatically approved with an approved parent submission.
-          </p>
-        )}
-      </div>
-    </article>
-  );
-}
-
-// ============================================================
-// ROUTE CHANGE PROPOSAL CARD
-// ============================================================
-
-function RouteChangeProposalCard({
-  proposal,
-  route,
-  canModerate,
-  isMutating,
-  onModerate,
-}: {
-  proposal: AdminRouteChangeProposalRecord;
-  route: AdminRouteRecord | undefined;
-  canModerate: boolean;
-  isMutating: boolean;
-  onModerate: (
-    proposal: AdminRouteChangeProposalRecord,
-    action: "approve" | "reject",
-  ) => void;
-}) {
-  const orderedPoints = proposalPoints(proposal);
-  const activePoints = orderedPoints.filter(
-    (point) => !point.is_removed_from_route,
-  );
-  const removalPoints = orderedPoints.filter(
-    (point) => point.is_removed_from_route,
-  );
-
-  const currentRoutePoints = route
-    ? [...route.route_stops].sort(
-        (left, right) => left.stop_order - right.stop_order,
-      )
-    : [];
-
-  const routeName = route?.name ?? `Route #${proposal.route_id}`;
-  const proposedRouteName = proposal.proposed_name?.trim() || routeName;
-
-  const proposedChangeDescription = (() => {
-    switch (proposal.proposal_type) {
-      case "insert_point":
-        return "Add one or more locations within the existing route sequence.";
-      case "extend_route":
-        return "Extend the existing route while preserving its route identity.";
-      case "combined":
-        return "Combine internal insertions and an extension in one route proposal.";
-      case "remove_points":
-        return "Remove selected locations from this route after approval.";
-      default:
-        return "Modify the existing route after moderator approval.";
-    }
-  })();
-
-  return (
-    <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      {/* PROPOSAL HEADER */}
-      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#EAF1F8] px-3 py-1.5 text-xs font-semibold text-[#102E4D]">
-              <GitBranch size={13} />
-              {proposalTypeLabel(proposal)}
-            </span>
-            <span className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-700">
-              Pending review
-            </span>
-            {removalPoints.length > 0 && (
-              <span className="rounded-full bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700">
-                {removalPoints.length} removal{removalPoints.length === 1 ? "" : "s"} requested
-              </span>
-            )}
-          </div>
-
-          <h4 className="mt-3 break-words text-lg font-bold text-slate-900">
-            {proposedRouteName}
-          </h4>
-
-          <p className="mt-1 text-sm text-slate-500">
-            Existing route:{" "}
-            <span className="font-semibold text-slate-700">{routeName}</span>
-            {" · "}Route ID: {proposal.route_id}
-          </p>
-
-          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-500">
-            <span>
-              Submitted by{" "}
-              <span className="font-semibold text-slate-700">
-                {proposal.contributor_display_name}
-              </span>
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Clock3 size={13} />
-              {formatProposalDate(proposal.created_at)}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
-            Proposal #{proposal.id}
-          </span>
-        </div>
-      </div>
-
-      {/* CONTRIBUTOR REMARKS */}
-      {proposal.contributor_remarks?.trim() && (
-        <section className="mt-4 rounded-xl border border-amber-100 bg-amber-50/60 px-4 py-3">
-          <p className="text-xs font-bold uppercase tracking-wide text-amber-800">
-            Contributor remarks
-          </p>
-          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-700">
-            {proposal.contributor_remarks}
-          </p>
-        </section>
-      )}
-
-      {/* ROUTE CHANGE DETAILS */}
-      <div className="mt-5 grid gap-4 xl:grid-cols-2">
-        <section className="rounded-xl border border-blue-100 bg-blue-50/50 p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h5 className="flex items-center gap-2 text-sm font-bold text-[#102E4D]">
-              <GitBranch size={16} /> Proposed active sequence
-            </h5>
-            <span className="text-xs text-slate-500">
-              {activePoints.length} {activePoints.length === 1 ? "point" : "points"}
-            </span>
-          </div>
-
-          {proposal.proposed_name && (
-            <div className="mb-3 rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs">
-              <span className="text-slate-500">Proposed route name</span>
-              <p className="mt-0.5 font-semibold text-slate-800">
-                {proposal.proposed_name}
-              </p>
-            </div>
-          )}
-
-          {activePoints.length > 0 ? (
-            <ol className="space-y-2">
-              {activePoints.map((point) => {
-                const currentName = point.terminals?.name ?? point.stops?.name ?? "Point unavailable";
-                const hasNameChange = Boolean(
-                  point.proposed_name?.trim() &&
-                  point.proposed_name.trim() !== (point.original_name ?? currentName),
-                );
-                const originalCoordinates = proposalPointCoordinates(
-                  point.original_latitude,
-                  point.original_longitude,
-                );
-                const proposedCoordinates = proposalPointCoordinates(
-                  point.proposed_latitude,
-                  point.proposed_longitude,
-                );
-                const hasCoordinateChange = Boolean(
-                  proposedCoordinates && proposedCoordinates !== originalCoordinates,
-                );
-
-                return (
-                  <li
-                    key={`${proposal.id}-active-${point.stop_order}`}
-                    className="flex items-start gap-3 rounded-lg border border-blue-100 bg-white px-3 py-2.5"
-                  >
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#EAF1F8] text-xs font-bold text-[#102E4D]">
-                      {point.proposed_stop_order}
-                    </span>
-
-                    <div className="min-w-0 flex-1">
-                      <p className="break-words text-sm font-semibold text-slate-800">
-                        {proposalPointName(point)}
-                      </p>
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        {proposalPointType(point)}
-                        {" · "}
-                        {point.is_new_point ? "New proposed point" : "Existing approved point"}
-                      </p>
-
-                      {hasNameChange && (
-                        <p className="mt-1 text-xs text-blue-700">
-                          Name change: {point.original_name ?? currentName} → {point.proposed_name}
-                        </p>
-                      )}
-
-                      {hasCoordinateChange && (
-                        <p className="mt-1 text-xs text-blue-700">
-                          Coordinate change: {originalCoordinates ?? "Original coordinates unavailable"} → {proposedCoordinates}
-                        </p>
-                      )}
-
-                      {point.replaces_stop_order !== null && (
-                        <p className="mt-1 text-xs font-medium text-violet-700">
-                          Replacement for original route point #{point.replaces_stop_order}
-                        </p>
-                      )}
-                    </div>
-
-                    <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${
-                      point.is_new_point
-                        ? "bg-green-50 text-green-700"
-                        : "bg-slate-100 text-slate-600"
-                    }`}>
-                      {point.is_new_point ? "New" : "Existing"}
-                    </span>
-                  </li>
-                );
-              })}
-            </ol>
-          ) : (
-            <p className="rounded-lg bg-white px-3 py-4 text-center text-sm text-slate-500">
-              No active proposed locations are available.
-            </p>
-          )}
-        </section>
-
-        {/* CURRENT ROUTE SEQUENCE */}
-        <section className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h5 className="flex items-center gap-2 text-sm font-bold text-slate-700">
-              <MapPin size={16} /> Current route sequence
-            </h5>
-            <span className="text-xs text-slate-500">
-              {currentRoutePoints.length} {currentRoutePoints.length === 1 ? "point" : "points"}
-            </span>
-          </div>
-
-          {currentRoutePoints.length > 0 ? (
-            <ol className="space-y-2">
-              {currentRoutePoints.map((routeStop) => (
-                <li
-                  key={routeStop.id}
-                  className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5"
-                >
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-600">
-                    {routeStop.stop_order}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="break-words text-sm font-medium text-slate-700">
-                      {routeStop.terminals?.name ?? routeStop.stops?.name ?? "Point unavailable"}
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-400">
-                      {routeStop.terminals
-                        ? "Terminal"
-                        : routeStop.stops?.stop_type === "train_station"
-                          ? "Train station"
-                          : "Road stop"}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-4">
-              <p className="flex items-center gap-2 text-sm font-semibold text-amber-800">
-                <AlertTriangle size={15} /> Current route unavailable
-              </p>
-              <p className="mt-1 text-xs text-amber-700">
-                The target route could not be loaded. The proposal should be checked for a conflict before approval.
-              </p>
-            </div>
-          )}
-        </section>
-      </div>
-
-      {/* REMOVAL REQUESTS */}
-      {removalPoints.length > 0 && (
-        <section className="mt-4 rounded-xl border border-red-200 bg-red-50/50 p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h5 className="flex items-center gap-2 text-sm font-bold text-red-800">
-              <Ban size={16} /> Removal requested
-            </h5>
-            <span className="text-xs text-red-700">
-              {removalPoints.length} {removalPoints.length === 1 ? "location" : "locations"}
-            </span>
-          </div>
-          <ol className="space-y-2">
-            {removalPoints.map((point) => (
-              <li
-                key={`${proposal.id}-removed-${point.stop_order}`}
-                className="flex items-start gap-3 rounded-lg border border-red-100 bg-white px-3 py-2.5"
-              >
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-50 text-xs font-bold text-red-700">
-                  {point.stop_order}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="break-words text-sm font-semibold text-slate-800">
-                    {point.original_name ?? proposalPointName(point)}
-                  </p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    {proposalPointType(point)} · Original route position #{point.stop_order}
-                  </p>
-                  <p className="mt-1 text-xs font-medium text-red-700">
-                    Will be detached from this route on approval
-                  </p>
-                </div>
-                <span className="shrink-0 rounded-full bg-red-100 px-2 py-1 text-[10px] font-semibold text-red-700">
-                  Removal requested
-                </span>
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
-
-      {/* PROPOSAL CHANGE SUMMARY */}
-      <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-        <span className="font-semibold text-slate-700">Proposed change:</span>
-        <span>{proposedChangeDescription}</span>
-        <ArrowRight size={14} className="text-slate-400" />
-        <span>
-          Existing shared locations are not changed until moderator approval. Route-specific removals are detached from this route, and are only soft-deleted when no other route uses them.
-        </span>
-      </div>
-
-      {/* EXISTING MODERATION NOTE */}
-      {proposal.moderation_note && (
-        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-          <p className="text-xs font-semibold text-slate-600">Existing moderation note</p>
-          <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">
-            {proposal.moderation_note}
-          </p>
-        </div>
-      )}
-
-      {/* ACTIONS */}
-      {canModerate && (
-        <div className="mt-5 flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
-          <button
-            type="button"
-            disabled={isMutating}
-            onClick={() => onModerate(proposal, "reject")}
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Ban size={15} /> Reject proposal
-          </button>
-          <button
-            type="button"
-            disabled={isMutating || activePoints.length < 2 || !route}
-            onClick={() => onModerate(proposal, "approve")}
-            title={
-              !route
-                ? "The target route is unavailable."
-                : activePoints.length < 2
-                  ? "The proposal needs at least two active points."
-                  : undefined
-            }
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Check size={15} /> Approve proposal
-          </button>
-        </div>
-      )}
-    </article>
-  );
-}
-
-// ============================================================
-// ROUTE MANAGEMENT PAGE
-// ============================================================
+import { navigationItems, ROUTES_PER_PAGE, STATUSES, TABS } from "@/components/route-management/constants";
+import {
+  createEditorState, editorMapPoints, formatProposalDate, isRouteRecord,
+  isTransportTypeRecord, isTransitPointRecord, pointKindLabel, recordMapPoints,
+  recordStatus, routeStopsSummary, statusClass, transportIcon,
+  proposalPointName, proposalPointType, proposalPoints, proposalTypeLabel,
+} from "@/components/route-management/helpers";
+import { Detail } from "@/components/route-management/components/Detail";
+import { PendingReviewCard } from "@/components/route-management/components/PendingReviewCard";
+import { MapImageReviewCard } from "@/components/route-management/components/MapImageReviewCard";
+import { RouteChangeProposalCard } from "@/components/route-management/components/RouteChangeProposalCard";
+import { useRouteManagementData } from "@/components/route-management/hooks/useRouteManagementData";
+import { useRouteManagementActions } from "@/components/route-management/hooks/useRouteManagementActions";
+import type { EditorState, ManagementRow, ManagementTab } from "@/components/route-management/types";
 
 export default function RouteManagement() {
   const navigate = useNavigate();
@@ -1196,48 +47,7 @@ export default function RouteManagement() {
 
   const { userId, account } = useAccountProfile();
 
-  const sessionSnapshot = useSyncExternalStore(
-    subscribeSessionState,
-    getSessionSnapshot,
-    getSessionSnapshot,
-  );
-
-  const sessionIdentity =
-    sessionSnapshot.status === "authenticated" &&
-    sessionSnapshot.purpose === "authenticated"
-      ? sessionSnapshot.identity
-      : null;
-
-  // ----------------------------------------------------------
-  // DATA STATE
-  // ----------------------------------------------------------
-
-  const [data, setData] =
-    useState<AdminRouteManagementData>({
-      routes: [],
-      stops: [],
-      terminals: [],
-      transportTypes: [],
-      routeChangeProposals: [],
-    });
-
-  const [dataOwnerId, setDataOwnerId] =
-    useState<string | null>(null);
-
-  const [role, setRole] =
-    useState<"admin" | "moderator" | null>(null);
-
-  const [roleError, setRoleError] =
-    useState<string | null>(null);
-
-  const [isLoading, setIsLoading] =
-    useState(true);
-
-  const [errorMessage, setErrorMessage] =
-    useState<string | null>(null);
-
-  const [retryCount, setRetryCount] =
-    useState(0);
+  // Auth/session validation, route data, and review-image loading are centralized in the data hook.
 
   // ----------------------------------------------------------
   // FILTER AND PAGINATION STATE
@@ -1267,18 +77,6 @@ export default function RouteManagement() {
 
   const [selectedProposal, setSelectedProposal] =
     useState<AdminRouteChangeProposalRecord | null>(null);
-
-  const [reviewImages, setReviewImages] =
-    useState<AdminMapImage[]>([]);
-
-  const [reviewImagesLoading, setReviewImagesLoading] =
-    useState(false);
-
-  const [reviewImagesError, setReviewImagesError] =
-    useState<string | null>(null);
-
-  const [imageRefreshVersion, setImageRefreshVersion] =
-    useState(0);
 
   const [editor, setEditor] =
     useState<EditorState | null>(null);
@@ -1314,11 +112,39 @@ export default function RouteManagement() {
   const [logoutError, setLogoutError] =
     useState<string | null>(null);
 
+  const {
+    data,
+    dataOwnerId,
+    role,
+    roleError,
+    isLoading,
+    errorMessage,
+    setErrorMessage,
+    refreshData,
+    reviewImages,
+    reviewImagesLoading,
+    reviewImagesError,
+    setReviewImagesError,
+    setImageRefreshVersion,
+    archiveRecoveryStatuses,
+    archiveRecoveryLoading,
+    archiveRecoveryError,
+  } = useRouteManagementData({
+    userId,
+    selectedRow,
+    selectedProposal,
+  });
+
   // ----------------------------------------------------------
   // ACCOUNT DISPLAY
   // ----------------------------------------------------------
 
   const isAdmin = role === "admin";
+
+  const archiveRecoveryByRouteId = useMemo(
+    () => new Map(archiveRecoveryStatuses.map((status) => [status.routeId, status])),
+    [archiveRecoveryStatuses],
+  );
 
   const accountName =
     account?.displayName?.trim() ||
@@ -1327,275 +153,6 @@ export default function RouteManagement() {
       ? account.email.split("@")[0]
       : null) ||
     (isAdmin ? "Administrator" : "Moderator");
-
-  // ==========================================================
-  // 1. ROLE VALIDATION
-  // ==========================================================
-
-  useEffect(() => {
-    let active = true;
-
-    const identity = sessionIdentity;
-
-    setRole(null);
-    setRoleError(null);
-
-    if (
-      !userId ||
-      !identity ||
-      identity.userId !== userId
-    ) {
-      setRoleError(
-        !userId
-          ? "Please sign in to continue."
-          : "The active session could not be verified.",
-      );
-
-      return () => {
-        active = false;
-      };
-    }
-
-    void getUserRole(userId, identity)
-      .then((currentRole) => {
-        if (
-          !active ||
-          !isCurrentAuthenticatedSession(identity)
-        ) {
-          return;
-        }
-
-        const allowed =
-          currentRole === "admin" ||
-          currentRole === "moderator";
-
-        setRole(allowed ? currentRole : null);
-
-        setRoleError(
-          allowed
-            ? null
-            : "Route Management access could not be verified.",
-        );
-      })
-      .catch((error: unknown) => {
-        if (
-          !active ||
-          !isCurrentAuthenticatedSession(identity)
-        ) {
-          return;
-        }
-
-        setRole(null);
-
-        setRoleError(
-          error instanceof Error
-            ? error.message
-            : "Unable to verify your role.",
-        );
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [
-    userId,
-    sessionIdentity?.generation,
-    sessionSnapshot.status,
-  ]);
-
-  // ==========================================================
-  // 2. LOAD ROUTE MANAGEMENT DATA
-  // ==========================================================
-
-  useEffect(() => {
-    let active = true;
-
-    const identity = sessionIdentity;
-
-    setDataOwnerId(null);
-
-    setData({
-      routes: [],
-      stops: [],
-      terminals: [],
-      transportTypes: [],
-      routeChangeProposals: [],
-    });
-
-    setErrorMessage(null);
-
-    if (
-      !userId ||
-      !identity ||
-      identity.userId !== userId
-    ) {
-      setIsLoading(false);
-
-      if (userId) {
-        setErrorMessage(
-          "The active session could not be verified. Please try again.",
-        );
-      }
-
-      return () => {
-        active = false;
-      };
-    }
-
-    if (!isCurrentAuthenticatedSession(identity)) {
-      setIsLoading(false);
-
-      setErrorMessage(
-        "The active session could not be verified. Please try again.",
-      );
-
-      return () => {
-        active = false;
-      };
-    }
-
-    setIsLoading(true);
-
-    void getRouteManagementData(userId)
-      .then((records) => {
-        if (
-          !active ||
-          !isCurrentAuthenticatedSession(identity)
-        ) {
-          return;
-        }
-
-        setData(records);
-        setDataOwnerId(userId);
-        setErrorMessage(null);
-      })
-      .catch((error: unknown) => {
-        if (
-          !active ||
-          !isCurrentAuthenticatedSession(identity)
-        ) {
-          return;
-        }
-
-        setDataOwnerId(null);
-
-        setData({
-          routes: [],
-          stops: [],
-          terminals: [],
-          transportTypes: [],
-          routeChangeProposals: [],
-        });
-
-        setErrorMessage(
-          error instanceof Error
-            ? error.message
-            : "Unable to load records.",
-        );
-      })
-      .finally(() => {
-        if (
-          active &&
-          isCurrentAuthenticatedSession(identity)
-        ) {
-          setIsLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [
-    userId,
-    sessionIdentity?.generation,
-    sessionSnapshot.status,
-    retryCount,
-  ]);
-
-  // ==========================================================
-  // 3. LOAD ADMIN IMAGE PREVIEWS FOR THE OPEN REVIEW DIALOG
-  // ==========================================================
-
-  useEffect(() => {
-    let active = true;
-
-    const identity = sessionIdentity;
-
-    const hasLocationTarget = Boolean(
-      selectedRow &&
-      (selectedRow.entityType === "stop" ||
-        selectedRow.entityType === "terminal"),
-    );
-
-    if (
-      !userId ||
-      !identity ||
-      identity.userId !== userId ||
-      !isCurrentAuthenticatedSession(identity) ||
-      (!selectedProposal && !hasLocationTarget)
-    ) {
-      setReviewImages([]);
-      setReviewImagesLoading(false);
-      setReviewImagesError(null);
-
-      return () => {
-        active = false;
-      };
-    }
-
-    const imageRequest = selectedProposal
-      ? getAdminMapImagesForProposal(userId, selectedProposal.id)
-      : getAdminMapImagesForLocation(
-          userId,
-          selectedRow!.entityType as AdminMapImageLocationType,
-          selectedRow!.id,
-        );
-
-    setReviewImages([]);
-    setReviewImagesLoading(true);
-    setReviewImagesError(null);
-
-    void imageRequest
-      .then((images) => {
-        if (active && isCurrentAuthenticatedSession(identity)) {
-          setReviewImages(images);
-        }
-      })
-      .catch((error: unknown) => {
-        if (active && isCurrentAuthenticatedSession(identity)) {
-          setReviewImagesError(
-            error instanceof Error
-              ? error.message
-              : "Unable to load map photographs.",
-          );
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setReviewImagesLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [
-    userId,
-    sessionIdentity?.generation,
-    sessionSnapshot.status,
-    selectedRow,
-    selectedProposal,
-    imageRefreshVersion,
-  ]);
-
-  // ==========================================================
-  // 4. DATA REFRESH
-  // ==========================================================
-
-  const refreshData = () => {
-    setIsLoading(true);
-    setRetryCount((count) => count + 1);
-  };
 
   // ==========================================================
   // 4. BUILD MANAGEMENT ROWS
@@ -1629,6 +186,7 @@ export default function RouteManagement() {
         isActive: record.is_active === true,
         isBanned: record.is_banned === true,
         isDeleted: record.is_deleted === true,
+        archiveRecovery: archiveRecoveryByRouteId.get(record.id) ?? null,
         record,
       }));
 
@@ -1650,6 +208,7 @@ export default function RouteManagement() {
         isActive: record.is_active === true,
         isBanned: record.is_banned === true,
         isDeleted: record.is_deleted === true,
+        archiveRecovery: null,
         record,
       }));
 
@@ -1671,6 +230,7 @@ export default function RouteManagement() {
         isActive: record.is_active === true,
         isBanned: record.is_banned === true,
         isDeleted: record.is_deleted === true,
+        archiveRecovery: null,
         record,
       }));
 
@@ -1687,6 +247,7 @@ export default function RouteManagement() {
         isActive: true,
         isBanned: false,
         isDeleted: false,
+        archiveRecovery: null,
         record,
       }));
 
@@ -1696,7 +257,7 @@ export default function RouteManagement() {
       ...terminalRows,
       ...typeRows,
     ];
-  }, [data, dataOwnerId, userId]);
+  }, [data, dataOwnerId, userId, archiveRecoveryByRouteId]);
 
   // ==========================================================
   // 5. MAP DERIVED STATE
@@ -2144,332 +705,28 @@ export default function RouteManagement() {
     setPointToAdd("");
   };
 
-  // ==========================================================
-  // 15. INDIVIDUAL MAP IMAGE MODERATION
-  // ==========================================================
-
-  const handleMapImageModeration = async (
-    image: AdminMapImage,
-    action: "approve" | "reject",
-  ) => {
-    if (!userId || !isAdmin || isMutating) {
-      return;
-    }
-
-    let moderationNote: string | undefined;
-
-    if (action === "reject") {
-      const enteredNote = window.prompt(
-        "Optional photo rejection note (500 characters maximum):",
-        "",
-      );
-
-      if (enteredNote === null) {
-        return;
-      }
-
-      moderationNote = enteredNote;
-
-      if (moderationNote.length > 500) {
-        setReviewImagesError(
-          "Photo moderation notes must be 500 characters or fewer.",
-        );
-        return;
-      }
-    }
-
-    setIsMutating(true);
-    setReviewImagesError(null);
-
-    try {
-      await moderateAdminMapImage(
-        userId,
-        image.id,
-        action,
-        moderationNote,
-      );
-
-      setImageRefreshVersion((version) => version + 1);
-    } catch (error: unknown) {
-      setReviewImagesError(
-        error instanceof Error
-          ? error.message
-          : "Unable to moderate this photograph.",
-      );
-    } finally {
-      setIsMutating(false);
-    }
-  };
-
-  // ==========================================================
-  // 16. ORDINARY RECORD MODERATION
-  // ==========================================================
-
-  const handleModeration = async (
-    row: ManagementRow,
-    action: "approve" | "reject",
-  ) => {
-    if (
-      !userId ||
-      row.entityType === "transport_type" ||
-      row.moderationStatus !== "pending"
-    ) {
-      return;
-    }
-
-    const moderationNote =
-      action === "reject"
-        ? window.prompt(
-            "Optional rejection note (500 characters maximum):",
-            "",
-          ) ?? null
-        : undefined;
-
-    if (moderationNote === null) {
-      return;
-    }
-
-    if (
-      moderationNote !== undefined &&
-      moderationNote.length > 500
-    ) {
-      setErrorMessage(
-        "Rejection notes must be 500 characters or fewer.",
-      );
-
-      return;
-    }
-
-    setIsMutating(true);
-    setErrorMessage(null);
-
-    try {
-      await moderateRouteManagementRecord(
-        userId,
-        row.entityType as RouteManagementEntityType,
-        row.id,
-        action,
-        moderationNote,
-      );
-
-      setSelectedRow(null);
-      refreshData();
-    } catch (error: unknown) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to update moderation status.",
-      );
-    } finally {
-      setIsMutating(false);
-    }
-  };
-
-  // ==========================================================
-  // 16. ROUTE CHANGE PROPOSAL MODERATION
-  // ==========================================================
-
-  const handleRouteChangeProposalModeration = async (
-    proposal: AdminRouteChangeProposalRecord,
-    action: "approve" | "reject",
-  ) => {
-    if (!userId || !role || isMutating) {
-      return;
-    }
-
-    if (
-      proposal.status !== "pending"
-    ) {
-      return;
-    }
-
-    if (
-      action === "approve" &&
-      proposal.route_change_proposal_points.length < 2
-    ) {
-      window.alert(
-        "This proposal does not contain enough route points to approve.",
-      );
-
-      return;
-    }
-
-    if (
-      action === "approve" &&
-      !data.routes.some(
-        (route) => route.id === proposal.route_id,
-      )
-    ) {
-      window.alert(
-        "The target route could not be loaded. The proposal cannot be approved from this page.",
-      );
-
-      return;
-    }
-
-    if (
-      action === "approve" &&
-      !window.confirm(
-        `Approve this route change proposal?\n\nThe existing route (ID ${proposal.route_id}) will be updated. Its route identity will remain the same.`,
-      )
-    ) {
-      return;
-    }
-
-    const moderationNote =
-      action === "reject"
-        ? window.prompt(
-            "Optional rejection note (500 characters maximum):",
-            "",
-          ) ?? null
-        : undefined;
-
-    if (moderationNote === null) {
-      return;
-    }
-
-    if (
-      moderationNote !== undefined &&
-      moderationNote.length > 500
-    ) {
-      window.alert(
-        "Rejection notes must be 500 characters or fewer.",
-      );
-
-      return;
-    }
-
-    setIsMutating(true);
-    setErrorMessage(null);
-
-    try {
-      const result = await moderateRouteChangeProposal(
-        userId,
-        proposal.id,
-        action,
-        moderationNote,
-      );
-
-      if (result.status === "conflicted") {
-        window.alert(
-          "This proposal could not be applied because the route or one of its underlying records changed after the proposal was submitted.\n\nNo route changes were applied. The proposal has been marked as conflicted.",
-        );
-      } else if (result.status === "approved") {
-        window.alert(
-          "The route change proposal was approved and applied successfully.",
-        );
-      } else if (result.status === "rejected") {
-        window.alert(
-          "The route change proposal was rejected.",
-        );
-      }
-
-      setSelectedProposal(null);
-      refreshData();
-    } catch (error: unknown) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to moderate the route change proposal.",
-      );
-    } finally {
-      setIsMutating(false);
-    }
-  };
-
-  // ==========================================================
-  // 17. MAP INFORMATION ACTIONS
-  // ==========================================================
-
-  const handleMapInformationAction = async (
-    row: ManagementRow,
-    action: "mute" | "unmute" | "ban" | "unban",
-  ) => {
-    if (
-      !userId ||
-      !role ||
-      row.entityType === "transport_type" ||
-      row.isDeleted
-    ) {
-      return;
-    }
-
-    if (
-      action === "ban" &&
-      !window.confirm(
-        `Ban "${row.name}" from public map information?`,
-      )
-    ) {
-      return;
-    }
-
-    setIsMutating(true);
-    setErrorMessage(null);
-
-    try {
-      await moderateRouteManagementRecord(
-        userId,
-        row.entityType,
-        row.id,
-        action,
-      );
-
-      refreshData();
-    } catch (error: unknown) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to update map information status.",
-      );
-    } finally {
-      setIsMutating(false);
-    }
-  };
-
-  // ==========================================================
-  // 18. ARCHIVE RECORD
-  // ==========================================================
-
-  const handleArchive = async (
-    row: ManagementRow,
-  ) => {
-    if (
-      !userId ||
-      !isAdmin ||
-      row.entityType === "transport_type"
-    ) {
-      return;
-    }
-
-    if (
-      !window.confirm(
-        `Archive "${row.name}"? This hides it without deleting its record.`,
-      )
-    ) {
-      return;
-    }
-
-    setIsMutating(true);
-    setErrorMessage(null);
-
-    try {
-      await archiveRouteManagementRecord(
-        userId,
-        row.entityType,
-        row.id,
-      );
-
-      refreshData();
-    } catch (error: unknown) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to archive the record.",
-      );
-    } finally {
-      setIsMutating(false);
-    }
-  };
+  const {
+    handleMapImageModeration,
+    handleModeration,
+    handleRouteChangeProposalModeration,
+    handleMapInformationAction,
+    handleArchive,
+    handleReinstateRoute,
+    handleReconcileRouteArchive,
+  } = useRouteManagementActions({
+    userId,
+    role,
+    isAdmin,
+    data,
+    isMutating,
+    setIsMutating,
+    setErrorMessage,
+    setReviewImagesError,
+    setSelectedRow,
+    setSelectedProposal,
+    setImageRefreshVersion,
+    refreshData,
+  });
 
   // ==========================================================
   // 19. TAB CHANGE
@@ -3281,16 +1538,100 @@ export default function RouteManagement() {
 
                                       <button
                                         type="button"
-                                        disabled={isMutating}
+                                        disabled={
+                                          isMutating ||
+                                          Boolean(
+                                            row.entityType === "route" &&
+                                            (
+                                              archiveRecoveryLoading ||
+                                              archiveRecoveryError ||
+                                              row.archiveRecovery?.archiveOperationId
+                                            ),
+                                          )
+                                        }
+                                        title={
+                                          row.entityType === "route" && row.archiveRecovery?.archiveOperationId
+                                            ? row.archiveRecovery.reason
+                                            : row.entityType === "route" && archiveRecoveryLoading
+                                              ? "Checking whether this route has an open archive recovery operation."
+                                              : row.entityType === "route" && archiveRecoveryError
+                                                ? archiveRecoveryError
+                                                : undefined
+                                        }
                                         onClick={() =>
                                           void handleArchive(row)
                                         }
-                                        className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                                        className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                                       >
                                         <Archive size={13} />
                                         Archive
                                       </button>
                                     </>
+                                  )}
+
+
+                                {isAdmin &&
+                                  row.entityType === "route" &&
+                                  !row.isDeleted &&
+                                  row.archiveRecovery?.archiveOperationId && (
+                                    row.archiveRecovery.canReconcile ? (
+                                      <button
+                                        type="button"
+                                        disabled={isMutating}
+                                        onClick={() => void handleReconcileRouteArchive(row)}
+                                        className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                                      >
+                                        <CheckCircle2 size={13} />
+                                        Finalize recovery
+                                      </button>
+                                    ) : (
+                                      <span
+                                        className="max-w-[150px] cursor-help rounded-lg bg-amber-50 px-2.5 py-2 text-center text-[11px] font-semibold text-amber-800"
+                                        title={row.archiveRecovery.reason}
+                                      >
+                                        Manual review
+                                      </span>
+                                    )
+                                  )}
+
+                                {isAdmin &&
+                                  row.entityType === "route" &&
+                                  row.isDeleted && (
+                                    row.archiveRecovery?.canReinstate ? (
+                                      <div className="flex flex-col items-start gap-1">
+                                        <button
+                                          type="button"
+                                          disabled={isMutating}
+                                          onClick={() => void handleReinstateRoute(row)}
+                                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                                        >
+                                          <RotateCcw size={13} />
+                                          Re-instate
+                                        </button>
+                                        {((row.archiveRecovery.changedLocationCount + row.archiveRecovery.missingLocationCount) > 0) && (
+                                          <span
+                                            className="max-w-[190px] text-[10px] leading-4 text-amber-700"
+                                            title={row.archiveRecovery.reason}
+                                          >
+                                            Some locations need manual review
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span
+                                        className="max-w-[150px] cursor-help rounded-lg bg-amber-50 px-2.5 py-2 text-center text-[11px] font-semibold text-amber-800"
+                                        title={
+                                          row.archiveRecovery?.reason ??
+                                          (archiveRecoveryLoading
+                                            ? "Checking archive recovery status."
+                                            : archiveRecoveryError ?? "Recovery status is unavailable; manual review is required.")
+                                        }
+                                      >
+                                        {archiveRecoveryLoading
+                                          ? "Checking recovery"
+                                          : "Manual review"}
+                                      </span>
+                                    )
                                   )}
                               </div>
                             </td>

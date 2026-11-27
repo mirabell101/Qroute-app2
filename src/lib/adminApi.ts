@@ -10,6 +10,7 @@ export * from "./admin/errors";
 export * from "./admin/summary";
 export * from "./admin/routes";
 export * from "./admin/routeManagement";
+export * from "./admin/routeArchiveRecovery";
 export * from "./admin/mapImages";
 export * from "./admin/users";
 export * from "./admin/community";

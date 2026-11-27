@@ -37,15 +37,32 @@ function getAccessToken(res: Response): string | null {
   return typeof token === "string" && token ? token : null;
 }
 
-function parseId(value: string): number | null {
-  const id = Number(value);
+type ExpressRouteParam = string | string[] | undefined;
+
+/**
+ * Express route params may be represented as string arrays by the installed
+ * Express type definitions. Route identifiers and entity names must be a
+ * single scalar value; reject arrays instead of coercing them.
+ */
+function getSingleRouteParam(value: ExpressRouteParam): string | null {
+  return typeof value === "string" && value.length > 0
+    ? value
+    : null;
+}
+
+function parseId(value: ExpressRouteParam): number | null {
+  const rawValue = getSingleRouteParam(value);
+  if (rawValue === null) return null;
+
+  const id = Number(rawValue);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
-function parseEntityType(value: string): EntityType | null {
-  return entityTypes.includes(value as EntityType)
-    ? (value as EntityType)
-    : null;
+function parseEntityType(value: ExpressRouteParam): EntityType | null {
+  const rawValue = getSingleRouteParam(value);
+  if (rawValue === null) return null;
+
+  return entityTypes.find((entityType) => entityType === rawValue) ?? null;
 }
 
 function isModerationAction(value: unknown): value is ModerationAction {
@@ -268,6 +285,46 @@ router.get("/", async (_req: Request, res: Response) => {
     );
   }
 });
+
+
+// ============================================================
+// ADMIN-ONLY ROUTE ARCHIVE RECOVERY STATUS
+// ============================================================
+
+router.get(
+  "/archive-recovery",
+  requireAdmin,
+  async (_req: Request, res: Response) => {
+    const accessToken = getAccessToken(res);
+    if (!accessToken) {
+      res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+      return;
+    }
+
+    try {
+      const { data, error } = await getSupabaseClientForAccessToken(
+        accessToken,
+      ).rpc("get_route_archive_recovery_status");
+
+      if (error) throw error;
+
+      res.setHeader("Cache-Control", "no-store");
+      res.json({
+        success: true,
+        recovery: data,
+      });
+    } catch (error: unknown) {
+      sendError(
+        res,
+        error,
+        "Unable to load route archive recovery status.",
+      );
+    }
+  },
+);
 
 // ============================================================
 // EXISTING ROUTE / STOP / TERMINAL MODERATION
@@ -509,6 +566,186 @@ router.patch(
         res,
         error,
         "Unable to update the Route Management record.",
+      );
+    }
+  },
+);
+
+
+
+// ============================================================
+// ADMIN-ONLY ROUTE REINSTATEMENT
+// ============================================================
+
+router.post(
+  "/records/route/:id/reinstate",
+  requireAdmin,
+  async (req: Request, res: Response) => {
+    const id = parseId(req.params.id);
+    if (id === null) {
+      res.status(400).json({
+        success: false,
+        message: "A valid route ID is required.",
+      });
+      return;
+    }
+
+    const accessToken = getAccessToken(res);
+    if (!accessToken) {
+      res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+      return;
+    }
+
+    try {
+      const { data, error } = await getSupabaseClientForAccessToken(
+        accessToken,
+      ).rpc("reinstate_archived_route", {
+        p_route_id: id,
+      });
+
+      if (error) throw error;
+
+      res.json({
+        success: true,
+        result: data,
+      });
+    } catch (error: unknown) {
+      const errorRecord = getObjectBody(error);
+      const code = errorRecord?.code;
+
+      if (code === "42501") {
+        res.status(403).json({
+          success: false,
+          message: "Administrator access is required to reinstate a route.",
+        });
+        return;
+      }
+
+      if (code === "40001") {
+        res.status(409).json({
+          success: false,
+          message:
+            "This route changed after it was archived. Automatic reinstatement is blocked to protect later changes. Review the route before trying again.",
+        });
+        return;
+      }
+
+      if (code === "55000") {
+        res.status(409).json({
+          success: false,
+          message:
+            typeof errorRecord?.message === "string"
+              ? errorRecord.message
+              : "This route has no currently recoverable archive operation. Manual review is required.",
+        });
+        return;
+      }
+
+      if (code === "P0002") {
+        res.status(404).json({
+          success: false,
+          message: "The archived route could not be found.",
+        });
+        return;
+      }
+
+      sendError(
+        res,
+        error,
+        "Unable to reinstate the archived route.",
+      );
+    }
+  },
+);
+
+// ============================================================
+// ADMIN-ONLY RECONCILIATION OF AN ALREADY-RESTORED ROUTE
+// ============================================================
+
+router.post(
+  "/records/route/:id/reconcile-archive",
+  requireAdmin,
+  async (req: Request, res: Response) => {
+    const id = parseId(req.params.id);
+    if (id === null) {
+      res.status(400).json({
+        success: false,
+        message: "A valid route ID is required.",
+      });
+      return;
+    }
+
+    const accessToken = getAccessToken(res);
+    if (!accessToken) {
+      res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+      return;
+    }
+
+    try {
+      const { data, error } = await getSupabaseClientForAccessToken(
+        accessToken,
+      ).rpc("reconcile_restored_route_archive", {
+        p_route_id: id,
+      });
+
+      if (error) throw error;
+
+      res.json({
+        success: true,
+        result: data,
+      });
+    } catch (error: unknown) {
+      const errorRecord = getObjectBody(error);
+      const code = errorRecord?.code;
+
+      if (code === "42501") {
+        res.status(403).json({
+          success: false,
+          message: "Administrator access is required to finalize route recovery.",
+        });
+        return;
+      }
+
+      if (code === "40001") {
+        res.status(409).json({
+          success: false,
+          message:
+            typeof errorRecord?.message === "string"
+              ? errorRecord.message
+              : "The route or one of its snapshotted locations no longer matches its original row. Manual review is required.",
+        });
+        return;
+      }
+
+      if (code === "55000") {
+        res.status(409).json({
+          success: false,
+          message:
+            typeof errorRecord?.message === "string"
+              ? errorRecord.message
+              : "This route does not have an open archive operation to reconcile.",
+        });
+        return;
+      }
+
+      if (code === "P0002") {
+        res.status(404).json({
+          success: false,
+          message: "The route could not be found.",
+        });
+        return;
+      }
+
+      sendError(
+        res,
+        error,
+        "Unable to finalize route archive recovery.",
       );
     }
   },
