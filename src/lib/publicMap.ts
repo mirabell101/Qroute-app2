@@ -17,6 +17,7 @@ export interface PublicMapStop {
   latitude: number;
   longitude: number;
   is_active: boolean;
+  is_deleted: boolean;
   transport_type_id: number;
 }
 
@@ -47,6 +48,11 @@ export interface PublicMapData {
 
 let publicMapDataRequest: Promise<PublicMapData> | null = null;
 
+/** Invalidate the shared visitor-map RPC response before a live map refresh. */
+export function invalidatePublicMapDataCache(): void {
+  publicMapDataRequest = null;
+}
+
 export async function hasMapAuthSession(
   currentUserId: string | null | undefined = undefined,
 ): Promise<boolean> {
@@ -63,9 +69,8 @@ export function getPublicMapData(): Promise<PublicMapData> {
     return publicMapDataRequest;
   }
 
-  const request: Promise<PublicMapData> = Promise.resolve(
-    supabase.rpc("get_public_map_data"),
-  )
+  let request!: Promise<PublicMapData>;
+  request = Promise.resolve(supabase.rpc("get_public_map_data"))
     .then(({ data, error }) => {
       if (error || data === null || typeof data !== "object") {
         throw new Error("Unable to load public map information.");
@@ -74,8 +79,11 @@ export function getPublicMapData(): Promise<PublicMapData> {
       return data as PublicMapData;
     })
     .catch((error: unknown) => {
-      publicMapDataRequest = null;
-
+      // A stale failed request must not clear a newer request created after
+      // invalidatePublicMapDataCache() was called.
+      if (publicMapDataRequest === request) {
+        publicMapDataRequest = null;
+      }
       throw error instanceof Error
         ? error
         : new Error("Unable to load public map information.");

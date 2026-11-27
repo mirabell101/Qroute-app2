@@ -218,6 +218,14 @@ export default function ContributionFormModal({
     data.typeVariants.find((variant) => variant.id === id)?.name ??
     "Variant unavailable";
 
+  const proposedPositionLabels = Array.from(
+    new Set(
+      data.routeSequenceEntries
+        .map((entry) => entry.sequencePositionLabel)
+        .filter((label): label is string => Boolean(label)),
+    ),
+  );
+
   return (
     <div
       className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/45 px-4 py-6"
@@ -471,8 +479,53 @@ export default function ContributionFormModal({
                     {" → "}
                     <strong>{data.selectedRouteLastPoint?.name ?? "Unknown end"}</strong>
                   </p>
+                  <p className="mt-1 text-xs text-blue-800">
+                    Any new terminal created by a stop-to-terminal conversion will automatically inherit this route's vehicle type ({data.selectedExistingRouteType?.name ?? "unavailable"}). It cannot be assigned a different vehicle type.
+                  </p>
                 </div>
               )}
+            </div>
+          )}
+
+          {isRouteChange && (
+            <div>
+              <label
+                htmlFor="proposed-route-name"
+                className="mb-1.5 block text-sm font-medium text-gray-700"
+              >
+                Route name <span className="text-red-500">*</span>
+              </label>
+              <input
+                id="proposed-route-name"
+                value={state.name}
+                maxLength={180}
+                required
+                aria-describedby="proposed-route-name-help"
+                onChange={(event) =>
+                  actions.onProposedRouteNameChange(event.target.value)
+                }
+                disabled={
+                  state.submitting ||
+                  !data.selectedExistingRoute ||
+                  !data.selectedRouteFirstPoint ||
+                  !data.selectedRouteLastPoint
+                }
+                placeholder={
+                  !data.selectedExistingRoute
+                    ? "Select an approved route to generate its name"
+                    : "Loading route endpoints..."
+                }
+                className={fieldClass(
+                  state.showValidation && !state.name.trim()
+                )}
+              />
+              <p id="proposed-route-name-help" className="mt-1 text-xs text-gray-500">
+                {!data.selectedExistingRoute
+                  ? "Choose an approved route to prefill its name from the first and last locations."
+                  : !data.selectedRouteFirstPoint || !data.selectedRouteLastPoint
+                    ? "Loading the selected route's first and last locations..."
+                    : "The name follows the first and last locations in the proposed route. You can edit it before submitting."}
+              </p>
             </div>
           )}
 
@@ -627,23 +680,20 @@ export default function ContributionFormModal({
                   <p className="text-sm font-semibold text-green-800">
                     {data.routeChangePlacement.proposalType === "remove_points"
                       ? "Route removal request detected"
-                      : data.routeChangePlacement.proposalType === "combined"
-                        ? "Combined route changes detected"
-                        : data.routeChangePlacement.proposalType === "extend_route"
-                          ? "Route extension detected"
-                          : "Internal route insertion detected"}
+                      : "Proposed route sequence ready"}
                   </p>
                   <p className="mt-1 text-xs leading-relaxed text-green-800">
                     {data.routeChangePlacement.proposalType === "remove_points"
                       ? "The marked locations will only be removed after moderator approval. A shared stop or terminal will be soft-deleted only when no other route still uses it."
-                      : data.routeChangePlacement.proposalType === "combined"
-                        ? "This proposal can add locations between existing route points and beyond the current final point in one submission."
-                        : data.routeChangePlacement.proposalType === "extend_route"
-                          ? "The new location will be appended after the existing final location."
-                          : "The new location will be inserted between existing route locations."}
+                      : proposedPositionLabels.length > 0
+                        ? `${proposedPositionLabels.join(", ")} will be included in the proposed sequence. Review the position labels beside each proposed point below.`
+                        : "Review the proposed conversions and existing-location edits in the sequence below."}
                     {data.routeChangePlacement.proposalType !== "remove_points" &&
                       data.routeSequenceEntries.some((entry) => entry.pendingRemoval) &&
                       " Marked existing locations will also be removed only after moderator approval; a shared location is soft-deleted only if no other route still uses it."}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-green-800">
+                    The current route remains unchanged until a moderator approves this proposal.
                   </p>
                 </div>
               )}
@@ -688,44 +738,6 @@ export default function ContributionFormModal({
               />
             </div>
           )}
-
-          {isRouteChange &&
-            data.routeChangePlacement?.status === "ready" &&
-            (data.routeChangePlacement.proposalType === "extend_route" ||
-              data.routeChangePlacement.proposalType === "combined") && (
-              <div>
-                <label
-                  htmlFor="proposed-route-name"
-                  className="mb-1.5 block text-sm font-medium text-gray-700"
-                >
-                  Proposed route name (optional)
-                </label>
-                <input
-                  id="proposed-route-name"
-                  value={state.name}
-                  maxLength={180}
-                  onChange={(event) =>
-                    actions.onProposedRouteNameChange(event.target.value)
-                  }
-                  disabled={state.submitting}
-                  placeholder="Leave blank to retain the original name"
-                  className={fieldClass(false)}
-                />
-                <p className="mt-1 text-xs text-gray-500">
-                  The suggested name uses the first and final route locations.
-                  You can edit or clear it.
-                </p>
-              </div>
-            )}
-
-          {isRouteChange &&
-            data.routeChangePlacement?.status === "ready" &&
-            data.routeChangePlacement.proposalType === "insert_point" && (
-              <p className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                This point is being inserted within the existing route. Its
-                original route name will be retained.
-              </p>
-            )}
 
           {isStandalonePoint && (
             <>

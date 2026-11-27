@@ -231,8 +231,8 @@ export default function Contribution({
   // Draft-only edits for original points in the approved route.
   // These are stored with the proposal and never mutate shared rows while pending.
   const [routeChangeEdits, setRouteChangeEdits] = useState<Record<string, RouteChangePointEdit>>({});
-  // A point-type change on an approved route is a route-specific replacement.
-  // The original shared location remains intact for every other route.
+  // Original route points marked for removal or replacement in this proposal.
+  // These changes remain pending and do not mutate shared locations before approval.
   const [routeChangeRemovedKeys, setRouteChangeRemovedKeys] = useState<string[]>([]);
   const [routeChangeRemarks, setRouteChangeRemarks] = useState("");
   // When a contributor manually reorders or moves a marker, preserve the
@@ -462,6 +462,23 @@ export default function Contribution({
     ? existingByKey.get(selectedExistingRoute.keys[selectedExistingRoute.keys.length - 1] ?? "")
     : undefined;
 
+  // Do not fall back to the route's stored name here. The Modify Route
+  // field is intentionally named from the actual first and last locations.
+  // It stays blank until both endpoint records have loaded.
+  const selectedRouteEndpointName = useMemo(() => {
+    if (!selectedRouteFirstPoint || !selectedRouteLastPoint) return "";
+
+    return suggestExtendedRouteName([
+      selectedRouteFirstPoint,
+      selectedRouteLastPoint,
+    ].map((point) => ({
+      key: pointKey(point.kind, point.id),
+      latitude: point.latitude,
+      longitude: point.longitude,
+      name: point.name,
+    }))) ?? "";
+  }, [selectedRouteFirstPoint, selectedRouteLastPoint]);
+
   const routeChangeCandidates = useMemo(() => {
     if (!selectedExistingRoute || !selectedExistingRouteVariant) return [];
 
@@ -495,7 +512,6 @@ export default function Contribution({
     if (
       !isRouteChange ||
       !selectedExistingRoute ||
-      routePoints.length === 0 ||
       routeChangeBasePoints.length !== selectedExistingRoute.keys.length
     ) return null;
 
@@ -525,6 +541,19 @@ export default function Contribution({
       point,
     }));
 
+    // The automatic placement helper requires at least one addition. A
+    // removal-only proposal instead starts from the original sequence and
+    // lets routeChangePlacement filter the points marked for removal below.
+    if (additionPoints.length === 0) {
+      if (routeChangeRemovedKeys.length === 0) return null;
+      return {
+        status: "ready" as const,
+        proposalType: "remove_points" as const,
+        points: basePoints,
+        placements: [],
+      };
+    }
+
     return buildAutomaticRouteSequence(basePoints, additionPoints);
   }, [
     isRouteChange,
@@ -532,6 +561,7 @@ export default function Contribution({
     routeChangeBasePoints,
     routePoints,
     routeChangeEdits,
+    routeChangeRemovedKeys,
   ]);
 
   // Apply the contributor's manual order over the automatic placement. Newly
@@ -595,14 +625,19 @@ export default function Contribution({
     return suggestExtendedRouteName(effectivePoints);
   }, [formAction, routePoints, existingByKey]);
 
+  // The route-name suggestion follows the effective proposed sequence,
+  // including manual ordering, endpoint conversions/removals, newly added
+  // points, and draft name edits to existing locations.
   const routeNameSuggestion = useMemo(() => {
     if (
       routeChangePlacement?.status !== "ready" ||
-      !routeChangePlacement.placements.some((placement) => placement.placement === "extend")
+      routeChangePlacement.points.length < 2
     ) return null;
 
     const effectivePoints = routeChangePlacement.points.map((item) => ({
-      ...item,
+      key: item.key,
+      latitude: item.latitude,
+      longitude: item.longitude,
       name: item.source === "base"
         ? routeChangeEdits[item.key]?.name ?? item.name
         : item.name,
@@ -613,12 +648,22 @@ export default function Contribution({
 
   useEffect(() => {
     if (routeNameEdited) return;
+
     if (formAction === "route") {
       setName(newRouteNameSuggestion ?? "");
       return;
     }
+
     if (isRouteChange) {
-      setName(routeNameSuggestion ?? "");
+      // Before a proposed sequence is available, use the selected route's
+      // actual endpoint names. Once ready, use its final proposed endpoints.
+      // If the ready sequence has fewer than two named locations, leave the
+      // required name blank rather than showing a stale/original route name.
+      const nextSuggestedName = routeChangePlacement?.status === "ready"
+        ? routeNameSuggestion ?? ""
+        : selectedRouteEndpointName;
+
+      setName(nextSuggestedName);
     }
   }, [
     formAction,
@@ -626,6 +671,9 @@ export default function Contribution({
     routeNameEdited,
     newRouteNameSuggestion,
     routeNameSuggestion,
+    routeChangePlacement?.status,
+    selectedRouteEndpointName,
+    selectedExistingRoute?.id,
   ]);
 
   // Existing route inspection (used while creating a new route)
@@ -658,10 +706,60 @@ export default function Contribution({
   // proposal is editable, including original shared points and reused points.
   const routeSequenceEntries = useMemo<RouteSequenceEntry[]>(() => {
     if (isRouteChange) {
+      const baseByKey = new Map(routeChangeBasePoints.map((point) => [
+        pointKey(point.kind, point.id),
+        point,
+      ] as const));
+      const replacementKeys = new Set(
+        routePoints.flatMap((point) => point.replacesPointKey ? [point.replacesPointKey] : [])
+      );
+      const pendingRemovalEntries: RouteSequenceEntry[] = routeChangeRemovedKeys.flatMap((key) => {
+        // Type conversions already have a replacement row in the active
+        // sequence. Show a separate restore row only for genuine removals.
+        if (replacementKeys.has(key)) return [];
+        const point = baseByKey.get(key);
+        if (!point) return [];
+
+        return [{
+          key,
+          kind: point.kind,
+          name: point.name,
+          stopNumber: null,
+          typeLabel: existingPointTypeLabel(point),
+          existing: true,
+          editable: false,
+          draftIndex: null,
+          canMove: false,
+          canConvertToStop: false,
+          canConvertToTerminal: false,
+          canRemove: false,
+          canUpload: false,
+          pendingRemoval: true,
+          photos: [],
+          photoLimit: MAX_PHOTOS,
+          positionPending: false,
+        }];
+      });
+
       if (routeChangePlacement?.status === "ready") {
         let stopNumber = 0;
+        const baseIndexes = routeChangePlacement.points.flatMap((item, index) =>
+          item.source === "base" ? [index] : []
+        );
+        const firstBaseIndex = baseIndexes[0] ?? 0;
+        const lastBaseIndex = baseIndexes[baseIndexes.length - 1] ?? 0;
+        const getSequencePositionLabel = (
+          item: AutomaticBasePoint | AutomaticAdditionPoint,
+          index: number,
+        ): string | undefined => {
+          if (item.source !== "addition") return undefined;
+          if (item.point.replacesPointKey) return "Type conversion";
+          if (index < firstBaseIndex) return "Front extension";
+          if (index > lastBaseIndex) return "Back extension";
+          return "Middle insertion";
+        };
 
-        return routeChangePlacement.points.map((item, index): RouteSequenceEntry => {
+        const activeEntries = routeChangePlacement.points.map((item, index): RouteSequenceEntry => {
           if (item.source === "base") {
             const point = item.point;
             const edit = routeChangeEdits[item.key];
@@ -685,7 +783,7 @@ export default function Contribution({
                 point.stopType === "road_stop" &&
                 (index === 0 || index === routeChangePlacement.points.length - 1) &&
                 selectedExistingRouteVariant?.fare_model === "distance",
-              canRemove: false,
+              canRemove: true,
               canUpload: true,
               photos: toPhotoPreviews(edit?.photos ?? []),
               photoLimit: MAX_PHOTOS,
@@ -719,15 +817,17 @@ export default function Contribution({
             canUpload: true,
             photos: toPhotoPreviews(point.photos),
             photoLimit: MAX_PHOTOS,
-            positionPending: false,
+            positionPending: true,
+            sequencePositionLabel: getSequencePositionLabel(item, index),
+            vehicleTypeLabel:
+              point.kind === "terminal"
+                ? selectedExistingRouteType?.name
+                : undefined,
           };
         });
+        return [...activeEntries, ...pendingRemovalEntries];
       }
 
-      const baseByKey = new Map(routeChangeBasePoints.map((point) => [
-        pointKey(point.kind, point.id),
-        point,
-      ] as const));
       const removedKeys = new Set(routeChangeRemovedKeys);
       const fallbackBasePoints = routeChangeOrder?.length
         ? [
@@ -766,7 +866,7 @@ export default function Contribution({
             point.stopType === "road_stop" &&
             (index === 0 || (index === fallbackBasePoints.length - 1 && routePoints.length === 0)) &&
             selectedExistingRouteVariant?.fare_model === "distance",
-          canRemove: false,
+          canRemove: true,
           canUpload: true,
           photos: toPhotoPreviews(edit?.photos ?? []),
           photoLimit: MAX_PHOTOS,
@@ -803,7 +903,7 @@ export default function Contribution({
         });
       }
 
-      return entries;
+      return [...entries, ...pendingRemovalEntries];
     }
 
     return routePoints.map((point, index): RouteSequenceEntry => ({
@@ -842,10 +942,18 @@ export default function Contribution({
     routeChangeOrder,
     routeChangeRemovedKeys,
     selectedExistingRouteVariant,
+    selectedExistingRouteType,
   ]);
 
+  // Pending-removal rows are visible in the editor, but are not part of the
+  // active proposed route and therefore must not be sent to the map or line.
+  const activeRouteSequenceEntries = useMemo(
+    () => routeSequenceEntries.filter((entry) => !entry.pendingRemoval),
+    [routeSequenceEntries]
+  );
+
   const routeMarkers = useMemo<ContributionMapMarker[]>(
-    () => routeSequenceEntries.map((entry) => {
+    () => activeRouteSequenceEntries.map((entry) => {
       const draftPoint = isRouteChange
         ? routePoints.find((point) => point.key === entry.key)
         : entry.draftIndex !== null
@@ -872,12 +980,12 @@ export default function Contribution({
         isNewPoint: draftPoint !== undefined && draftPoint.existingId === null,
       };
     }),
-    [isRouteChange, routeSequenceEntries, routePoints, existingByKey, routeChangeEdits]
+    [isRouteChange, activeRouteSequenceEntries, routePoints, existingByKey, routeChangeEdits]
   );
 
   const routeLinePositions = useMemo<Coordinates[]>(() => {
     if (isRouteChange) {
-      return routeSequenceEntries.flatMap((entry): Coordinates[] => {
+      return activeRouteSequenceEntries.flatMap((entry): Coordinates[] => {
         const draftPoint = routePoints.find((point) => point.key === entry.key);
         const existingPoint = existingByKey.get(entry.key);
         const edit = routeChangeEdits[entry.key];
@@ -892,7 +1000,7 @@ export default function Contribution({
     return [];
   }, [
     isRouteChange,
-    routeSequenceEntries,
+    activeRouteSequenceEntries,
     routePoints,
     existingByKey,
     routeChangeEdits,
@@ -902,6 +1010,100 @@ export default function Contribution({
   const mapCandidates = formAction === "route" ? candidates : [];
   const mapConnectedKeys = formAction === "route" ? connectedKeys : new Set<string>();
   const mapPreviewLines = formAction === "route" ? previewLines : [];
+
+  // Keep genuine removal requests in the saved order while the active route
+  // is rearranged. When no manual order exists yet, place removed keys beside
+  // their nearest surviving neighbors in the automatic canonical sequence.
+  const getFullRouteChangeOrder = (activeKeys: string[]): string[] => {
+    const pendingKeys = routeSequenceEntries
+      .filter((entry) => entry.pendingRemoval)
+      .map((entry) => entry.key);
+    const allowedKeys = new Set([...activeKeys, ...pendingKeys]);
+
+    let fullOrder = routeChangeOrder?.length
+      ? routeChangeOrder.filter((key) => allowedKeys.has(key))
+      : [...activeKeys];
+
+    // A previously saved manual order may not include a location that was
+    // added afterwards. Reinsert those active keys at their current visible
+    // position rather than appending them to the end of the route.
+    for (let index = 0; index < activeKeys.length; index += 1) {
+      const key = activeKeys[index];
+      if (!key || fullOrder.includes(key)) continue;
+
+      const nextKey = activeKeys.slice(index + 1).find((candidate) =>
+        fullOrder.includes(candidate)
+      );
+      if (nextKey) {
+        const insertAt = fullOrder.indexOf(nextKey);
+        fullOrder.splice(insertAt < 0 ? fullOrder.length : insertAt, 0, key);
+        continue;
+      }
+
+      const previousKey = activeKeys.slice(0, index).reverse().find((candidate) =>
+        fullOrder.includes(candidate)
+      );
+      const previousIndex = previousKey ? fullOrder.indexOf(previousKey) : -1;
+      fullOrder.splice(previousIndex < 0 ? fullOrder.length : previousIndex + 1, 0, key);
+    }
+
+    if (pendingKeys.length > 0) {
+      const canonicalPoints = automaticRouteChangePlacement?.status === "ready"
+        ? automaticRouteChangePlacement.points
+        : [];
+
+      // Preserve existing saved positions. Only keys not present in the
+      // current manual order need to be inserted beside their nearest active
+      // canonical neighbor.
+      for (const key of pendingKeys) {
+        if (fullOrder.includes(key)) continue;
+        const canonicalIndex = canonicalPoints.findIndex((point) => point.key === key);
+        const nextKey = canonicalIndex >= 0
+          ? canonicalPoints.slice(canonicalIndex + 1).find((point) =>
+              fullOrder.includes(point.key)
+            )?.key
+          : undefined;
+
+        if (nextKey) {
+          const insertAt = fullOrder.indexOf(nextKey);
+          fullOrder.splice(insertAt < 0 ? fullOrder.length : insertAt, 0, key);
+          continue;
+        }
+
+        const previousKey = canonicalIndex >= 0
+          ? canonicalPoints.slice(0, canonicalIndex).reverse().find((point) =>
+              fullOrder.includes(point.key)
+            )?.key
+          : undefined;
+        const previousIndex = previousKey ? fullOrder.indexOf(previousKey) : -1;
+        fullOrder.splice(previousIndex < 0 ? fullOrder.length : previousIndex + 1, 0, key);
+      }
+    }
+
+    return fullOrder;
+  };
+
+  const saveActiveRouteChangeOrder = (nextActiveKeys: string[]) => {
+    const currentActiveKeys = activeRouteSequenceEntries.map((entry) => entry.key);
+    const currentActiveSet = new Set(currentActiveKeys);
+    const fullOrder = getFullRouteChangeOrder(currentActiveKeys);
+    let nextIndex = 0;
+
+    const nextFullOrder = fullOrder.map((key) => {
+      if (!currentActiveSet.has(key)) return key;
+      const replacementKey = nextActiveKeys[nextIndex];
+      nextIndex += 1;
+      return replacementKey ?? key;
+    });
+
+    while (nextIndex < nextActiveKeys.length) {
+      const key = nextActiveKeys[nextIndex];
+      if (key) nextFullOrder.push(key);
+      nextIndex += 1;
+    }
+
+    setRouteChangeOrder(nextFullOrder);
+  };
 
   // Location and map interaction
   const locate = useCallback((pinOnSuccess = false) => {
@@ -1078,6 +1280,10 @@ export default function Contribution({
     }
 
     setVariantId(String(route.variantId));
+    // Let the endpoint-based name effect populate the field after the
+    // selected route's first and last location records are available.
+    setName("");
+    setRouteNameEdited(false);
     const firstPoint = existingByKey.get(route.keys[0] ?? "");
     if (firstPoint) {
       setFocus([firstPoint.latitude, firstPoint.longitude]);
@@ -1243,7 +1449,7 @@ export default function Contribution({
 
   const moveRoutePoint = (index: number, direction: -1 | 1) => {
     if (isRouteChange) {
-      const currentEntries = routeSequenceEntries;
+      const currentEntries = activeRouteSequenceEntries;
       const target = index + direction;
       const moving = currentEntries[index];
       const neighbor = currentEntries[target];
@@ -1255,7 +1461,7 @@ export default function Contribution({
 
       const nextOrder = currentEntries.map((entry) => entry.key);
       [nextOrder[index], nextOrder[target]] = [nextOrder[target], nextOrder[index]];
-      setRouteChangeOrder(nextOrder);
+      saveActiveRouteChangeOrder(nextOrder);
       setSelectedPointKey(moving.key);
       return;
     }
@@ -1273,7 +1479,7 @@ export default function Contribution({
     if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
 
     if (isRouteChange) {
-      const currentEntries = routeSequenceEntries;
+      const currentEntries = activeRouteSequenceEntries;
       const moving = currentEntries[fromIndex];
       const target = currentEntries[toIndex];
       // Reordering is limited to stops. Terminals remain fixed at the route ends.
@@ -1286,7 +1492,7 @@ export default function Contribution({
       const [movedKey] = nextOrder.splice(fromIndex, 1);
       if (!movedKey) return;
       nextOrder.splice(toIndex, 0, movedKey);
-      setRouteChangeOrder(nextOrder);
+      saveActiveRouteChangeOrder(nextOrder);
       setSelectedPointKey(moving.key);
       return;
     }
@@ -1316,12 +1522,10 @@ export default function Contribution({
   };
 
   const moveRouteChangePointOnMap = (sequenceIndex: number, position: Coordinates) => {
-    const entry = routeSequenceEntries[sequenceIndex];
+    const entry = activeRouteSequenceEntries[sequenceIndex];
     if (!entry) return;
 
-    setRouteChangeOrder((current) =>
-      current ?? routeSequenceEntries.map((item) => item.key)
-    );
+    saveActiveRouteChangeOrder(activeRouteSequenceEntries.map((item) => item.key));
 
     const draftPoint = routePoints.find((point) => point.key === entry.key);
     if (draftPoint) {
@@ -1349,12 +1553,12 @@ export default function Contribution({
   };
 
   const convertRoutePointKind = (key: string, targetKind: PointKind) => {
-    const sequenceIndex = routeSequenceEntries.findIndex((entry) => entry.key === key);
-    const sequenceEntry = routeSequenceEntries[sequenceIndex];
+    const sequenceIndex = activeRouteSequenceEntries.findIndex((entry) => entry.key === key);
+    const sequenceEntry = activeRouteSequenceEntries[sequenceIndex];
     if (!sequenceEntry) return;
 
     const isEndpoint =
-      sequenceIndex === 0 || sequenceIndex === routeSequenceEntries.length - 1;
+      sequenceIndex === 0 || sequenceIndex === activeRouteSequenceEntries.length - 1;
     if (targetKind === "terminal" && !isEndpoint) {
       setFormError("A terminal can only be placed at the beginning or end of a route. Convert an interior terminal to a stop instead.");
       return;
@@ -1385,7 +1589,7 @@ export default function Contribution({
           const originalKey = draft.replacesPointKey;
           const originalPoint = existingByKey.get(originalKey);
           setRouteChangeRemovedKeys((previous) => previous.filter((item) => item !== originalKey));
-          setRouteChangeOrder(routeSequenceEntries.map((entry) =>
+          saveActiveRouteChangeOrder(activeRouteSequenceEntries.map((entry) =>
             entry.key === key ? originalKey : entry.key
           ));
           setRouteChangeEdits((previous) => ({
@@ -1461,10 +1665,10 @@ export default function Contribution({
         if (!previous[key]) return previous;
         return { ...previous, [key]: { ...previous[key], photos: [] } };
       });
-      const nextOrder = routeSequenceEntries.map((entry) =>
+      const nextOrder = activeRouteSequenceEntries.map((entry) =>
         entry.key === key ? replacementKey : entry.key
       );
-      setRouteChangeOrder(nextOrder);
+      saveActiveRouteChangeOrder(nextOrder);
       setSelectedPointKey(replacementKey);
       setFocus([replacement.latitude, replacement.longitude]);
       setFormError("");
@@ -1494,6 +1698,19 @@ export default function Contribution({
 
   const removeRoutePoint = (key: string) => {
     const target = routePoints.find((point) => point.key === key);
+
+    // Original approved route locations are not deleted immediately. Mark
+    // them for moderator review and keep their order so they can be restored.
+    if (isRouteChange && !target && routeChangeBaseKeys.has(key)) {
+      if (routeChangeRemovedKeys.includes(key)) return;
+      setRouteChangeRemovedKeys((previous) =>
+        previous.includes(key) ? previous : [...previous, key]
+      );
+      if (selectedPointKey === key) setSelectedPointKey(null);
+      setFormError("");
+      return;
+    }
+
     const isRoutePointReplacement = isRouteChange && !!target?.replacesPointKey;
 
     // A converted point's photo is transferred back to the original shared
@@ -1508,7 +1725,7 @@ export default function Contribution({
       const originalPoint = existingByKey.get(originalKey);
 
       setRouteChangeRemovedKeys((previous) => previous.filter((item) => item !== originalKey));
-      setRouteChangeOrder(routeSequenceEntries.map((entry) =>
+      saveActiveRouteChangeOrder(activeRouteSequenceEntries.map((entry) =>
         entry.key === key ? originalKey : entry.key
       ));
       setRouteChangeEdits((previous) => ({
@@ -1521,12 +1738,26 @@ export default function Contribution({
         },
       }));
     } else if (isRouteChange) {
-      setRouteChangeOrder((previous) =>
-        previous ? previous.filter((item) => item !== key) : null
+      // Removing a proposed addition deletes its order slot. Keep any
+      // unpaired original-removal keys in their existing relative positions.
+      const currentActiveKeys = activeRouteSequenceEntries.map((entry) => entry.key);
+      const nextOrder = getFullRouteChangeOrder(currentActiveKeys).filter(
+        (item) => item !== key
       );
+      setRouteChangeOrder(nextOrder);
     }
 
     setRoutePoints((previous) => previous.filter((point) => point.key !== key));
+  };
+
+  const restoreRoutePoint = (key: string) => {
+    if (!isRouteChange || !routeChangeRemovedKeys.includes(key) || !routeChangeBaseKeys.has(key)) {
+      return;
+    }
+
+    setRouteChangeRemovedKeys((previous) => previous.filter((item) => item !== key));
+    setSelectedPointKey(key);
+    setFormError("");
   };
 
   const addTerminalPhotos = (files: File[]) => {
@@ -1702,7 +1933,9 @@ export default function Contribution({
       return "The selected route could not be loaded completely. Reload the vehicle catalog and try again.";
     }
     if (!selectedExistingRouteVariant) return "The selected route's variant is unavailable.";
-    if (routePoints.length < 1) return "Add at least one new location, or convert an existing route endpoint between terminal and stop, to submit this route-change proposal.";
+    if (routePoints.length < 1 && routeChangeRemovedKeys.length < 1) {
+      return "Add a new location, convert an existing route endpoint, or request removal of an existing route location.";
+    }
     if (routeChangeBasePoints.length + routePoints.length > MAX_PROPOSED_ROUTE_POINTS) {
       return "A proposed route cannot contain more than 100 locations.";
     }
@@ -1716,12 +1949,20 @@ export default function Contribution({
     const replacementKeys = routePoints
       .map((point) => point.replacesPointKey)
       .filter((value): value is string => !!value);
-    if (replacementKeys.length !== routeChangeRemovedKeys.length ||
-        replacementKeys.some((key) => !routeChangeRemovedKeys.includes(key))) {
-      return "Every converted original route location must have exactly one replacement point.";
+    if (new Set(replacementKeys).size !== replacementKeys.length) {
+      return "An original route location cannot be replaced more than once.";
+    }
+    if (replacementKeys.some((key) => !routeChangeRemovedKeys.includes(key))) {
+      return "Every converted original route location must be marked for removal.";
+    }
+    if (routeChangeRemovedKeys.some((key) => !routeChangeBaseKeys.has(key))) {
+      return "A removal request refers to a location outside the selected route.";
     }
     if (routeChangePlacement?.status !== "ready") {
       return routeChangePlacement?.message ?? "The automatic route position could not be determined.";
+    }
+    if (routeChangePlacement.points.length < 2) {
+      return "A route must retain at least two locations. Restore one or more locations before submitting this removal request.";
     }
     const unnamedPoint = routeChangePlacement.points.some((item) => {
       const pointName = item.source === "base"
@@ -1730,7 +1971,8 @@ export default function Contribution({
       return !pointName.trim();
     });
     if (unnamedPoint) return "Every terminal and stop in the proposed route needs a name.";
-    if (name.trim().length > 180) return "The proposed route name cannot exceed 180 characters.";
+    if (!name.trim()) return "Give the proposed route a name.";
+    if (name.trim().length > 180) return "The route name cannot exceed 180 characters.";
 
     const finalPoints = routeChangePlacement.points;
     if (finalPoints.slice(1, -1).some((point) => point.kind === "terminal")) {
@@ -1925,7 +2167,7 @@ export default function Contribution({
       routeId: selectedExistingRoute.id,
       proposalType: canonical.proposalType,
       proposedName:
-        canonical.placements.some((placement) => placement.placement === "extend") && name.trim()
+        name.trim() && name.trim() !== selectedExistingRoute.name
           ? name.trim()
           : undefined,
       points,
@@ -2284,6 +2526,7 @@ export default function Contribution({
             onConvertRoutePointKind: convertRoutePointKind,
             onRouteChangeRemarksChange: setRouteChangeRemarks,
             onRemoveRoutePoint: removeRoutePoint,
+            onRestoreRoutePoint: restoreRoutePoint,
             onPointPhotoFiles: addPointPhotos,
             onRemovePointPhoto: removePointPhoto,
             onTerminalPhotosChange: addTerminalPhotos,

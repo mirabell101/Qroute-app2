@@ -1,9 +1,5 @@
-
 import { supabase } from "@/lib/supabase";
-import {
-  getPublicMapData,
-  hasMapAuthSession,
-} from "./publicMap";
+import { getPublicMapData, hasMapAuthSession } from "./publicMap";
 
 // ============================================================
 // CACHE
@@ -17,6 +13,14 @@ let cachedStops: {
 } | null = null;
 
 let stopsRequest: Promise<Stop[]> | null = null;
+let stopsRequestGeneration = 0;
+
+/** Force the next map refresh to fetch current stop visibility/status values. */
+export function invalidateStopsCache(): void {
+  stopsRequestGeneration += 1;
+  cachedStops = null;
+  stopsRequest = null;
+}
 
 // ============================================================
 // TYPES
@@ -32,6 +36,7 @@ export interface Stop {
   latitude: number;
   longitude: number;
   is_active: boolean;
+  is_deleted: boolean;
   transport_type_id: number;
 }
 
@@ -42,20 +47,23 @@ export interface Stop {
 async function fetchAuthenticatedStops(): Promise<Stop[]> {
   const { data, error } = await supabase
     .from("stops")
-    .select(`
-      id,
-      name,
-      description,
-      stop_type,
-      latitude,
-      longitude,
-      is_active,
-      transport_type_id
-    `)
+    .select(
+      `
+        id,
+        name,
+        description,
+        stop_type,
+        latitude,
+        longitude,
+        is_active,
+        is_deleted,
+        transport_type_id
+      `,
+    )
     .eq("is_approved", true)
     .eq("moderation_status", "approved")
     .eq("is_active", true)
-    .or("is_deleted.eq.false,is_deleted.is.null")
+    .eq("is_deleted", false)
     .is("deleted_at", null)
     .or("is_banned.eq.false,is_banned.is.null")
     .order("id", { ascending: true });
@@ -64,7 +72,11 @@ async function fetchAuthenticatedStops(): Promise<Stop[]> {
     throw new Error(error.message);
   }
 
-  return data ?? [];
+  // Defend against unexpected/null status values in returned records.
+  const records = (data ?? []) as Stop[];
+  return records.filter(
+    (stop: Stop) => stop.is_active === true && stop.is_deleted === false,
+  );
 }
 
 // ============================================================
@@ -74,50 +86,36 @@ async function fetchAuthenticatedStops(): Promise<Stop[]> {
 export async function getStops(
   currentUserId: string | null | undefined = undefined,
 ): Promise<Stop[]> {
-  // ----------------------------------------------------------
-  // LOGGED-OUT VISITORS
-  // ----------------------------------------------------------
-  //
-  // Use the existing SECURITY DEFINER public map RPC.
-  // Its public_stops CTE already retrieves eligible stops
-  // independently of route associations.
-  //
-  // ----------------------------------------------------------
-
+  // Logged-out visitors use the SECURITY DEFINER public map RPC.
   if (!(await hasMapAuthSession(currentUserId))) {
-    return (await getPublicMapData()).stops;
+    const { stops } = await getPublicMapData();
+    return stops.filter(
+      (stop) => stop.is_active === true && stop.is_deleted === false,
+    );
   }
 
-  // ----------------------------------------------------------
-  // AUTHENTICATED USERS: VALID CACHE
-  // ----------------------------------------------------------
-
-  if (
-    cachedStops &&
-    cachedStops.expiresAt > Date.now()
-  ) {
+  // Authenticated users: valid cache.
+  if (cachedStops && cachedStops.expiresAt > Date.now()) {
     return cachedStops.value;
   }
 
-  // ----------------------------------------------------------
-  // AUTHENTICATED USERS: SHARE IN-FLIGHT REQUEST
-  // ----------------------------------------------------------
-
+  // Authenticated users: share in-flight request.
   if (!stopsRequest) {
-    stopsRequest = fetchAuthenticatedStops().then(
-      (stops) => {
+    const requestGeneration = stopsRequestGeneration;
+    const request = fetchAuthenticatedStops().then((stops) => {
+      // An invalidated in-flight response must not repopulate the cache.
+      if (requestGeneration === stopsRequestGeneration) {
         cachedStops = {
           value: stops,
           expiresAt: Date.now() + stopMapCacheLifetime,
         };
-
-        return stops;
-      },
-    );
+      }
+      return stops;
+    });
+    stopsRequest = request;
   }
 
   const request = stopsRequest;
-
   try {
     return await request;
   } finally {

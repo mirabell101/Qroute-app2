@@ -28,6 +28,10 @@ export interface RouteSequenceEntry {
   canRemove: boolean;
   canUpload: boolean;
   pendingRemoval?: boolean;
+  /** Final position classification for a newly proposed route location. */
+  sequencePositionLabel?: string;
+  /** Route vehicle type inherited by a newly proposed terminal. */
+  vehicleTypeLabel?: string;
   photos: PhotoPreview[];
   photoLimit: number;
   positionPending: boolean;
@@ -188,6 +192,16 @@ export default function RouteSequencePanel({
                         Proposed point
                       </span>
                     )}
+                    {entry.sequencePositionLabel && (
+                      <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-800">
+                        {entry.sequencePositionLabel}
+                      </span>
+                    )}
+                    {entry.vehicleTypeLabel && entry.kind === "terminal" && (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700">
+                        Vehicle: {entry.vehicleTypeLabel}
+                      </span>
+                    )}
                     {entry.pendingRemoval && (
                       <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-800">
                         Removal requested
@@ -338,7 +352,7 @@ export default function RouteSequencePanel({
 
       {entries.some((entry) => entry.canMove) && (
         <p className="mt-2 text-[11px] text-gray-500">
-          Drag a stop using the grip handle, or use the arrows to move it. For distance-based routes, either endpoint can be converted between a terminal and a road stop.
+          The position labels show whether a proposed location is at the front, within the middle, or beyond the back of the existing route. Drag a stop using the grip handle, or use the arrows to move it. For distance-based routes, either endpoint can be converted between a terminal and a road stop.
         </p>
       )}
     </section>
