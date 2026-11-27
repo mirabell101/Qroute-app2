@@ -1627,8 +1627,10 @@ export default function RouteManagement() {
                                             : archiveRecoveryError ?? "Recovery status is unavailable; manual review is required.")
                                         }
                                       >
-                                        {archiveRecoveryLoading
-                                          ? "Checking recovery"
+                                       {archiveRecoveryLoading
+                                        ? "Checking recovery"
+                                        : archiveRecoveryError
+                                          ? "Recovery unavailable"
                                           : "Manual review"}
                                       </span>
                                     )
