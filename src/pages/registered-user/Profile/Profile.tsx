@@ -1,10 +1,15 @@
+
 import { useEffect, useRef, useState } from "react";
+
 import {
   updateAccountPassword,
   updateAccountUsername,
   uploadAccountPhoto,
 } from "@/lib/accountApi";
+
 import { useAccountProfile } from "@/components/account/accountProfileStore";
+import AccountAvatar from "@/components/account/AccountAvatar";
+
 import { getLegacyProfilePhotoFile } from "@/lib/legacyAccountPhoto";
 
 interface ProfileProps {
@@ -17,9 +22,11 @@ const ACCOUNTS_KEY = "qroute_accounts";
 function getLegacyProfilePhoto(userId: string): File | null {
   try {
     const stored = localStorage.getItem(ACCOUNTS_KEY);
+
     if (!stored) return null;
 
     const accounts: unknown = JSON.parse(stored);
+
     if (!Array.isArray(accounts)) return null;
 
     const account = accounts.find(
@@ -29,6 +36,7 @@ function getLegacyProfilePhoto(userId: string): File | null {
         "id" in candidate &&
         candidate.id === userId,
     );
+
     return getLegacyProfilePhotoFile(account, userId);
   } catch {
     return null;
@@ -51,23 +59,39 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
     error: profileError,
     setAccount,
   } = useAccountProfile();
-  const currentAccount = profileUserId === currentUserId ? account : null;
+
+  const currentAccount =
+    profileUserId === currentUserId ? account : null;
+
   const loadError =
     profileUserId === currentUserId ? profileError : null;
+
   const initializedUserId = useRef<string | null>(null);
+
   const [editingUsername, setEditingUsername] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
+
   const [username, setUsername] = useState("");
+
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+
   const [message, setMessage] = useState("");
-  const [messageType, setMessageType] = useState<"success" | "error">("error");
+  const [messageType, setMessageType] = useState<"success" | "error">(
+    "error",
+  );
+
   const [savingUsername, setSavingUsername] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
   const [profileInitializationPending, setProfileInitializationPending] =
     useState(true);
+
+  // ============================================================
+  // PROFILE INITIALIZATION AND LEGACY PHOTO MIGRATION
+  // ============================================================
 
   useEffect(() => {
     if (
@@ -79,34 +103,50 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
     }
 
     initializedUserId.current = currentUserId;
+
     let cancelled = false;
 
     void (async () => {
       let loadedAccount = currentAccount;
+
       const legacyPhoto = getLegacyProfilePhoto(currentUserId);
+
       let migrationMessage = "";
 
       if (legacyPhoto && loadedAccount.profilePhotoUrl === null) {
         try {
-          loadedAccount = await uploadAccountPhoto(currentUserId, legacyPhoto);
+          loadedAccount = await uploadAccountPhoto(
+            currentUserId,
+            legacyPhoto,
+          );
+
           if (cancelled) return;
+
           setAccount(loadedAccount);
         } catch (error) {
           migrationMessage = `Account loaded, but the old profile photo could not be migrated: ${
-            error instanceof Error ? error.message : "Please try again."
+            error instanceof Error
+              ? error.message
+              : "Please try again."
           }`;
         }
       }
 
       if (cancelled) return;
+
       const legacyDataCleared = clearLegacyAccountData();
+
       setProfileInitializationPending(false);
+
       setUsername(loadedAccount.username ?? "");
+
       setEditingUsername(false);
       setChangingPassword(false);
+
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
+
       setMessage(
         [
           migrationMessage,
@@ -117,6 +157,7 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
           .filter(Boolean)
           .join(" "),
       );
+
       setMessageType("error");
     })();
 
@@ -125,31 +166,56 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
     };
   }, [currentAccount, currentUserId, profileUserId, setAccount]);
 
-  const showMessage = (text: string, type: "success" | "error" = "error") => {
+  // ============================================================
+  // MESSAGE HANDLING
+  // ============================================================
+
+  const showMessage = (
+    text: string,
+    type: "success" | "error" = "error",
+  ) => {
     setMessage(text);
     setMessageType(type);
   };
 
+  // ============================================================
+  // PROFILE PHOTO UPLOAD
+  // ============================================================
+
   const handleProfilePhotoChange = async (
-    event: React.ChangeEvent<HTMLInputElement>
+    event: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const file = event.target.files?.[0];
 
     if (!file || !currentAccount) return;
+
     setUploadingPhoto(true);
+
     try {
-      const updatedAccount = await uploadAccountPhoto(currentUserId, file);
+      const updatedAccount = await uploadAccountPhoto(
+        currentUserId,
+        file,
+      );
+
+      // Updating the account automatically updates AccountAvatar.
       setAccount(updatedAccount);
+
       showMessage("Profile photo updated successfully.", "success");
     } catch (error) {
       showMessage(
-        error instanceof Error ? error.message : "Unable to update profile photo.",
+        error instanceof Error
+          ? error.message
+          : "Unable to update profile photo.",
       );
     } finally {
       setUploadingPhoto(false);
       event.target.value = "";
     }
   };
+
+  // ============================================================
+  // USERNAME UPDATE
+  // ============================================================
 
   const handleUsernameSave = async () => {
     const trimmedUsername = username.trim();
@@ -165,23 +231,32 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
     }
 
     setSavingUsername(true);
+
     try {
       const updatedAccount = await updateAccountUsername(
         currentUserId,
         trimmedUsername,
       );
+
       setAccount(updatedAccount);
       setUsername(updatedAccount.username ?? "");
       setEditingUsername(false);
+
       showMessage("Username updated successfully.", "success");
     } catch (error) {
       showMessage(
-        error instanceof Error ? error.message : "Unable to update username.",
+        error instanceof Error
+          ? error.message
+          : "Unable to update username.",
       );
     } finally {
       setSavingUsername(false);
     }
   };
+
+  // ============================================================
+  // PASSWORD UPDATE
+  // ============================================================
 
   const handlePasswordSave = async () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
@@ -194,11 +269,11 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
       /[A-Z]/.test(newPassword) &&
       /[a-z]/.test(newPassword) &&
       /\d/.test(newPassword) &&
-      /[!@#$%^&*(),.?":{}|<>_-]/.test(newPassword);
+      /[!@#$%^&*(),.?":{}|<>\_-]/.test(newPassword);
 
     if (!strongPassword) {
       showMessage(
-        "New password must be at least 8 characters and include uppercase, lowercase, a number, and a special character."
+        "New password must be at least 8 characters and include uppercase, lowercase, a number, and a special character.",
       );
       return;
     }
@@ -209,37 +284,53 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
     }
 
     if (newPassword === currentPassword) {
-      showMessage("Your new password must differ from your current password.");
+      showMessage(
+        "Your new password must differ from your current password.",
+      );
       return;
     }
 
     setSavingPassword(true);
+
     try {
       await updateAccountPassword(
         currentUserId,
         currentPassword,
         newPassword,
       );
+
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
+
       setChangingPassword(false);
+
       showMessage("Password updated successfully.", "success");
     } catch (error) {
       showMessage(
-        error instanceof Error ? error.message : "Unable to update password.",
+        error instanceof Error
+          ? error.message
+          : "Unable to update password.",
       );
     } finally {
       setSavingPassword(false);
     }
   };
 
+  // ============================================================
+  // LOADING STATE
+  // ============================================================
+
   if (!currentAccount) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4">
-        <p className="text-sm text-gray-500" role={loadError ? "alert" : undefined}>
+        <p
+          className="text-sm text-gray-500"
+          role={loadError ? "alert" : undefined}
+        >
           {loadError || "Loading account..."}
         </p>
+
         <button
           type="button"
           onClick={onLogout}
@@ -250,6 +341,10 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
       </main>
     );
   }
+
+  // ============================================================
+  // PROFILE PAGE
+  // ============================================================
 
   return (
     <main className="min-h-screen bg-white px-10 py-8">
@@ -277,26 +372,11 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
       {/* PROFILE */}
       <div className="mx-auto mt-16 flex w-full max-w-[500px] flex-col items-center">
         {/* PROFILE PICTURE */}
-        <div className="flex h-[130px] w-[130px] items-center justify-center overflow-hidden rounded-full border border-[#d9d9d9] bg-[#eeeeee]">
-          {currentAccount.profilePhotoUrl ? (
-            <img
-              src={currentAccount.profilePhotoUrl}
-              alt="Profile"
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center bg-[#d6d6d6]">
-              <svg
-                viewBox="0 0 24 24"
-                className="h-[75px] w-[75px] text-[#777777]"
-                fill="currentColor"
-                aria-hidden="true"
-              >
-                <path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-5.33 0-8 2.67-8 6v2h16v-2c0-3.33-2.67-6-8-6Z" />
-              </svg>
-            </div>
-          )}
-        </div>
+        <AccountAvatar
+          account={currentAccount}
+          className="h-[130px] w-[130px] border border-[#d9d9d9] bg-[#eeeeee]"
+          iconSize={75}
+        />
 
         {/* ACCOUNT INFORMATION */}
         <h1 className="mt-6 text-[24px] font-semibold text-black">
@@ -316,7 +396,10 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
           </h2>
 
           <div className="mt-4 rounded-lg bg-[#f4f2ff] p-4">
-            <p className="text-sm font-medium text-gray-600">Total QPoints</p>
+            <p className="text-sm font-medium text-gray-600">
+              Total QPoints
+            </p>
+
             <p className="mt-1 text-sm font-medium text-[#6355F5]">
               Not available yet
             </p>
@@ -326,15 +409,21 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
             <h3 className="text-sm font-semibold text-gray-900">
               Earned Badges
             </h3>
-            <p className="mt-3 text-sm text-gray-500">Not available yet</p>
+
+            <p className="mt-3 text-sm text-gray-500">
+              Not available yet
+            </p>
           </div>
         </section>
 
+        {/* STATUS MESSAGE */}
         {message && (
           <p
             role="status"
             className={`mt-4 max-w-full text-center text-sm ${
-              messageType === "success" ? "text-green-600" : "text-red-600"
+              messageType === "success"
+                ? "text-green-600"
+                : "text-red-600"
             }`}
           >
             {message}
@@ -460,7 +549,9 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
               <input
                 type="password"
                 value={currentPassword}
-                onChange={(event) => setCurrentPassword(event.target.value)}
+                onChange={(event) =>
+                  setCurrentPassword(event.target.value)
+                }
                 autoComplete="current-password"
                 className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm outline-none focus:border-[#6355F5]"
                 placeholder="Current password"
@@ -469,7 +560,9 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
               <input
                 type="password"
                 value={newPassword}
-                onChange={(event) => setNewPassword(event.target.value)}
+                onChange={(event) =>
+                  setNewPassword(event.target.value)
+                }
                 autoComplete="new-password"
                 className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm outline-none focus:border-[#6355F5]"
                 placeholder="New password"
@@ -478,7 +571,9 @@ function Profile({ currentUserId, onLogout }: ProfileProps) {
               <input
                 type="password"
                 value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
+                onChange={(event) =>
+                  setConfirmPassword(event.target.value)
+                }
                 autoComplete="new-password"
                 className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm outline-none focus:border-[#6355F5]"
                 placeholder="Confirm new password"
